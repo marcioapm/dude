@@ -350,8 +350,8 @@ const limitsFrom = `runs r LEFT JOIN projects p ON p.id = r.project_id JOIN orga
 const quiet = `(r.status = 'running' AND r.lux_state = 'running' AND r.agent_busy_at IS NOT NULL
 	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND cardinality(r.open_tool_calls) = 0
 	AND ` + quietSince + ` < now() - make_interval(secs => lim.idle_secs)
-	-- Waiting out a retry's back-off is not going quiet.
-	AND NOT ` + delivery.RetryPending + `)`
+	-- Waiting out a temporary model error is not going quiet.
+	AND NOT ` + modelWaiting + `)`
 
 // quietSince (SQL): when the agent last did anything, or was nudged.
 const quietSince = `GREATEST(COALESCE(r.agent_active_at, r.agent_busy_at), r.idle_nudged_at)`
@@ -371,11 +371,18 @@ var stallFrom = `runs r JOIN projects p ON p.id = r.project_id JOIN organization
 // limit — the project's, the organization's, for a fixer then the
 // implementer's, else delivery.DefaultTimeLimitMinutes — never under
 // delivery.MinTimeLimitMinutes.
-var stallWindow = fmt.Sprintf(`(CASE WHEN lc.conducted THEN $1::float8 ELSE 60 * GREATEST(%d, COALESCE(
+var stallWindow = `(CASE WHEN lc.conducted THEN $1::float8 ELSE ` + roleTimeLimit + ` END)`
+
+// roleTimeLimit (SQL, over runs r, projects p and organizations o, either
+// NULL for none): the Run's role's no-progress limit in seconds, as
+// stallWindow reads it for a Run no conductor watches. It is also how long
+// a Run may wait out a temporary model error before it is parked
+// (retryTurn): waiting is making no progress.
+var roleTimeLimit = fmt.Sprintf(`(60 * GREATEST(%d, COALESCE(
 	(p.agent_models->(%[3]s)->>'timeLimitMinutes')::float8, (o.default_agent_models->(%[3]s)->>'timeLimitMinutes')::float8,
 	CASE WHEN r.phase = 'fix' THEN COALESCE((p.agent_models->'implementer'->>'timeLimitMinutes')::float8,
 		(o.default_agent_models->'implementer'->>'timeLimitMinutes')::float8) END,
-	%[2]d)) END)`, delivery.MinTimeLimitMinutes, delivery.DefaultTimeLimitMinutes,
+	%[2]d)))`, delivery.MinTimeLimitMinutes, delivery.DefaultTimeLimitMinutes,
 	`CASE r.phase WHEN 'implement' THEN 'implementer' WHEN 'review' THEN 'reviewer' WHEN 'fix' THEN 'fixer'
 		WHEN 'simplify' THEN 'simplifier' WHEN 'test' THEN 'qa_browser' ELSE 'investigator' END`)
 
@@ -409,9 +416,21 @@ const callSince = `GREATEST(oc.value::timestamptz, (r.children->oc.key->>'lastEv
 
 // noProgress (SQL, over stallFrom): a live phase Run that made no progress
 // for its window. One waiting on a person, or whose turn is over, is not
-// held up by itself.
+// held up by itself; nor is one waiting out a temporary model error
+// (modelWaiting): retryTurn bounds that wait itself.
 var noProgress = `(r.status = 'running' AND r.phase IS NOT NULL AND r.lux_state = 'running' AND r.control = 'none'
-	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND (` + stalledCall + ` OR ` + stalledFiles + ` OR ` + stalledSilent + `))`
+	AND r.turn_done_at IS NULL AND r.waiting_since IS NULL AND NOT ` + modelWaiting + `
+	AND (` + stalledCall + ` OR ` + stalledFiles + ` OR ` + stalledSilent + `))`
+
+// modelWaiting (SQL, over runs r): the Run is waiting out a temporary
+// model error: a retry is held for its back-off, or one was sent lately
+// and its turn has not ended without failing (turnRetries, the streak,
+// not reset yet). A retried turn that then hangs is no longer waiting
+// once its retry is older than the longest back-off (turnRetryAfterMax,
+// 15 minutes).
+const modelWaiting = `(` + delivery.RetryPending + ` OR (COALESCE((r.harness_state->>'turnRetries')::int, 0) > 0
+	AND EXISTS (SELECT 1 FROM directives rs WHERE rs.run_id = r.id AND rs.deliver_after IS NOT NULL AND rs.failed_at IS NULL
+		AND rs.sent_at > now() - interval '15 minutes')))`
 
 const brainstormCallLimit = 10 * time.Minute
 

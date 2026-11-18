@@ -1652,9 +1652,17 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error, "phase": PhaseSimplify})
 	}
 	st.SimplifyRetried = false
-	// A failed or empty simplification is not a failure of the task: the
-	// code was simple enough already. Carry on with what we had — unless
-	// the conductor queued a review behind it: then it is told at once.
+	if !out.Succeeded && st.Pipeline == nil {
+		// A simplifier that failed is a decision, as any phase's failure
+		// is: resume it, try again or stop. Going on to the test would
+		// ship code no simplifier passed over, and say nothing. One a
+		// conductor's pipeline queued a review behind is its decision
+		// already (pipelineGoesOn, the failure said).
+		return w.escalate(ctx, sc, st, "simplify_failed", map[string]any{"runId": runID, "error": out.Error})
+	}
+	// An empty simplification is not a failure of the task: the code was
+	// simple enough already. Carry on with what we had — unless the
+	// conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
 		// Started while the pull requests waited: back to them, its CI the
 		// test, as after a fix of the pull request. After a fix pushed to
@@ -3368,7 +3376,8 @@ var RetryStep = map[string]string{
 	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
-	// A simplifier that failed twice after a pull request fix.
+	// A simplifier that failed twice after a pull request fix, or once
+	// (simplify_failed) elsewhere.
 	"awaitSimplify": "simplify",
 }
 

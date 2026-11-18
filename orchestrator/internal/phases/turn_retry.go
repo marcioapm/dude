@@ -11,26 +11,30 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // Retrying an agent's turn that failed on a temporary model error: a rate
 // limit, an overloaded or unreachable upstream, a response cut off. The
-// LLM proxy's blips last minutes; failing the Run for one escalates to a
-// person what waiting would have fixed. The same Run's agent, in the same
-// session, is told to carry on once the back-off is over: its work and
-// conversation stay. maxTurnRetries in a row, then the failure is the
-// Run's as any other (turnFailed), its reason naming the retries.
+// same Run's agent, in the same session, is told to carry on once the
+// back-off is over: its work and conversation stay. There is no count of
+// retries: dude waits as long as the refusals last, up to the Run's
+// role's no-progress limit (roleTimeLimit) of continuous refusals. Past
+// it a phase Run is parked, resumable, its session and work kept, and its
+// conductor told; a talker is parked as for any failed turn (parkFailed).
+// A conducted phase Run's conductor is told once when a wait passes
+// modelWaitNotice.
 
 // evTurnRetried is a failed turn dude retries. Payload: {attempt, after
 // (seconds), reason (the agent's error), retryAfter (true when the error
-// said how long to wait)}.
+// said how long to wait), waitedSecs (how long the refusals have lasted)}.
 const evTurnRetried = "run.turn.retried"
 
-// maxTurnRetries bounds the retries of one turn: the fifth temporary
-// failure in a row is the Run's.
-const maxTurnRetries = 4
+// modelWaitNotice is how long a phase Run's continuous wait on temporary
+// model errors lasts before its conductor is told, once per wait.
+const modelWaitNotice = 30 * time.Minute
 
 // Back-off between retries when the error says nothing of how long to
 // wait: turnRetryBase doubling, up to turnRetryMax, with jitter, so the
@@ -95,17 +99,18 @@ func turnRetryWait(attempt int, retryAfter time.Duration, jitter float64) time.D
 	return min(time.Duration(float64(wait)*(0.8+0.4*jitter)), turnRetryMax)
 }
 
-// retryTurn retries a turn that failed on a temporary model error, when
-// it is not past maxTurnRetries: the agent is told to carry on, queued as
-// a directive held until the back-off is over (deliver_after), and sent
-// the usual way then. The Run itself is not backed off: a pause, an abort
-// or a park is acted on meanwhile. A Run lux stopped meanwhile is resumed
-// by the usual paths (a talker parked by parkStopped, its directive
-// unsent). Says whether it retried; false leaves the failure to
-// turnFailed.
+// retryTurn retries a turn that failed on a temporary model error: the
+// agent is told to carry on, queued as a directive held until the
+// back-off is over (deliver_after), and sent the usual way then. The Run
+// itself is not backed off: a pause, an abort or a park is acted on
+// meanwhile. A Run lux stopped meanwhile is resumed by the usual paths (a
+// talker parked by parkStopped, its directive unsent). Once the refusals
+// have lasted the role's limit (roleTimeLimit) a phase Run is parked
+// instead (parkForModel). Says whether it handled the failure; false
+// leaves it to turnFailed (a talker past the limit: parkFailed).
 func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentErr string) (bool, error) {
 	transient, retryAfter := transientTurnError(agentErr)
-	if !transient || t.TurnRetries >= maxTurnRetries {
+	if !transient {
 		return false, nil
 	}
 	var live bool
@@ -116,6 +121,48 @@ func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentE
 		// A Run dude is stopping, pausing or has ended is not retried: what
 		// stops it decides.
 		return false, err
+	}
+	// A retried turn that went on to work (a tool call or a plan after
+	// the streak's last retry) ended the wait: this refusal starts a new
+	// one. Not its messages: a harness may relay the refusal itself as one
+	// (Claude Code's error line). Nor its thoughts: a thinking block
+	// streams before the same response fails (a 529, a dropped stream).
+	if t.TurnRetries > 0 {
+		var worked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.event_type IN ($3, $4)
+			AND e.cursor > (SELECT COALESCE(max(l.cursor), 0) FROM events l WHERE l.run_id = $1 AND l.event_type = $2))`,
+			t.run.ID, evTurnRetried, evToolCalled, evPlanUpdated).Scan(&worked); err != nil {
+			return false, err
+		}
+		if worked {
+			t.TurnRetries = 0
+		}
+	}
+	// How long the refusals have lasted: since this streak's first retry
+	// (attempt 1), on the database's clock against the time the
+	// orchestrator stamped that event with (their skew is seconds); and
+	// the limit they may last.
+	var waitedSecs, limitSecs float64
+	var since int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(extract(epoch FROM now() - w.occurred_at)::float8, 0), COALESCE(w.cursor, 0), `+roleTimeLimit+`
+		FROM runs r LEFT JOIN projects p ON p.id = r.project_id JOIN organizations o ON o.id = r.organization_id
+		LEFT JOIN LATERAL (SELECT e.occurred_at, e.cursor FROM events e WHERE $2 AND e.run_id = r.id AND e.event_type = $3
+			AND e.payload->>'attempt' = '1' ORDER BY e.cursor DESC LIMIT 1) w ON true
+		WHERE r.id = $1`, t.run.ID, t.TurnRetries > 0, evTurnRetried).Scan(&waitedSecs, &since, &limitSecs); err != nil {
+		return false, err
+	}
+	waited := time.Duration(waitedSecs * float64(time.Second))
+	if waited >= time.Duration(limitSecs*float64(time.Second)) {
+		if t.run.talker() {
+			return false, nil
+		}
+		return true, t.parkForModel(ctx, tx, s, waited)
+	}
+	if waited >= modelWaitNotice && !t.run.talker() && t.run.TaskID != "" {
+		// Once per wait: keyed by its first retry.
+		if err := t.tellConductor(ctx, tx, fmt.Sprintf("model-waiting:%s:%d", t.run.ID, since), waited, false); err != nil {
+			return false, err
+		}
 	}
 	attempt := t.TurnRetries + 1
 	wait := turnRetryWait(attempt, retryAfter, rand.Float64())
@@ -139,8 +186,84 @@ func (t *translator) retryTurn(ctx context.Context, tx pgx.Tx, s *Syncer, agentE
 	// The turn is over, not done: its idle must not complete the Run.
 	t.LastFailed = true
 	return true, s.event(ctx, tx, t.run, evTurnRetried, ledger.ActorSystem, map[string]any{
-		"attempt": attempt, "maxAttempts": maxTurnRetries, "after": wait.Round(time.Second).Seconds(),
+		"attempt": attempt, "after": wait.Round(time.Second).Seconds(), "waitedSecs": waited.Round(time.Second).Seconds(),
 		"reason": red.String(agentErr), "retryAfter": retryAfter > 0})
+}
+
+// parkForModel parks a phase Run the model provider has refused for its
+// role's limit, as an idle park is (dude_pause 'idle'): its lux Run
+// stopped and kept, its session and work with it, resumed by a person's
+// Resume or its conductor's steer, handed to the person if the conductor
+// leaves it (IdleParksDueSQL). Not failed: nothing it did was wrong.
+func (t *translator) parkForModel(ctx context.Context, tx pgx.Tx, s *Syncer, waited time.Duration) error {
+	why := "parked: the model provider has refused for " + waitWords(waited)
+	var parkedAt time.Time
+	err := tx.QueryRow(ctx, `UPDATE runs r SET control = 'pause_graceful', control_requested_at = now(), control_reason = $2,
+			dude_pause = 'idle', turn_done_at = NULL
+		WHERE r.id = $1 AND `+delivery.Unasked+` RETURNING control_requested_at`, t.run.ID, why).Scan(&parkedAt)
+	if db.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	t.TurnRetries = 0
+	t.LastFailed = true
+	var taskStatus string
+	if t.run.TaskID != "" && t.run.SourceKind == "" {
+		// The status a resume puts back: read before a person is asked,
+		// which makes the task await them (as requestPause does).
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, t.run.TaskID).Scan(&taskStatus); err != nil {
+			return err
+		}
+		if err := t.tellConductor(ctx, tx, "model-parked:"+t.run.ID+":"+parkedAt.UTC().Format(time.RFC3339Nano), waited, true); err != nil {
+			return err
+		}
+	}
+	// model: the person's transcript and a hand-over say the provider
+	// refused, not that the agent went quiet (dude_pause stays 'idle').
+	return s.event(ctx, tx, t.run, evParked, ledger.ActorSystem,
+		map[string]any{"reason": "idle", "model": true, "message": why, "taskStatus": db.Nullable(taskStatus), "parkedAt": parkedAt})
+}
+
+// tellConductor says the model provider has refused the Run for waited:
+// its task's conductor, when one takes it (a stalled wake, keyed key);
+// parked and with none, the person, as an idle park with none does.
+func (t *translator) tellConductor(ctx context.Context, tx pgx.Tx, key string, waited time.Duration, parked bool) error {
+	ref := t.run.ref()
+	takes, err := delivery.ConductorTakesTx(ctx, tx, t.run.TaskID)
+	if err != nil {
+		return err
+	}
+	if takes {
+		_, err := delivery.RecordWakeTx(ctx, tx, ref.Org, ref.TaskID, delivery.WakeStalled, key, delivery.MustText("wakes/model-waiting").Render(
+			struct {
+				Phase, RunID, For string
+				Parked            bool
+			}{t.run.Phase, t.run.ID, waitWords(waited), parked}))
+		return err
+	}
+	if !parked {
+		return nil
+	}
+	why := delivery.WhyNoConductor
+	if d, err := delivery.ReadDelivery(ctx, tx, t.run.TaskID); err != nil {
+		return err
+	} else if d != nil && d.State.Decider == delivery.DeciderConductor {
+		why = delivery.WhyHandover
+	}
+	_, err = delivery.ToPersonTx(ctx, tx, delivery.ToPerson{Ref: ref, Why: why,
+		Reason: "the model provider has refused for " + waitWords(waited)})
+	return err
+}
+
+// waitWords is a wait as a person reads it: "2h0m", "35m".
+func waitWords(d time.Duration) string {
+	d = d.Round(time.Minute)
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 // retriedReason names the retries a failure came after, if any.

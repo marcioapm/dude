@@ -344,10 +344,14 @@ export const EventTypes = {
    * The agent's turn failed on a temporary model error (a 429, 502, 503,
    * 504 or 529, a connection closed mid-response, a dropped stream), and
    * dude retries it in the same Run once `after` seconds have passed: the
-   * agent is told to carry on. Payload: `{ attempt, maxAttempts, after,
+   * agent is told to carry on. Payload: `{ attempt, after, waitedSecs,
    * reason, retryAfter }`: `reason` the agent's error, `retryAfter` true
-   * when the error said how long to wait. Past `maxAttempts` the failure
-   * is the Run's (`run.failed`), its error naming the retries.
+   * when the error said how long to wait, `waitedSecs` how long the
+   * refusals have lasted. There is no retry count (older events carry a
+   * `maxAttempts`): once the refusals last the role's time limit a phase
+   * Run is parked (`run.parked`, reason `idle`), resumable with its
+   * session, and its conductor told; a conductor or session agent is
+   * parked as for any failed turn.
    */
   RunTurnRetried: "run.turn.retried",
   /**
