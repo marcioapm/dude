@@ -61,3 +61,36 @@ func TestElidedHintsAreNotNoneNear(t *testing.T) {
 		t.Errorf("a matched pass is given a hint: %s", got)
 	}
 }
+
+// Under set -e a failing command exits the shell before the echo runs, so
+// a call that completed with no exit code may end with the command's own
+// "exit=0": it is not the call's exit. With exit 0 recorded, every step
+// ran, the echo too.
+func TestAnEchoUnderSetEIsReadOnlyWithExitZero(t *testing.T) {
+	for _, c := range []struct{ name, command, status, want string }{
+		{"set -e, completed with no exit", "set -euo pipefail; ./run.sh; echo exit=$?", "completed", "unclear: under set -e its echo may not have run"},
+		{"set -e, after &&", "set -euo pipefail && ./run.sh; echo exit=$?", "completed", "unclear: under set -e its echo may not have run"},
+		{"pipefail only, completed with no exit", "set -o pipefail; ./run.sh; echo exit=$?", "completed", "exit 0"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newHarnessWorld(t)
+			completionOnly(w, "k1", c.command, c.status, "step 1\nexit=0")
+			var got []string
+			if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
+				got, _, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: "./run.sh", Result: delivery.CheckPass}}, nil)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0] != c.want {
+				t.Fatalf("read %q, want %q", got, c.want)
+			}
+		})
+	}
+	// With exit 0 recorded the echo ran.
+	w := newHarnessWorld(t)
+	bashCall(w, "k2", "set -euo pipefail; ./run.sh; echo exit=$?", "step 1\nexit=0", 0)
+	if got := w.recordedAfter(nil, "./run.sh", delivery.CheckPass, nil); len(got) != 1 || got[0] != "exit 0" {
+		t.Fatalf("read %q after exit 0, want exit 0", got)
+	}
+}

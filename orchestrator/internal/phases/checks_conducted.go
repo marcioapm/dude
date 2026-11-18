@@ -282,9 +282,14 @@ func (cr *callReader) read(command string, status *string, exit *float64, output
 	// Rule E: an echoed status is read only from a call that completed or
 	// exited 0. A call that ended in error, was killed or timed out with
 	// no exit code never ran its echo, and a non-zero exit is not echo's.
-	// Under pipefail a non-zero status is some stage's.
+	// Under set -e a failing command exits the shell before its echo,
+	// so a call that completed with no exit code proves nothing there;
+	// with exit 0 recorded every step ran, the echo too. Under pipefail
+	// a non-zero status is some stage's.
 	reading := "completed"
 	switch {
+	case call.echoed && exit == nil && call.set == "-euo" && status != nil && *status == "completed":
+		reading = "unclear: under set -e its echo may not have run"
 	case call.echoed && (exit != nil && *exit == 0 || exit == nil && status != nil && *status == "completed"):
 		reading = echoedExit(last)
 	case exit != nil:
