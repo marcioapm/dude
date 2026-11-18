@@ -38,7 +38,7 @@ func TestReplyPublicationContract(t *testing.T) {
 	}
 
 	conductor := []string{
-		"A fixer of pull request feedback cannot answer on the pull request or resolve its threads",
+		"A pull request fixer cannot answer on the pull request or resolve its threads",
 		"only after its fix is published and its checks and review are done",
 		"the published commit, not the fixer's words",
 		"a force-push that dropped it does not",
