@@ -1,3 +1,15 @@
+## multiple-unbacked
+
+Your checks report was not verified. Nothing from this Run has been pushed.
+
+- make test: no call — dude recorded no call of "make test" whose exit status is its own; the recorded calls nearest it whose exit status is their own: "make test fast" (exit 2) (verdict: unbacked)
+
+- make lint: missing evidence — dude recorded no call of "make lint" whose exit status is its own; the recorded calls nearest it are omitted here for space (run_chat reads them) (verdict: unbacked)
+
+If one of the nearest calls is the check you meant, report it exactly as recorded; otherwise run the intended check as one bare command on one line and report it exactly as run, with the same environment assignments and env/assignment partition, no comment or annotation, a pipe only after set -o pipefail, and every pipeline stage and redirect unchanged.
+
+Run the missing or unsuccessful checks as separate commands, read their output, and correct the report. End your next reply with a checks: YAML block. If you cannot proceed, ask a person what you need.
+
 ## send-back
 
 Your checks report was not verified. Nothing from this Run has been pushed.
