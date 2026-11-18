@@ -42,11 +42,16 @@ func (w *steps) wakeOnAnswers(ctx context.Context, sc workflow.StepContext, st *
 			if !f.settled() {
 				continue
 			}
-			if err := wakeLiveConductorTx(ctx, tx, sc.OrganizationID, st.TaskID, WakeRound,
-				"answers:"+f.RunID+":"+strings.Join(f.ids, ","), answersLine(f)); err != nil {
+			if err := wakeAnswersTx(ctx, tx, sc.OrganizationID, st.TaskID, f); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// wakeAnswersTx wakes the task's live conductor, if any, with what was
+// done with fixer f's answers, keyed by the answers it settled.
+func wakeAnswersTx(ctx context.Context, tx pgx.Tx, org, taskID string, f FixerAnswers) error {
+	return wakeLiveConductorTx(ctx, tx, org, taskID, WakeRound, "answers:"+f.RunID+":"+strings.Join(f.ids, ","), answersLine(f))
 }

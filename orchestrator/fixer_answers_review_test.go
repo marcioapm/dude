@@ -260,3 +260,73 @@ func TestAFixersUnverifiableAnswersAreWithheldAfterADay(t *testing.T) {
 		t.Errorf("the conductor's wake %q does not say why", wake)
 	}
 }
+
+// endedWithHeld is a conducted delivery waiting on its pull request, a
+// fixer's five answers held on it, published, its Run ended, and the
+// conductor live: no step has posted them yet.
+func endedWithHeld(t *testing.T) (*answering, delivery.RunRef) {
+	w := conducting(t)
+	a := newAnswering(t, w)
+	if status, out := w.chat(a.task, "Look after the pull request for me."); status >= 300 {
+		t.Fatalf("chat: %d %v", status, out)
+	}
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	return a, ref
+}
+
+// settledOnEnd fails the test unless the fixer's five answers are all
+// withheld for why, none posted or resolved, and the conductor woken
+// saying so.
+func (a *answering) settledOnEnd(t *testing.T, ref delivery.RunRef, why string) {
+	t.Helper()
+	if n := a.heldUnsettled(ref.RunID); n != 0 {
+		t.Errorf("%d answers left held, want none", n)
+	}
+	if n := a.w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'withheld' = 'true'
+		AND payload->>'error' = $3`, ref.RunID, delivery.EvAnswerFailed, why); n != 5 {
+		t.Errorf("%d answers withheld for %q, want 5", n, why)
+	}
+	a.countPosted(t, "Fixed:", 0)
+	if f, s := a.resolved(); f || s {
+		t.Errorf("resolved %v %v", f, s)
+	}
+	wake := a.w.str(`SELECT COALESCE(string_agg(line, ' | '), '') FROM conductor_wakes WHERE task_id = $1 AND kind = $2 AND key LIKE 'answers:run_fixer:%'`,
+		a.task, delivery.WakeRound)
+	if !strings.Contains(wake, why) {
+		t.Errorf("the conductor's wake %q does not say %q", wake, why)
+	}
+}
+
+// A delivery that ends with a fixer's answers held — its pull request
+// merged or closed on GitHub before any step posted them, or a person's
+// Stop — reaches no step that posts them: they are withheld, saying why,
+// and the conductor is woken. Every held answer is settled.
+func TestAFixersHeldAnswersAreSettledWhenTheDeliveryEnds(t *testing.T) {
+	t.Run("merged", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		a.w.gh.Merge(1)
+		a.w.until("the task done", func() bool {
+			a.w.sync()
+			return a.w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'done'`, a.task) == 1
+		})
+		a.settledOnEnd(t, ref, "the pull request was merged")
+	})
+	t.Run("closed", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		a.w.gh.Close(1)
+		a.w.until("the task aborted", func() bool {
+			a.w.sync()
+			return a.w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'aborted'`, a.task) == 1
+		})
+		a.settledOnEnd(t, ref, "the pull request was closed")
+	})
+	t.Run("stopped", func(t *testing.T) {
+		a, ref := endedWithHeld(t)
+		ana := a.w.ownedBy(a.task, "Ana")
+		a.w.stop(ana, a.task, map[string]any{"note": "enough"})
+		a.settledOnEnd(t, ref, "the delivery was stopped")
+	})
+}
+

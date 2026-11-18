@@ -3080,6 +3080,11 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 			return workflow.Result{}, true, err
 		}
 	}
+	// None open: no later step posts the fixers' held answers, so they
+	// are withheld now, each for its own pull request's end (#485).
+	if err := w.settleHeldOnEnd(ctx, sc.OrganizationID, st.TaskID, states); err != nil {
+		return workflow.Result{}, true, err
+	}
 	c := countStates(states)
 	if st.Source.ReviewOnly() && c.open == 0 && len(states) > 0 {
 		// The review did its job either way: merged or closed, done.
