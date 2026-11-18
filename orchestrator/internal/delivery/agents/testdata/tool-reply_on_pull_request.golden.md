@@ -1,6 +1,6 @@
 # reply_on_pull_request
 
-Answer on one of your task's pull requests, as dude's GitHub login: for a question that came from there (a Chat message from a GitHub person names the pull request and the comment). in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. Refused for another task's pull request; GitHub refusing it is said, and nothing is posted. A fixer answering pull request feedback replies only to the comments in its feedback, in_reply_to each.
+Answer on one of your task's pull requests, as dude's GitHub login: for a question that came from there (a Chat message from a GitHub person names the pull request and the comment). in_reply_to a line-comment-… answers in its review thread; any other comment, or none, posts on the pull request's conversation, quoting the first line of the comment answered. It changes nothing and wakes nobody. Refused for another task's pull request; GitHub refusing it is said, and nothing is posted. A fixer answering pull request feedback is refused, before its fix is published: it reports its intended answers, and the conductor posts them once the published fix is on the pull request.
 
 ```json
 {
