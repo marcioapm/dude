@@ -157,7 +157,7 @@ func TestTheAnswerQueriesPlans(t *testing.T) {
 			want: []string{"runs_task_idx", "events_run_answer_held_idx", "events_run_answer_causation_idx", "events_run_answer_claims_idx", "events_run_commit_created_idx"}, removed: 100},
 		{name: "publication-busy-fixer", sql: fixersToPostSQL, types: "text", args: []string{"'wi_50'"},
 			want: []string{"runs_task_idx", "events_run_commit_created_idx", "events_run_answer_held_idx"}, removed: 100},
-		{name: "sweep-due", sql: answerReconcileDue, types: "int", args: []string{"20"}, system: true,
+		{name: "sweep-due", sql: answerReconcileDue, types: "int, timestamptz", args: []string{"20", "now()"}, system: true,
 			want: []string{"answer_reconciliations_due_idx"}, removed: 100},
 	}
 	var report strings.Builder
