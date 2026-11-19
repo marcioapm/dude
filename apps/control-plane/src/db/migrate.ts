@@ -238,6 +238,54 @@ async function building(sql: SQL, index: string): Promise<boolean> {
 /** The advisory lock (hashtext of this key) a migrate holds for its whole run. */
 export const MIGRATE_LOCK = "dude-migrate";
 
+/**
+ * Applies one migration file and records it in schema_migrations, as
+ * migrate does: a dude:batch-sql file batch by batch, a dude:no-transaction
+ * file as one simple-Query message, any other in one transaction with its
+ * record. Checks nothing about what is already recorded; migrate does. For
+ * a test that builds a database at an older release, so it applies each
+ * file exactly as the runner would.
+ */
+export async function applyMigration(sql: SQL, file: MigrationFile, contents: string, log: (msg: string) => void = () => {}): Promise<void> {
+  const sum = checksum(contents);
+  if (batchMigration(contents)) {
+    await runBatchMigration(sql, file, contents, sum, log);
+    return;
+  }
+  if (outsideTransaction(contents)) {
+    const index = concurrentIndex(contents);
+    // An earlier interrupted build's leftover, which IF NOT EXISTS would
+    // skip; never one another backend is still building.
+    if (index) {
+      await refuseWhileBuilding(sql, index);
+      await dropIfInvalid(sql, index);
+    }
+    // Postgres reports a cancelled or failed CREATE INDEX CONCURRENTLY
+    // as an error, so an index this statement leaves invalid is dropped
+    // here and the file not recorded. A success never leaves it invalid:
+    // the leftover IF NOT EXISTS could skip was dropped just above, and
+    // none was being built.
+    // A statement that failed on the client's side (a dropped connection)
+    // can leave its backend still building: that index is left alone,
+    // and the next migrate refuses until the build ends. A failed check
+    // drops nothing either.
+    try {
+      await sql.unsafe(contents);
+    } catch (err) {
+      if (index && !(await building(sql, index).catch(() => true))) await dropIfInvalid(sql, index);
+      throw err;
+    }
+    await sql`INSERT INTO schema_migrations (version, name, checksum)
+              VALUES (${file.version}, ${file.name}, ${sum})`;
+    return;
+  }
+  await sql.begin(async (tx) => {
+    await tx.unsafe(contents);
+    await tx`INSERT INTO schema_migrations (version, name, checksum)
+             VALUES (${file.version}, ${file.name}, ${sum})`;
+  });
+}
+
 export async function migrate(
   databaseUrl: string,
   opts: {
@@ -285,44 +333,7 @@ export async function migrate(
       }
 
       log(`applying ${file.name}`);
-      if (batchMigration(contents)) {
-        await runBatchMigration(sql, file, contents, sum, log);
-        applied.push(file.name);
-        continue;
-      }
-      if (outsideTransaction(contents)) {
-        const index = concurrentIndex(contents);
-        // An earlier interrupted build's leftover, which IF NOT EXISTS would
-        // skip; never one another backend is still building.
-        if (index) {
-          await refuseWhileBuilding(sql, index);
-          await dropIfInvalid(sql, index);
-        }
-        // Postgres reports a cancelled or failed CREATE INDEX CONCURRENTLY
-        // as an error, so an index this statement leaves invalid is dropped
-        // here and the file not recorded. A success never leaves it invalid:
-        // the leftover IF NOT EXISTS could skip was dropped just above, and
-        // none was being built.
-        // A statement that failed on the client's side (a dropped connection)
-        // can leave its backend still building: that index is left alone,
-        // and the next migrate refuses until the build ends. A failed check
-        // drops nothing either.
-        try {
-          await sql.unsafe(contents);
-        } catch (err) {
-          if (index && !(await building(sql, index).catch(() => true))) await dropIfInvalid(sql, index);
-          throw err;
-        }
-        await sql`INSERT INTO schema_migrations (version, name, checksum)
-                  VALUES (${file.version}, ${file.name}, ${sum})`;
-        applied.push(file.name);
-        continue;
-      }
-      await sql.begin(async (tx) => {
-        await tx.unsafe(contents);
-        await tx`INSERT INTO schema_migrations (version, name, checksum)
-                 VALUES (${file.version}, ${file.name}, ${sum})`;
-      });
+      await applyMigration(sql, file, contents, log);
       applied.push(file.name);
     }
   } finally {

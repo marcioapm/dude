@@ -15,7 +15,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { type AddressInfo, connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
-import { listMigrationFiles, migrate, type MigrationFile, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
+import { applyMigration, listMigrationFiles, migrate, type MigrationFile, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -736,6 +736,7 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
       ('e_other', 'org_c', 'agent.message', 'run_c', 'agent', 'x', 't', NULL, '{"answerId":"h_6"}')`;
     expect((await migrate(url, { log: () => {} })).applied).toEqual(files.map((f) => f.name));
     expect((await recorded(url)).slice(0, before.length)).toEqual(before);
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
     expect([...await sql`SELECT id, causation_id FROM events WHERE organization_id = 'org_c' ORDER BY id`]).toEqual([
       { id: "e_action", causation_id: "h_2" }, { id: "e_caused", causation_id: "other" }, { id: "e_chat", causation_id: null },
       { id: "e_claim", causation_id: "h_4" }, { id: "e_failed", causation_id: "h_3" }, { id: "e_other", causation_id: null },
@@ -812,9 +813,11 @@ test("277's backfill waits for a row another transaction holds, in batches, and 
     await held_;
     const logs: string[] = [];
     const run = migrate(url, { log: (m) => logs.push(m) });
-    await Bun.sleep(500);
+    // The backfill is blocked on the held row before it is released: not a guess at timing.
+    const blocked = await waitForBlocked(url);
     release();
     await lock;
+    expect(blocked).toBe(true);
     expect((await run).applied).toEqual(["277_events_answer_causation_backfill.sql", "278_events_answer_causation_upgrade_repair.sql",
       "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"]);
     expect([...await sql`SELECT count(*)::int AS unfilled FROM events WHERE organization_id = 'org_b' AND causation_id IS DISTINCT FROM 'h' || substr(id, 2)`])
@@ -1070,6 +1073,74 @@ async function waitForBlocked(url: string): Promise<boolean> {
     return row.n > 0;
   });
 }
+
+test("a database built past 277 by migratedBefore applies 277 as the runner does, batch by batch", async () => {
+  const { url, sql } = await migratedBefore("281");
+  try {
+    expect((await recorded(url)).map((m) => m.version).filter((v) => v! >= "277")).toEqual(["277", "278", "279", "280"]);
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
+    expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+test("a record refused after 277's batches keeps the progress table and each batch's commit; the re-run applies only what is left and drops it", async () => {
+  const { url, sql } = await migratedBefore("277");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_r', 'R', 'r')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+      SELECT 'er' || g, 'org_r', 'pull_request.action', 'run_r', 'agent', 'x', 't', jsonb_build_object('answerId', 'hr' || g)
+      FROM generate_series(1, 2500) g`;
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    // The last file of the backfill, the one that drops its progress table, cannot be recorded.
+    await sql`CREATE FUNCTION refuse_280() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.version = '280' THEN RAISE EXCEPTION 'refusing 280'; END IF; RETURN NEW; END $$`;
+    await sql`CREATE TRIGGER refuse_280 BEFORE INSERT ON schema_migrations FOR EACH ROW EXECUTE FUNCTION refuse_280()`;
+    expect(await migrate(url, { log: () => {} }).then(() => "", (err: Error) => err.message)).toBe("refusing 280");
+    expect((await recorded(url)).map((m) => m.version).filter((v) => v! >= "277")).toEqual(["277", "278", "279"]);
+    // 280's drop went with its refused record: the table is still there.
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NOT NULL AS kept`]).toEqual([{ kept: true }]);
+    // Filled in batches of their own transaction each, not one.
+    expect([...await sql`SELECT count(*)::int AS unfilled FROM events WHERE organization_id = 'org_r' AND causation_id IS DISTINCT FROM 'h' || substr(id, 2)`])
+      .toEqual([{ unfilled: 0 }]);
+    const [{ batches }] = await sql`SELECT count(DISTINCT xmin::text)::int AS batches FROM events WHERE organization_id = 'org_r'`;
+    expect(batches).toBe(3);
+
+    await sql`DROP TRIGGER refuse_280 ON schema_migrations`;
+    expect((await migrate(url, { log: () => {} })).applied).toEqual(["280_events_answer_causation_cleanup.sql"]);
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+test("a batch file's cleanup commits with its record: a refused record keeps what the cleanup would drop", async () => {
+  const url = await createDatabase();
+  const sql = new SQL(url);
+  try {
+    const migration = await temporaryMigration("901_temporary_cleanup.sql", `-- dude:batch-sql
+-- dude:setup
+CREATE TABLE IF NOT EXISTS t_progress (n int NOT NULL);
+-- dude:batch
+SELECT 0 AS batch_count;
+-- dude:cleanup
+DROP TABLE t_progress;
+`);
+    await migrate(url, { log: () => {}, files: [] });
+    await sql`CREATE FUNCTION refuse_901() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.version = '901' THEN RAISE EXCEPTION 'refusing 901'; END IF; RETURN NEW; END $$`;
+    await sql`CREATE TRIGGER refuse_901 BEFORE INSERT ON schema_migrations FOR EACH ROW EXECUTE FUNCTION refuse_901()`;
+    expect(await migrate(url, { log: () => {}, files: [migration] }).then(() => "", (err: Error) => err.message)).toBe("refusing 901");
+    expect([...await sql`SELECT to_regclass('t_progress') IS NOT NULL AS kept`]).toEqual([{ kept: true }]);
+    await sql`DROP TRIGGER refuse_901 ON schema_migrations`;
+    expect((await migrate(url, { log: () => {}, files: [migration] })).applied).toEqual(["901_temporary_cleanup.sql"]);
+    expect([...await sql`SELECT to_regclass('t_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
 
 /** A migration the runner reads from a temporary file, in place of the release's. */
 async function temporaryMigration(name: string, contents: string): Promise<MigrationFile> {
@@ -1519,25 +1590,15 @@ async function migratedBefore(version: string): Promise<{ url: string; sql: SQL 
   return { url, sql };
 }
 
-// Applies the unrecorded migrations below version, as migrate() would, and
-// names them: a test of an older migration stops before later ones drop what it built.
+// Applies the unrecorded migrations below version, as migrate() would (its
+// applyMigration: a batch file batch by batch), and names them: a test of an
+// older migration stops before later ones drop what it built.
 async function applyBefore(sql: SQL, version: string): Promise<string[]> {
   const recorded = new Set((await sql`SELECT version FROM schema_migrations`).map((r: { version: string }) => r.version));
   const applied: string[] = [];
   for (const file of (await listMigrationFiles()).filter((f) => f.version < version && !recorded.has(f.version))) {
-    const contents = await file.contents();
-    const record = (q: SQL) => q`INSERT INTO schema_migrations (version, name, checksum)
-      VALUES (${file.version}, ${file.name}, ${createHash("sha256").update(contents).digest("hex")})`;
     applied.push(file.name);
-    if (outsideTransaction(contents)) {
-      await sql.unsafe(contents);
-      await record(sql);
-      continue;
-    }
-    await sql.begin(async (tx) => {
-      await tx.unsafe(contents);
-      await record(tx);
-    });
+    await applyMigration(sql, file, await file.contents());
   }
   return applied;
 }
