@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -46,9 +47,11 @@ func TestAHeadMovingBetweenTheClaimAndTheDiffPostsNothing(t *testing.T) {
 
 // T-F1b: the author pushes while the verdict reads /pulls/files. The diff
 // must not classify findings or produce a review body for the old head; the
-// next evaluation follows the new head.
+// next evaluation follows the new head. That is a new round at the new
+// head, after the review-only debounce: a second here, not 3 minutes.
 func TestAHeadMovingDuringVerdictDiffRetriesWithoutMixedHeadReview(t *testing.T) {
 	w := newWorld(t)
+	w.reRounds(time.Second)
 	w.gh.SetChecks("success")
 	pushed := false
 	var wi string
