@@ -700,6 +700,9 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
     expect(outsideTransaction(trigger)).toBe(true);
     expect(trigger).toContain("CREATE OR REPLACE TRIGGER events_answer_causation_compat");
     expect(trigger).not.toMatch(/DROP\s+TRIGGER/i);
+    // Its comment gives the real reason: one implicit transaction under the runner, no gap statement by statement.
+    expect(trigger).toContain("one implicit transaction");
+    expect(trigger).not.toContain("one statement at a time as the runner sends them");
     for (const file of files.slice(1)) {
       const contents = await file.contents();
       if (file.version === "277") {
@@ -752,8 +755,11 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
         def: "CREATE INDEX events_run_answer_claims_idx ON public.events USING btree (run_id, causation_id, cursor) WHERE (event_type = 'pull_request.answer_claimed'::text)" },
     ]);
     expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
-    // 273 again, one statement at a time as the runner sends them: an old
-    // writer inserting after any of them still gets its causation_id.
+    // 273 again, one statement at a time. The runner sends the file as one
+    // simple-Query message, a single implicit transaction, so under it even
+    // DROP+CREATE had no gap; CREATE OR REPLACE has none even statement by
+    // statement, as here: an old writer inserting after any of them still
+    // gets its causation_id.
     const statements: string[] = [];
     let current = "";
     let inBody = false;
