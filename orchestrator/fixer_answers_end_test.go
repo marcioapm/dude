@@ -379,7 +379,108 @@ func TestRound5TheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
 	})
 }
 
-// A poster that listed the answers before the delivery ended, and claims
+func expireReconciliationAnswer(t *testing.T, a *answering, ref delivery.RunRef) {
+	t.Helper()
+	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '1 hour' WHERE run_id = $1 AND event_type = $2`, ref.RunID, delivery.EvAnswerClaimed)
+}
+
+// Resolution reconciliation exercises the same claim/end barrier as replies,
+// but also its terminal action marker. A resolved thread is posted exactly once;
+// a conclusive absent or unresolved thread is withheld; an unreadable thread is
+// uncertain and is announced once. The second sync is deliberately included:
+// settled_at must fence duplicate notices and wakes.
+func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*answering, delivery.RunRef, []string)
+		want      string
+		resolved  bool
+		uncertain bool
+	}{
+		{"resolved", func(a *answering, ref delivery.RunRef, ids []string) {
+			crashOn := errors.New("resolution poster crashed")
+			a.store.AfterAnswerPost = func(id string) error {
+				if id == ids[3] {
+					return crashOn
+				}
+				return nil
+			}
+			if _, err := a.post(); !errors.Is(err, crashOn) {
+				t.Fatalf("resolution crash: %v", err)
+			}
+			a.store.AfterAnswerPost = nil
+			expireReconciliationAnswer(t, a, ref)
+			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
+		}, "posted", true, false},
+		{"absent-or-unresolved", func(a *answering, ref delivery.RunRef, ids []string) {
+			a.w.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if r.URL.Path == "/graphql" && strings.Contains(string(mustReadBody(r)), "resolveReviewThread") {
+						return 502
+					}
+					return 0
+				}
+			})
+			if _, err := a.post(); err == nil {
+				t.Fatal("resolution write did not fail")
+			}
+			a.w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+			expireReconciliationAnswer(t, a, ref)
+			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
+		}, "withheld", false, false},
+		{"unreadable", func(a *answering, ref delivery.RunRef, ids []string) {
+			crash := errors.New("resolution poster crashed")
+			a.store.AfterAnswerPost = func(id string) error {
+				if id == ids[3] {
+					return crash
+				}
+				return nil
+			}
+			if _, err := a.post(); !errors.Is(err, crash) {
+				t.Fatalf("resolution crash: %v", err)
+			}
+			a.store.AfterAnswerPost = nil
+			a.w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 502 })
+			expireReconciliationAnswer(t, a, ref)
+			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
+		}, "uncertain", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a, ref := endedWithHeld(t)
+			ids := a.answerIDs(ref.RunID)
+			tc.setup(a, ref, ids)
+			for range 2 {
+				a.w.sync()
+			}
+			if got := a.outcome(t, ref.RunID, ids[3]); got != tc.want {
+				t.Fatalf("resolution outcome %q, want %q", got, tc.want)
+			}
+			first, second := a.resolved()
+			if first != tc.resolved {
+				t.Errorf("first thread resolved=%v, want %v", first, tc.resolved)
+			}
+			if tc.uncertain {
+				if n := a.w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='chat.notice' AND payload->>'text' LIKE '%may have been posted; check the pull request%'`, a.task); n != 1 {
+					t.Errorf("%d uncertainty notices, want 1", n)
+				}
+				if n := a.w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND line LIKE '%may have been posted; check the pull request%'`, a.task); n != 1 {
+					t.Errorf("%d uncertainty wakes, want 1", n)
+				}
+			}
+			if second {
+				t.Errorf("second thread unexpectedly resolved")
+			}
+		})
+	}
+}
+
+func mustReadBody(r *http.Request) []byte {
+	b, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	return b
+}
+
 // after it, claims nothing: the end's record stops it. Here the first
 // poster is inside its write of the first reply, its claim taken for
 // lapsed; a second, stale, poster listed the answers before the end and
