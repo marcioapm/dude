@@ -153,12 +153,10 @@ func (a *AnswerReconciler) Sweep(ctx context.Context) (int, error) {
 
 // reconcileRow is one row as reconcile reads it.
 type reconcileRow struct {
-	ref       RunRef
-	h         heldOf
-	slug      string
-	created   time.Time
-	ended     string
-	settledBy string
+	ref     RunRef
+	h       heldOf
+	slug    string
+	created time.Time
 }
 
 // reconcile settles one row: dude's records first (its poster may have
@@ -169,12 +167,12 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id
 	open := false
 	if err := a.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		var raw []byte
-		err := tx.QueryRow(ctx, `SELECT x.task_id, x.run_id, ru.project_id, x.created_at, x.ended, h.payload,
+		err := tx.QueryRow(ctx, `SELECT x.task_id, x.run_id, ru.project_id, x.created_at, h.payload,
 				COALESCE((SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 					WHERE pr.id = h.payload->>'prId'), '')
 			FROM answer_reconciliations x JOIN runs ru ON ru.id = x.run_id JOIN events h ON h.id = x.answer_id
 			WHERE x.answer_id = $1 AND x.settled_at IS NULL`, id).
-			Scan(&r.ref.TaskID, &r.ref.RunID, &r.ref.ProjectID, &r.created, &r.ended, &raw, &r.slug)
+			Scan(&r.ref.TaskID, &r.ref.RunID, &r.ref.ProjectID, &r.created, &raw, &r.slug)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
