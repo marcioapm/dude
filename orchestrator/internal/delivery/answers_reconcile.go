@@ -186,8 +186,6 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, org, id string) (bool,
 	if r.h.Kind == answerResolve {
 		threads, err := gh.ReviewThreads(ctx, r.slug, r.h.Number)
 		switch {
-		case forge.Transient(err):
-			return false, a.retryOr(ctx, r, err)
 		case err != nil:
 			return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 		}

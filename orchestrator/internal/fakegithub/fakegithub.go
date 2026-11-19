@@ -1594,6 +1594,17 @@ func (s *Server) patchComment(w http.ResponseWriter, r *http.Request) {
 	fail(w, 404, "Not Found")
 }
 
+// DeleteLineComment removes a review-thread root comment, as GitHub does.
+func (s *Server) DeleteLineComment(number int, id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pulls[number]
+	threadID := s.ThreadID(id)
+	delete(s.ResolvedThreads, threadID)
+	delete(s.OutdatedThreads, threadID)
+	p.LineComments = slices.DeleteFunc(p.LineComments, func(c Comment) bool { return c.ID == id || c.InReplyTo == id })
+}
+
 // DeleteComment removes a conversation comment, as a person deleting it on
 // GitHub does.
 func (s *Server) DeleteComment(number int, id int64) {

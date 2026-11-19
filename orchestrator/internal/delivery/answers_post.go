@@ -749,6 +749,11 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 		}
 		return err
 	}
+	if s.AfterAnswerPost != nil {
+		if err := s.AfterAnswerPost(h.ID); err != nil {
+			return crashed{err}
+		}
+	}
 	c := PRActionCheck{ref: ref, action: ActionResolveThread, prID: h.PRID, repo: h.Repo, slug: slug, number: h.Number, answerID: h.ID}
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
 		if err := LockChat(ctx, tx, ref.TaskID); err != nil {
