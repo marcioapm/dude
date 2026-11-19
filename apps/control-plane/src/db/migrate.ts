@@ -18,7 +18,7 @@
  *
  * One migrate runs at a time per database: each holds a session advisory
  * lock (MIGRATE_LOCK) for its whole run and reads what is applied only once
- * it has it.
+ * it has it. A second polls for the lock, holding no snapshot while it waits.
  *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
@@ -272,6 +272,9 @@ async function building(sql: SQL, index: string): Promise<boolean> {
 /** The advisory lock (hashtext of this key) a migrate holds for its whole run. */
 export const MIGRATE_LOCK = "dude-migrate";
 
+/** How long a migrate waiting for MIGRATE_LOCK sleeps between tries. */
+const MIGRATE_LOCK_POLL_MS = 1000;
+
 /**
  * Applies one migration file and records it in schema_migrations, as
  * migrate does: a dude:batch-sql file batch by batch, a dude:no-transaction
@@ -341,8 +344,18 @@ export async function migrate(
     // re-run a batch file's setup after the cleanup that followed it, and
     // leave its progress table behind. A session lock on a connection of
     // its own, released below or with the connection on any error.
+    // Polled, never waited for inside a statement: a blocked
+    // pg_advisory_lock holds a snapshot, which the first's CREATE INDEX
+    // CONCURRENTLY waits out while the first waits for its index, a cycle
+    // through this process that Postgres's deadlock detector never sees.
     lock = await sql.reserve();
-    await lock.unsafe(`SELECT pg_advisory_lock(hashtext('${MIGRATE_LOCK}'))`);
+    for (let waiting = false; ;) {
+      const [got] = await lock.unsafe(`SELECT pg_try_advisory_lock(hashtext('${MIGRATE_LOCK}')) AS ok`);
+      if (got.ok) break;
+      if (!waiting) log("waiting for another migrate to finish");
+      waiting = true;
+      await Bun.sleep(MIGRATE_LOCK_POLL_MS);
+    }
     await ensureMigrationsTable(sql);
     const already = await appliedVersions(sql);
     const files = opts.files ?? await listMigrationFiles();

@@ -1033,18 +1033,17 @@ test("two migrates at once: the second waits for the first, then finds everythin
       const first = migrate(url, { log: (m) => logs[0].push(m) });
       expect(await waitForBlocked(url)).toBe(true);
       const second = migrate(url, { log: (m) => logs[1].push(m) });
-      // The second holds no lock of the backfill's: it waits on the first's advisory lock.
-      const waitedOnAdvisory = await waitFor(async () => {
-        const [row] = await admin`SELECT count(*)::int AS n FROM pg_stat_activity
-          WHERE datname = ${new URL(url).pathname.slice(1)} AND wait_event_type = 'Lock' AND wait_event = 'advisory'`;
-        return row.n > 0;
-      });
+      // The second holds no lock of the backfill's: it polls for the first's advisory lock.
+      const waited = await waitFor(async () => logs[1].includes("waiting for another migrate to finish"));
+      // Polling, it never waits inside a statement on the lock.
+      expect([...await admin`SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE datname = ${new URL(url).pathname.slice(1)} AND wait_event_type = 'Lock' AND wait_event = 'advisory'`]).toEqual([{ n: 0 }]);
       await holder`COMMIT`;
       const results = await Promise.all([first, second].map((p) => p.then((r) => r.applied, (err: Error) => err.message)));
-      expect(waitedOnAdvisory).toBe(true);
+      expect(waited).toBe(true);
       expect(results).toEqual([["277_events_answer_causation_backfill.sql", "278_events_answer_causation_upgrade_repair.sql",
         "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"], []]);
-      expect(logs[1]).toEqual([]);
+      expect(logs[1]).toEqual(["waiting for another migrate to finish"]);
     } finally {
       holder.release();
     }
@@ -1062,9 +1061,47 @@ test("two migrates at once: the second waits for the first, then finds everythin
   }
 }, 120_000);
 
-/** Polls check every 20 ms until it holds, for up to 10 s; says whether it held. */
-async function waitFor(check: () => Promise<boolean>): Promise<boolean> {
-  for (let i = 0; i < 500; i++) {
+test("a migrate that starts while another builds an index concurrently waits for it without holding a snapshot; both finish", async () => {
+  // A second migrate blocked inside pg_advisory_lock held a snapshot, which
+  // the first's CREATE INDEX CONCURRENTLY waited out while the first waited
+  // for its index: both hung, unseen by Postgres's deadlock detector.
+  const url = await createDatabase();
+  const name = new URL(url).pathname.slice(1);
+  const sql = new SQL(url);
+  try {
+    const files = [
+      await temporaryMigration("910_temporary_big_table.sql",
+        "CREATE TABLE t_big AS SELECT g AS n FROM generate_series(1, 1000000) g;\n"),
+      await temporaryMigration("911_temporary_big_idx.sql",
+        "-- dude:no-transaction\nCREATE INDEX CONCURRENTLY IF NOT EXISTS t_big_n_idx ON t_big (n);\n"),
+    ];
+    const first = migrate(url, { log: () => {}, files }).then((r) => r.applied, (err: Error) => err.message);
+    const building = await waitFor(async () => {
+      const [row] = await admin`SELECT count(*)::int AS n FROM pg_stat_progress_create_index p
+        JOIN pg_database d ON d.oid = p.datid WHERE d.datname = ${name}`;
+      return row.n > 0;
+    }, 60_000);
+    expect(building).toBe(true);
+    const second = migrate(url, { log: () => {}, files }).then((r) => r.applied, (err: Error) => err.message);
+    let timer: Timer | undefined;
+    const results = await Promise.race([
+      Promise.all([first, second]),
+      new Promise<string>((resolve) => { timer = setTimeout(() => resolve("both migrates still running after 60 s"), 60_000); }),
+    ]);
+    clearTimeout(timer);
+    expect(results).toEqual([["910_temporary_big_table.sql", "911_temporary_big_idx.sql"], []]);
+    expect([...await sql`SELECT i.indisvalid AS valid FROM pg_index i WHERE i.indexrelid = to_regclass('t_big_n_idx')`])
+      .toEqual([{ valid: true }]);
+    expect([...await sql`SELECT version, count(*)::int AS n FROM schema_migrations GROUP BY version ORDER BY version`])
+      .toEqual([{ version: "910", n: 1 }, { version: "911", n: 1 }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+/** Polls check every 20 ms until it holds, for up to ms (10 s by default); says whether it held. */
+async function waitFor(check: () => Promise<boolean>, ms = 10_000): Promise<boolean> {
+  for (let i = 0; i < ms / 20; i++) {
     if (await check()) return true;
     await Bun.sleep(20);
   }
