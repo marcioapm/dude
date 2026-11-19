@@ -164,7 +164,7 @@ async function runBatchMigration(sql: SQL, file: MigrationFile, contents: string
 }
 
 export function outsideTransaction(contents: string): boolean {
-  return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION;
+  return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION || contents.split("\n", 1)[0]?.trim() === BATCH_SQL;
 }
 
 /** The index a no-transaction file builds with CREATE INDEX CONCURRENTLY, or null. */
