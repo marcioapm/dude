@@ -384,7 +384,40 @@ func expireReconciliationAnswer(t *testing.T, a *answering, ref delivery.RunRef)
 	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '1 hour' WHERE run_id = $1 AND event_type = $2`, ref.RunID, delivery.EvAnswerClaimed)
 }
 
-// Resolution reconciliation exercises the same claim/end barrier as replies,
+// The reconciliation due time has a full extra lease beyond the claim lease:
+// at claim+lease a bounded GitHub write may still be in flight, while at
+// claim+2*lease the row is eligible. The timestamps are controlled in SQL;
+// this test does not sleep or depend on wall-clock passage.
+func TestRound7ReconciliationLeaseMargin(t *testing.T) {
+	a, ref := endedWithHeld(t)
+	ids := a.answerIDs(ref.RunID)
+	b := newBarrier(func(r *http.Request, _ string) bool {
+		return r.Method == "POST" && strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first))
+	})
+	defer b.open()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := a.store.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, b))
+		errs <- err
+	}()
+	<-b.inside
+	a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
+	var claimed time.Time
+	if err := a.w.owner.QueryRow(context.Background(), `SELECT occurred_at FROM events WHERE id=$1`, ids[0]).Scan(&claimed); err != nil {
+		t.Fatal(err)
+	}
+	a.w.prs.Answers.Now = func() time.Time { return claimed.Add(2 * time.Minute) }
+	if n, err := a.w.prs.Answers.Sweep(context.Background()); err != nil || n != 0 {
+		t.Fatalf("claim+lease sweep settled %d: %v", n, err)
+	}
+	a.w.prs.Answers.Now = func() time.Time { return claimed.Add(4 * time.Minute) }
+	if n, err := a.w.prs.Answers.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("claim+2*lease sweep settled %d: %v", n, err)
+	}
+	b.open()
+	<-errs
+}
+
 // but also its terminal action marker. A resolved thread is posted exactly once;
 // a conclusive absent or unresolved thread is withheld; an unreadable thread is
 // uncertain and is announced once. The second sync is deliberately included:

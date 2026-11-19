@@ -94,7 +94,7 @@ func (a *AnswerReconciler) log() *slog.Logger {
 // a batch (answer_reconciliations_due_idx). The source's literal, for the
 // plan harness.
 const answerReconcileDue = `SELECT answer_id, organization_id FROM answer_reconciliations
-	WHERE settled_at IS NULL AND due_at <= now() ORDER BY due_at LIMIT $1`
+	WHERE settled_at IS NULL AND due_at <= $2 ORDER BY due_at LIMIT $1`
 
 // Sweep settles the rows due, and returns how many it settled. One that
 // fails is logged and retried later; the batch goes on.
@@ -102,7 +102,11 @@ func (a *AnswerReconciler) Sweep(ctx context.Context) (int, error) {
 	type due struct{ ID, Org string }
 	var todo []due
 	if err := a.DB.InSystem(ctx, "answer-reconciler", func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, answerReconcileDue, answerReconcileBatch)
+		now := time.Now()
+		if a.Now != nil {
+			now = a.Now()
+		}
+		rows, err := tx.Query(ctx, answerReconcileDue, answerReconcileBatch, now)
 		if err != nil {
 			return err
 		}
