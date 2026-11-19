@@ -559,9 +559,9 @@ func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
 		}
 		// At exactly the bound, it gives up.
 		past := bound
-		// Sweep's count is not asserted here: retryOr's give-up settles the
-		// row but reconcile reports it unsettled (pre-existing; see report).
-		sweep(t, a, past)
+		if n := sweep(t, a, past); n != 1 {
+			t.Errorf("the pass at the bound settled %d, want 1", n)
+		}
 		if open(a, id) {
 			t.Errorf("the reconciliation is still open at the give-up bound")
 		}
