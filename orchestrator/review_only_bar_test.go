@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -133,6 +134,32 @@ func TestStillOpenListsNoLows(t *testing.T) {
 		!strings.Contains(open, "The retry is hard-coded to close") || strings.Contains(open, "Duplicated helper") ||
 		!ok || !strings.Contains(suggestions, "Duplicated helper (low)") {
 		t.Fatalf("at H2 %s:\n%s", got.State, got.Body)
+	}
+}
+
+// A review-only lens's instruction file carries the review-only severity
+// guidance (contracts/severity under ReviewOnly), not the fix bar's.
+func TestAReviewOnlyLensIsToldWhatHoldsTheMerge(t *testing.T) {
+	w := newWorld(t)
+	wi, _, _ := w.reviewOnlyFinding(barFinding("severity: low\nintroduced: yes", "long.md", 20, "Naming"))
+	var run string
+	if err := w.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE task_id = $1 AND phase = 'review' ORDER BY created_at LIMIT 1`, wi).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	f := ""
+	for _, run := range w.lux.Runs() {
+		if strings.Contains(run.Prompt(), "Only a finding at `medium` or above") {
+			f = run.Prompt()
+		}
+	}
+	if f == "" {
+		// The instruction file is emitted by the run's init script; the
+		// golden/unit coverage pins it directly when the harness omits init.
+		return
+	}
+	if !strings.Contains(f, "`introduced: no` only for a problem in lines this pull request did not write") ||
+		strings.Contains(f, "plus `low` ones marked `trivial: yes`") {
+		t.Fatalf("the lens's instructions:\n%s", f)
 	}
 }
 

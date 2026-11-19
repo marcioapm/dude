@@ -33,6 +33,9 @@ type InstructionsInput struct {
 	// the fix bar (runs.blocking_severities). Set, the severity contract is
 	// in the file; its text is fixed.
 	BlockingSeverities []string
+	// A review-only task's Run (PromptInput.ReviewOnly): a reviewer's
+	// severity contract says what holds the author's merge instead.
+	ReviewOnly bool
 	// The organisation's saved prompt for the role (nil: none), and the
 	// project's with its mode ("add" or "replace"; "" has none).
 	OrgPrompt                        *string
@@ -107,7 +110,7 @@ func (in PromptInput) InstructionsInput() InstructionsInput {
 		OrgPrompt: in.OrgPrompt, ProjectPrompt: in.ProjectPrompt, ProjectPromptMode: in.ProjectPromptMode,
 		Context: in.Context,
 		Vars:    PromptVars{in.Title, in.Goal, in.AcceptanceCriteria, in.Branch, in.BaseRef},
-		Voice:   in.Voice,
+		Voice:   in.Voice, ReviewOnly: in.ReviewOnly,
 	}
 }
 
