@@ -423,7 +423,7 @@ func TestRound7ReconciliationLeaseMargin(t *testing.T) {
 	<-errs
 }
 
-// #485 round 16: a resolution whose poster crashed after GitHub took it,
+// A resolution whose poster crashed after GitHub took it,
 // the delivery ended (merged), and GitHub's thread read failing for a moment (a
 // 502). The pass asks again, on the reconciler's own clock, until the
 // give-up bound, and settles it uncertain only past that. Every time here
@@ -544,20 +544,29 @@ func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
 		a, ref, id, due, created := crashed(t)
 		clock := due.Add(time.Second)
 		sweep(t, a, clock)
-		// Every retry still fails; short of the bound, it stays open.
-		short := created.Add(time.Hour - time.Second)
+		// Every retry still fails; a minute short of the bound, it stays
+		// open, and its retry is due exactly at the bound.
+		bound := created.Add(time.Hour)
+		short := bound.Add(-time.Minute)
 		if n := sweep(t, a, short); n != 0 || !open(a, id) {
-			t.Fatalf("a second short of the bound settled %d (open %v)", n, open(a, id))
+			t.Fatalf("a minute short of the bound settled %d (open %v)", n, open(a, id))
 		}
-		past := short.Add(time.Minute + time.Second)
-		// Sweep's count is not asserted here: retryOr's give-up settles the
-		// row but reconcile reports it unsettled (pre-existing; see report).
-		sweep(t, a, past)
+		if got := a.outcome(t, ref.RunID, id); got != "" {
+			t.Fatalf("a minute short of the bound the answer ended %q, want it left open", got)
+		}
+		if got := dueAt(t, a, id); !got.Equal(bound) {
+			t.Fatalf("a minute short of the bound retried at %v, want the bound %v", got, bound)
+		}
+		// At exactly the bound, it gives up.
+		past := bound
+		if n := sweep(t, a, past); n != 1 {
+			t.Errorf("the pass at the bound settled %d, want 1", n)
+		}
 		if open(a, id) {
-			t.Errorf("the reconciliation is still open past the give-up bound")
+			t.Errorf("the reconciliation is still open at the give-up bound")
 		}
 		if got := a.outcome(t, ref.RunID, id); got != "uncertain" {
-			t.Errorf("a read failing past the bound ended %q, want uncertain", got)
+			t.Errorf("a read failing at the bound ended %q, want uncertain", got)
 		}
 		for i := range 3 {
 			sweep(t, a, past.Add(time.Duration(i+1)*time.Hour))
@@ -586,11 +595,10 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 		want      string
 		resolved  bool
 		uncertain bool
-		// thread is the first thread as the pass read it on GitHub, and so
-		// the branch it settled by: "absent" (no thread has its root
-		// comment), "unresolved" (there, not resolved), "resolved", or ""
-		// for a read that failed.
-		thread string
+		// githubThread is the GitHub state the case set up for the first
+		// thread: "absent" (no thread has its root comment), "unresolved"
+		// (there, not resolved), "resolved", or "" for a read that fails.
+		githubThread string
 	}{
 		{"resolved", func(a *answering, ref delivery.RunRef, ids []string) {
 			crashOn := errors.New("resolution poster crashed")
@@ -677,26 +685,24 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			if got := a.outcome(t, ref.RunID, ids[3]); got != tc.want {
 				t.Fatalf("resolution outcome %q, want %q", got, tc.want)
 			}
-			// The branch the pass took: the first thread as GitHub gives
-			// it, read as the pass reads it (ReviewThreads, ThreadOf).
-			// Withholding writes nothing to GitHub, so this is what the
-			// pass read. Absent and unresolved both end withheld; this
-			// tells them apart.
-			if tc.thread != "" {
+			// The GitHub state the case set up for the first thread, read
+			// as the pass reads it (ReviewThreads, ThreadOf). Withholding
+			// writes nothing to GitHub, so the setup is still in place.
+			if tc.githubThread != "" {
 				slug := forge.SlugFromURL(a.w.str(`SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 					JOIN events h ON h.payload->>'prId' = pr.id WHERE h.id = $1`, ids[3]))
 				threads, err := a.gh.ReviewThreads(context.Background(), slug, 1)
 				if err != nil {
 					t.Fatalf("reading the threads: %v", err)
 				}
-				branch := "absent"
+				state := "absent"
 				if th := forge.ThreadOf(threads, a.first); th != nil && th.Resolved {
-					branch = "resolved"
+					state = "resolved"
 				} else if th != nil {
-					branch = "unresolved"
+					state = "unresolved"
 				}
-				if branch != tc.thread {
-					t.Errorf("the pass settled by the %q branch, want %q", branch, tc.thread)
+				if state != tc.githubThread {
+					t.Errorf("the first thread on GitHub is %q, want the case's setup %q", state, tc.githubThread)
 				}
 			}
 			first, second := a.resolved()

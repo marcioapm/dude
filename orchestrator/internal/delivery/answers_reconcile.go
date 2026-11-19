@@ -79,8 +79,9 @@ type AnswerReconciler struct {
 	DB     *db.DB
 	Forges Forges
 	Log    *slog.Logger
-	// Now is the reconciler's clock: the rows due, the give-up bound and a
-	// retry's due time are all read on it, never on the database's; nil is
+	// Now is the reconciler's clock: the instant a pass compares due times
+	// and the give-up bound against, and a retry's due time, come from it.
+	// A row's created_at and first due_at are the database's. nil is
 	// time.Now.
 	Now func() time.Time
 }
@@ -188,7 +189,7 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id
 	}
 	gh, err := a.Forges.For(ctx, org)
 	if err != nil && forge.Transient(err) {
-		return false, a.retryOr(ctx, now, r, err)
+		return a.retryOr(ctx, now, r, err)
 	}
 	if err != nil || gh == nil || r.slug == "" {
 		why := "no GitHub to read it with"
@@ -203,19 +204,19 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id
 		case forge.Transient(err):
 			// A GitHub that failed for a moment (a 502) is asked again,
 			// until the give-up bound.
-			return false, a.retryOr(ctx, now, r, err)
+			return a.retryOr(ctx, now, r, err)
 		case err != nil:
 			// An answer GitHub will not mend by asking again.
 			return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 		}
 		t := forge.ThreadOf(threads, forge.LineCommentID(r.h.Thread))
 		switch {
-		case t == nil:
+		case t == nil || !t.Resolved:
+			// No thread for it, or one not resolved: withheld alike.
 			return true, a.settle(ctx, r, reconciledWithheld, withheldBeforePosted, "", forge.Posted{}, "")
-		case t.Resolved:
+		default:
 			return true, a.settle(ctx, r, reconciledPosted, "", "", forge.Posted{}, t.ID)
 		}
-		return true, a.settle(ctx, r, reconciledWithheld, withheldBeforePosted, "", forge.Posted{}, "")
 	}
 	// A reply: dude's own comment carrying its marker, and nothing else,
 	// is evidence it was posted. Never posted again here.
@@ -224,7 +225,7 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id
 	case errors.Is(err, forge.ErrSearchIncomplete):
 		return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, "the search for its comment was cut at its bound", forge.Posted{}, "")
 	case forge.Transient(err):
-		return false, a.retryOr(ctx, now, r, err)
+		return a.retryOr(ctx, now, r, err)
 	case err != nil:
 		return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 	case posted.ID != "":
@@ -241,12 +242,13 @@ func isLineComment(id string) bool {
 
 // retryOr leaves a row GitHub did not answer for a later pass, until
 // answerReconcileGiveUp past its creation, when it is settled uncertain.
-// now is the pass's instant on the reconciler's clock.
-func (a *AnswerReconciler) retryOr(ctx context.Context, now time.Time, r reconcileRow, err error) error {
+// now is the pass's instant on the reconciler's clock. It says whether it
+// settled the row, as reconcile does.
+func (a *AnswerReconciler) retryOr(ctx context.Context, now time.Time, r reconcileRow, err error) (bool, error) {
 	if now.Sub(r.created) < answerReconcileGiveUp {
-		return err
+		return false, err
 	}
-	return a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
+	return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 }
 
 // settle records the answer's outcome under the Chat lock, unless its
