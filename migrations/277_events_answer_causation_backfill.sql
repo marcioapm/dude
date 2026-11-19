@@ -48,6 +48,9 @@ WITH bounds AS (
   SET causation_id = COALESCE(e.payload->>'answerId', (e.payload->'github')->>'answerId')
   FROM candidates c
   WHERE e.id = c.id
+    -- Holds even without the lock above: a row another writer gave a
+    -- causation_id while this batch waited for it keeps that value.
+    AND e.causation_id IS NULL
   RETURNING c.cursor
 ), progress AS (
   UPDATE events_answer_causation_backfill_progress p

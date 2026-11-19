@@ -976,6 +976,36 @@ test("277 reads one window of 100000 cursors per batch, however sparse the rows 
   }
 }, 120_000);
 
+test("277 keeps a causation_id that the transaction holding its row wrote while the backfill waited", async () => {
+  const { url, sql } = await migratedBefore("277");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_g', 'G', 'g')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+      SELECT 'eg' || g, 'org_g', 'pull_request.action', 'run_g', 'agent', 'x', 't', jsonb_build_object('answerId', 'hg' || g)
+      FROM generate_series(1, 5) g`;
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    const holder = await sql.reserve();
+    try {
+      await holder`BEGIN`;
+      await holder`UPDATE events SET causation_id = 'the_holders' WHERE id = 'eg3'`;
+      const run = migrate(url, { log: () => {} }).then((r) => r.applied, (err: Error) => err.message);
+      expect(await waitForBlocked(url)).toBe(true);
+      await holder`COMMIT`;
+      expect(await run).toEqual(["277_events_answer_causation_backfill.sql", "278_events_answer_causation_upgrade_repair.sql",
+        "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"]);
+    } finally {
+      holder.release();
+    }
+    expect([...await sql`SELECT id, causation_id FROM events WHERE organization_id = 'org_g' ORDER BY cursor`]).toEqual([
+      { id: "eg1", causation_id: "hg1" }, { id: "eg2", causation_id: "hg2" }, { id: "eg3", causation_id: "the_holders" },
+      { id: "eg4", causation_id: "hg4" }, { id: "eg5", causation_id: "hg5" },
+    ]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
 test("two migrates at once: the second waits for the first, then finds everything applied; nothing runs twice or is left behind", async () => {
   const { url, sql } = await migratedBefore("277");
   try {
