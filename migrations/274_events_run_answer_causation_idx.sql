@@ -11,4 +11,5 @@
 -- makes a retry after a crash before it was recorded a no-op. RLS and
 -- grants are the table's: an index adds neither.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS events_run_answer_causation_idx ON events (run_id, causation_id)
-  WHERE event_type IN ('chat.message', 'pull_request.action', 'pull_request.answer_failed');
+  WHERE event_type IN ('chat.message', 'pull_request.action', 'pull_request.answer_failed')
+    AND causation_id IS NOT NULL;

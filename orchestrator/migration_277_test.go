@@ -1,6 +1,8 @@
 package orchestrator_test
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -11,6 +13,7 @@ import (
 // historical NULL rows are filled by the resumable backfill.
 func TestMigration273CompatibilityWriterAnd277Backfill(t *testing.T) {
 	owner, apply := dbtest.Upgrade(t, "273")
+	ctx := context.Background()
 	org := dbtest.Org(t, owner)
 	mustExec(t, owner, `INSERT INTO events (id, organization_id, event_type, actor_type, actor_id, source, payload)
 		VALUES ('evt_old', $1, 'chat.message', 'agent', 'old', 'orchestrator', '{"github":{"answerId":"answer_old"}}')`, org)
@@ -23,4 +26,12 @@ func TestMigration273CompatibilityWriterAnd277Backfill(t *testing.T) {
 	if got := scalar[string](t, owner, `SELECT causation_id FROM events WHERE id = 'evt_new'`); got != "answer_new" {
 		t.Fatalf("old-writer insert after migration set causation_id to %q", got)
 	}
+	var predicate string
+	if err := owner.QueryRow(ctx, `SELECT pg_get_expr(i.indpred, i.indrelid) FROM pg_index i WHERE i.indexrelid = 'events_run_answer_causation_idx'::regclass`).Scan(&predicate); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(predicate, "causation_id IS NOT NULL") {
+		t.Fatalf("causation index predicate %q omits the non-NULL guard", predicate)
+	}
 }
+
