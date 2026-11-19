@@ -602,7 +602,7 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		}
 		if len(in.Unfinished) > 0 {
 			details, err := tx.Query(ctx, `SELECT DISTINCT ON (category) COALESCE(category, ''), COALESCE(error, status::text)
-				FROM runs k WHERE `+reviewedFrom+` AND k.base_refs->>$3 = $4 AND k.category = ANY($5)
+				FROM runs k WHERE `+reviewedFrom+` AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4 AND k.category = ANY($5)
 				ORDER BY category, created_at DESC, id DESC`, st.TaskID, st.Attempt, pr.Repo, head, in.Unfinished)
 			if err != nil {
 				return err
@@ -1096,7 +1096,7 @@ func (w *steps) statusComment(ctx context.Context, sc workflow.StepContext, st *
 // completed (lenses).
 func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) (unfinished, lenses []string, err error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (k.category) k.category, k.status::text FROM runs k WHERE `+reviewedFrom+`
-		AND k.category IS NOT NULL AND k.base_refs->>$3 = $4 ORDER BY k.category, k.created_at DESC, k.id DESC`,
+		AND k.replaced_by IS NULL AND k.category IS NOT NULL AND k.base_refs->>$3 = $4 ORDER BY k.category, k.created_at DESC, k.id DESC`,
 		st.TaskID, st.Attempt, repo, head)
 	if err != nil {
 		return nil, nil, err
@@ -1135,7 +1135,7 @@ func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) (
 func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) ([]verdictFinding, error) {
 	rows, err := tx.Query(ctx, `SELECT f.id, f.severity::text, f.title, f.description, f.suggested_fix, COALESCE(f.acceptance, ''),
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
-		j.id IS NOT NULL, COALESCE(j.judgement, '')
+		COALESCE(j.judgement, '') <> '', COALESCE(j.judgement, '')
 		FROM review_findings f LEFT JOIN LATERAL (
 			SELECT k.id, CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
 				THEN k.verdicts->>f.id ELSE '' END AS judgement
