@@ -1,7 +1,9 @@
--- 277_events_answer_causation_backfill.sql — bounded historical backfill.
+-- 277_events_answer_causation_backfill.sql — define the resumable backfill.
 --
--- 273's compatibility trigger prevents old writers from introducing new NULL
--- rows. Each procedure call commits its own batch; rerunning is safe.
+-- The procedure is defined separately from its CALL because PostgreSQL only
+-- permits COMMIT in a procedure called at the top level. The Bun runner sends
+-- each no-transaction file as one SQL payload; 279 is therefore the standalone
+-- CALL and 280 removes this temporary procedure.
 -- dude:no-transaction
 CREATE OR REPLACE PROCEDURE backfill_events_answer_causation(p_batch integer DEFAULT 10000)
 LANGUAGE plpgsql AS $$
@@ -28,5 +30,3 @@ BEGIN
   END LOOP;
 END
 $$;
-CALL backfill_events_answer_causation();
-DROP PROCEDURE backfill_events_answer_causation(integer);
