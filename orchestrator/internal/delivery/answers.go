@@ -40,18 +40,23 @@ import (
 // until answerVerifyBound past the fixer's end withholds them. Posting
 // never fails its step: GitHub down or another poster at work is a Wait,
 // anything else is logged and the step goes on (fixerAnswers). A delivery
-// that ends — merged, closed, stopped — withholds what is still held,
-// with no GitHub call (answers_end.go). So every held answer is settled.
+// that ends — merged, closed, stopped — records its end (no claim after
+// it), withholds what nobody holds, with no GitHub call, and leaves an
+// answer a poster holds to its poster or to the pr-reconciler's
+// reconciliation (answers_end.go, answers_reconcile.go): an answer GitHub
+// may show is never recorded withheld. So every held answer is settled.
 // When the task has a live conductor it is woken with what was posted,
 // resolved, failed or withheld (WakeRound, answersLine, keyed by a hash of
 // the answers settled), and may add to or correct the answers.
 //
 // Deduplicated settlement: each answer is settled by one record on the fixer's Run,
-// its chat.message (a reply) or pull_request.action (a resolution) naming
-// its answerId, or an EvAnswerFailed. Under the task's Chat lock, a reply
-// is claimed (EvAnswerClaimed) before GitHub is called, and no transaction
-// is held across GitHub: a second poster meanwhile finds the claim fresh
-// and leaves it (errAnswerBusy). The posted comment carries the answer's id
+// its chat.message (a reply) or pull_request.action (a resolution), or an
+// EvAnswerFailed, caused by it (causation_id: the answer's EvAnswerHeld
+// id, which the indexes key on). Under the task's Chat lock, a reply or a
+// resolution is claimed (EvAnswerClaimed) before GitHub is called — never
+// after the delivery's end — and no transaction is held across GitHub: a
+// second poster meanwhile finds the claim fresh and leaves it
+// (errAnswerBusy). The posted comment carries the answer's id
 // (forge.AnswerMarker), so a poster that finds an earlier claim — one
 // that crashed between GitHub's answer and the record, or whose answer was
 // lost — looks for that comment first (forge.FindAnswer, dude's own
@@ -61,11 +66,11 @@ import (
 // reason is recorded, retaining the answer and claim. This is not a
 // distributed exactly-once guarantee. A
 // claim older than answerClaimLease is taken over: its holder is taken
-// for gone (posters of a task are also serialised by its delivery's
-// workflow lease; the record is re-checked under the lock, so one that
-// outlived its lease records nothing twice). A resolution needs no claim:
-// resolving a resolved thread is a no-op, and its record is written once,
-// under the lock. GitHub refusing an answer itself (a deleted comment,
+// for gone (its GitHub work is bounded by the lease; posters of a task are
+// also serialised by its delivery's workflow lease; the record is
+// re-checked under the lock, so one that outlived its lease records
+// nothing twice). Resolving a resolved thread is a no-op, so a recovering
+// resolution needs no search. GitHub refusing an answer itself (a deleted comment,
 // forge.Refused) fails that answer, recorded and reported.
 
 // Ledger events of a fixer's held answers, on its Run.
@@ -74,9 +79,9 @@ const (
 	// resolve_thread), repo, number, prId, inReplyTo (a reply) or thread
 	// (a resolution), text (a reply) }.
 	EvAnswerHeld = "pull_request.answer_held"
-	// A poster's claim on a held reply before GitHub is called. Payload:
-	// { answerId, released? }: released gives it back after a transient
-	// failure.
+	// A poster's claim on a held reply or resolution before GitHub is
+	// called; causation_id is the answer. Payload: { answerId, released? }:
+	// released gives it back after a transient failure.
 	EvAnswerClaimed = "pull_request.answer_claimed"
 	// A held answer that will not be posted. Payload: { answerId, kind,
 	// error, withheld? }: withheld when the fix is not on the pull request.
@@ -102,7 +107,7 @@ const (
 // RoleFixer is who a fixer's answer dude posted is by (its chat.message).
 const RoleFixer = "fixer"
 
-// answerClaimLease is how long a claim on a held reply stands: past it,
+// answerClaimLease is how long a claim on a held answer stands: past it,
 // its poster is taken for gone. Above forge's request timeout, with room.
 const answerClaimLease = 2 * time.Minute
 
