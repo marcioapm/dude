@@ -345,7 +345,10 @@ func (f verdictFinding) blocks() bool {
 func verdictFindingsItem(findings []verdictFinding) GateItem {
 	var blocking []string
 	for _, f := range findings {
-		if f.Judgement != "fixed" && f.blocks() {
+		if !f.Checked || f.Judgement == "fixed" {
+			continue
+		}
+		if f.blocks() {
 			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, f.Severity, f.Title))
 		}
 	}
@@ -1106,7 +1109,7 @@ func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string
 // verdictFindingsTx is the attempt's open findings in repo, for the review.
 func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) ([]verdictFinding, error) {
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, ''
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, true, ''
 		FROM review_findings WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND COALESCE(repo, $3) = $3
 		ORDER BY created_at, id`, st.TaskID, st.Attempt, repo)
 	if err != nil {
@@ -1129,7 +1132,7 @@ func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head 
 			SELECT k.id, CASE WHEN k.id = f.run_id THEN 'still' ELSE k.verdicts->>f.id END judgement
 			FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review'
 			AND k.status = 'completed' AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4
-			AND (k.id = f.run_id OR k.verdicts->>f.id IN ('fixed', 'still'))
+			AND (k.id = f.run_id OR (k.category = f.category AND f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')))
 			ORDER BY k.created_at DESC, k.id DESC LIMIT 1
 		) j ON true WHERE f.task_id = $1 AND (f.status = 'open' OR f.status = 'resolved' AND j.judgement = 'fixed')
 		AND `+strings.ReplaceAll(thisAttempt, "review_findings.run_id", "f.run_id")+` AND COALESCE(f.repo, $3) = $3

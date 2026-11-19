@@ -555,7 +555,7 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 		// blocks), never the fix bar: a low, trivial or not, holds nothing.
 		var vs []verdictFinding
 		for _, f := range found {
-			vs = append(vs, verdictFinding{ID: f.ID, Severity: f.Severity, Title: f.Title})
+			vs = append(vs, verdictFinding{ID: f.ID, Severity: f.Severity, Title: f.Title, Checked: true})
 		}
 		return verdictFindingsItem(vs), nil
 	}
