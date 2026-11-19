@@ -614,6 +614,9 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 			}); err != nil {
 				return err
 			}
+			if findings, err = incompleteFindingsTx(ctx, tx, st, pr.Repo, head); err != nil {
+				return err
+			}
 		}
 		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return err
