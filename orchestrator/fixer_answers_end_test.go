@@ -544,20 +544,29 @@ func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
 		a, ref, id, due, created := crashed(t)
 		clock := due.Add(time.Second)
 		sweep(t, a, clock)
-		// Every retry still fails; short of the bound, it stays open.
-		short := created.Add(time.Hour - time.Second)
+		// Every retry still fails; a minute short of the bound, it stays
+		// open, and its retry is due exactly at the bound.
+		bound := created.Add(time.Hour)
+		short := bound.Add(-time.Minute)
 		if n := sweep(t, a, short); n != 0 || !open(a, id) {
-			t.Fatalf("a second short of the bound settled %d (open %v)", n, open(a, id))
+			t.Fatalf("a minute short of the bound settled %d (open %v)", n, open(a, id))
 		}
-		past := short.Add(time.Minute + time.Second)
+		if got := a.outcome(t, ref.RunID, id); got != "" {
+			t.Fatalf("a minute short of the bound the answer ended %q, want it left open", got)
+		}
+		if got := dueAt(t, a, id); !got.Equal(bound) {
+			t.Fatalf("a minute short of the bound retried at %v, want the bound %v", got, bound)
+		}
+		// At exactly the bound, it gives up.
+		past := bound
 		// Sweep's count is not asserted here: retryOr's give-up settles the
 		// row but reconcile reports it unsettled (pre-existing; see report).
 		sweep(t, a, past)
 		if open(a, id) {
-			t.Errorf("the reconciliation is still open past the give-up bound")
+			t.Errorf("the reconciliation is still open at the give-up bound")
 		}
 		if got := a.outcome(t, ref.RunID, id); got != "uncertain" {
-			t.Errorf("a read failing past the bound ended %q, want uncertain", got)
+			t.Errorf("a read failing at the bound ended %q, want uncertain", got)
 		}
 		for i := range 3 {
 			sweep(t, a, past.Add(time.Duration(i+1)*time.Hour))
