@@ -1152,13 +1152,22 @@ func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string
 	return unfinished, lenses, err
 }
 
-// incompleteFindingsTx requires a completed Run's explicit judgement at H;
-// simply having run the category at H is not proof it checked an old finding.
+// incompleteFindingsTx is the attempt's findings, each with whether it was
+// checked at H. A finding raised at H is checked by its own raising Run
+// (r): a completed, unreplaced review Run of its category at H, judging it
+// still. An earlier one needs an explicit judgement at H (j): the newest
+// such Run of its category must list it in finding_ids (what it was given
+// to judge; the findings it raised are not there) with fixed or still.
+// Simply having run the category at H is not proof it checked an old one.
 func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) ([]verdictFinding, error) {
 	rows, err := tx.Query(ctx, `SELECT f.id, f.severity::text, f.title, f.description, f.suggested_fix, COALESCE(f.acceptance, ''),
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
-		COALESCE(j.judgement, '') <> '', COALESCE(j.judgement, '')
-		FROM review_findings f LEFT JOIN LATERAL (
+		COALESCE(j.judgement, '') <> '' OR r.id IS NOT NULL,
+		COALESCE(NULLIF(j.judgement, ''), CASE WHEN r.id IS NOT NULL THEN 'still' END, '')
+		FROM review_findings f LEFT JOIN runs r ON r.id = f.run_id AND r.task_id = $1 AND r.attempt = $2
+			AND r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL AND r.base_refs->>$3 = $4
+			AND r.category IS NOT DISTINCT FROM f.category
+		LEFT JOIN LATERAL (
 			SELECT k.id, CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
 				THEN k.verdicts->>f.id ELSE '' END AS judgement
 			FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review'
