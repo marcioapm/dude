@@ -210,12 +210,12 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id
 		}
 		t := forge.ThreadOf(threads, forge.LineCommentID(r.h.Thread))
 		switch {
-		case t == nil:
+		case t == nil || !t.Resolved:
+			// No thread for it, or one not resolved: withheld alike.
 			return true, a.settle(ctx, r, reconciledWithheld, withheldBeforePosted, "", forge.Posted{}, "")
-		case t.Resolved:
+		default:
 			return true, a.settle(ctx, r, reconciledPosted, "", "", forge.Posted{}, t.ID)
 		}
-		return true, a.settle(ctx, r, reconciledWithheld, withheldBeforePosted, "", forge.Posted{}, "")
 	}
 	// A reply: dude's own comment carrying its marker, and nothing else,
 	// is evidence it was posted. Never posted again here.

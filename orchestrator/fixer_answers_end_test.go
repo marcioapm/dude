@@ -595,11 +595,10 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 		want      string
 		resolved  bool
 		uncertain bool
-		// thread is the first thread as the pass read it on GitHub, and so
-		// the branch it settled by: "absent" (no thread has its root
-		// comment), "unresolved" (there, not resolved), "resolved", or ""
-		// for a read that failed.
-		thread string
+		// githubThread is the GitHub state the case set up for the first
+		// thread: "absent" (no thread has its root comment), "unresolved"
+		// (there, not resolved), "resolved", or "" for a read that fails.
+		githubThread string
 	}{
 		{"resolved", func(a *answering, ref delivery.RunRef, ids []string) {
 			crashOn := errors.New("resolution poster crashed")
@@ -686,26 +685,24 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			if got := a.outcome(t, ref.RunID, ids[3]); got != tc.want {
 				t.Fatalf("resolution outcome %q, want %q", got, tc.want)
 			}
-			// The branch the pass took: the first thread as GitHub gives
-			// it, read as the pass reads it (ReviewThreads, ThreadOf).
-			// Withholding writes nothing to GitHub, so this is what the
-			// pass read. Absent and unresolved both end withheld; this
-			// tells them apart.
-			if tc.thread != "" {
+			// The GitHub state the case set up for the first thread, read
+			// as the pass reads it (ReviewThreads, ThreadOf). Withholding
+			// writes nothing to GitHub, so the setup is still in place.
+			if tc.githubThread != "" {
 				slug := forge.SlugFromURL(a.w.str(`SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
 					JOIN events h ON h.payload->>'prId' = pr.id WHERE h.id = $1`, ids[3]))
 				threads, err := a.gh.ReviewThreads(context.Background(), slug, 1)
 				if err != nil {
 					t.Fatalf("reading the threads: %v", err)
 				}
-				branch := "absent"
+				state := "absent"
 				if th := forge.ThreadOf(threads, a.first); th != nil && th.Resolved {
-					branch = "resolved"
+					state = "resolved"
 				} else if th != nil {
-					branch = "unresolved"
+					state = "unresolved"
 				}
-				if branch != tc.thread {
-					t.Errorf("the pass settled by the %q branch, want %q", branch, tc.thread)
+				if state != tc.githubThread {
+					t.Errorf("the first thread on GitHub is %q, want the case's setup %q", state, tc.githubThread)
 				}
 			}
 			first, second := a.resolved()
