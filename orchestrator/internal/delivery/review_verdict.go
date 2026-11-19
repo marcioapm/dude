@@ -853,12 +853,12 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		if claimed {
 			// An earlier run's answer was lost, or it stopped short: find
 			// the review before posting anything, at increasing delays.
-			found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
+			found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim, head)
 			if err != nil {
 				return "", reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(delay, v.LostSubmits, v.LostLookups)),
 					Why: "looking for dude's review: " + err.Error()}
 			}
-			if ok {
+			if ok && found.CommitID == head {
 				v.settled(note)
 				return event, w.submitted(ctx, sc, st, pr, base, found, true, w.reviewPosts(ctx, gh, pr, found.ID, comments, ids))
 			}
@@ -948,7 +948,7 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		return reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(w.s.reviewRecoverDelay(), v.LostSubmits, 0)),
 			Why: what + ": " + err.Error()}
 	}
-	found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
+	found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim, head)
 	if err != nil {
 		return retry(err, "looking for dude's review to refresh")
 	}
@@ -1001,6 +1001,17 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		}
 	}
 	body := forge.FoldComments(marked, folded)
+	// UpdateReview sends only a body and cannot pin the commit. Recheck after
+	// all old-head data has been prepared, including the no-comment path, so a
+	// moved head never receives a stale refresh write or edit event.
+	now, err = gh.Head(ctx, pr.Slug, pr.Number)
+	if err != nil {
+		return retry(err, "rechecking the head before updating dude's review")
+	}
+	if now != head {
+		v.settled(v.ChecksNoted)
+		return nil
+	}
 	// A body GitHub already holds is not sent again; one an ambiguous
 	// answer left there is recorded edited all the same.
 	edited := v.LostSubmits > 0

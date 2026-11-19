@@ -297,7 +297,7 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1"); err != nil || found {
+	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1", head); err != nil || found {
 		t.Fatalf("before dude's review: %+v %v %v, want none", got, found, err)
 	}
 
@@ -307,7 +307,7 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	if err == nil || !Transient(err) {
 		t.Fatalf("a dropped answer: %v, want an ambiguous (transient) error", err)
 	}
-	got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1")
+	got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1", head)
 	reviews := fake.Pull(n).Reviews
 	last := reviews[len(reviews)-1]
 	if err != nil || !found || got.ID != last.ID || got.State != "APPROVED" || got.CommitID != head {
@@ -329,22 +329,48 @@ func TestFindOwnReviewRecoversALostAnswerAndIgnoresQuotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found, ok, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_3"); err != nil || !ok || found != answered {
+	if found, ok, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_3", head); err != nil || !ok || found != answered {
 		t.Fatalf("found %+v %v %v, want the submission's answer %+v", found, ok, err, answered)
 	}
-	if _, found, _ := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_2"); found {
+	if _, found, _ := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_2", head); found {
 		t.Fatal("another claim's review was found")
 	}
 	// The newest marked review wins, and GitHub's logins are read without
 	// case.
 	fake.ReviewSaying(n, strings.ToUpper(fakegithub.Login), "COMMENTED", "Again.\n\n"+marker)
 	reviews = fake.Pull(n).Reviews
-	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1"); err != nil || !found || got.ID != reviews[len(reviews)-1].ID {
+	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_1", head); err != nil || !found || got.ID != reviews[len(reviews)-1].ID {
 		t.Fatalf("with a newer review by %s: %+v %v %v, want it", strings.ToUpper(fakegithub.Login), got, found, err)
 	}
 }
 
-// A refused dismissal is told apart and not retried; one already
+// A marker/account review at an earlier commit is not recovered for the
+// current head; a review at the current commit is recovered.
+func TestFindOwnReviewRequiresTheCurrentCommit(t *testing.T) {
+	fake, g, n, oldHead := reviewFake(t)
+	ctx := context.Background()
+	marker := ReviewMarker("wi_1", "claim_head")
+	if _, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: oldHead, Event: EventComment,
+		Body: "old answer\n\n" + marker}); err != nil {
+		t.Fatal(err)
+	}
+	newHead := fake.CommitOnTop("feature", "push after review")
+	if newHead == "" || newHead == oldHead {
+		t.Fatalf("failed to advance feature from %s", oldHead)
+	}
+	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_head", newHead); err != nil || found {
+		t.Fatalf("wrong-head review recovered: %+v %v %v", got, found, err)
+	}
+	correct, err := g.SubmitReview(ctx, SubmitReview{Slug: "acme/repo", Number: n, CommitID: newHead, Event: EventComment,
+		Body: "current answer\n\n" + marker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := g.FindOwnReview(ctx, "acme/repo", n, "wi_1", "claim_head", newHead); err != nil || !found || got.ID != correct.ID {
+		t.Fatalf("current-head review not recovered: %+v %v %v", got, found, err)
+	}
+}
+
 // dismissed is done.
 func TestDismissalRefusedIsTypedAndAlreadyDismissedIsDone(t *testing.T) {
 	fake, g, n, head := reviewFake(t)

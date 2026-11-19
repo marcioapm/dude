@@ -242,7 +242,7 @@ func (g *GitHub) ReviewComments(ctx context.Context, slug string, number int, re
 // dude's account (Login) whose body ends with ReviewMarker(taskID,
 // claimID). A person's review quoting the marker is not dude's, nor is one
 // by dude's account that only quotes it.
-func (g *GitHub) FindOwnReview(ctx context.Context, slug string, number int, taskID, claimID string) (SubmittedReview, bool, error) {
+func (g *GitHub) FindOwnReview(ctx context.Context, slug string, number int, taskID, claimID, head string) (SubmittedReview, bool, error) {
 	self, err := g.Login(ctx)
 	if err != nil {
 		return SubmittedReview{}, false, err
@@ -254,7 +254,7 @@ func (g *GitHub) FindOwnReview(ctx context.Context, slug string, number int, tas
 	marker := ReviewMarker(taskID, claimID)
 	for i := len(reviews) - 1; i >= 0; i-- {
 		r := reviews[i]
-		if self != "" && strings.EqualFold(login(r.User), self) && reviewMarked(r.Body, marker) {
+		if self != "" && strings.EqualFold(login(r.User), self) && reviewMarked(r.Body, marker) && r.CommitID == head {
 			return r.submitted(), true, nil
 		}
 	}
