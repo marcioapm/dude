@@ -1137,7 +1137,7 @@ func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head 
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
 		j.id IS NOT NULL, COALESCE(j.judgement, '')
 		FROM review_findings f LEFT JOIN LATERAL (
-			SELECT CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
+			SELECT k.id, CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
 				THEN k.verdicts->>f.id ELSE '' END AS judgement
 			FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review'
 			AND k.status = 'completed' AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4
