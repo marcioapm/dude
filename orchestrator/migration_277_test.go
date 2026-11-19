@@ -34,4 +34,3 @@ func TestMigration273CompatibilityWriterAnd277Backfill(t *testing.T) {
 		t.Fatalf("causation index predicate %q omits the non-NULL guard", predicate)
 	}
 }
-

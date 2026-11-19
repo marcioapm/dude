@@ -67,7 +67,7 @@ func TestTheConductorNoteMigrationReadsNoRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := owner.Exec(ctx, string(sql)); err != nil {
+		if err := dbtest.ApplyMigration(ctx, owner, string(sql)); err != nil {
 			t.Fatalf("%s: %v", filepath.Base(f), err)
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -338,11 +339,11 @@ func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 			if (filepath.Base(f) < version) != before {
 				continue
 			}
-			sql, err := os.ReadFile(f)
+			raw, err := os.ReadFile(f)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := owner.Exec(ctx, string(sql)); err != nil {
+			if err := ApplyMigration(ctx, owner, string(raw)); err != nil {
 				t.Fatalf("%s: %v", filepath.Base(f), err)
 			}
 		}
@@ -455,4 +456,108 @@ func dropStale(ctx context.Context, admin *pgx.Conn, olderThan time.Duration, ma
 		}
 	}
 	return dropped
+}
+
+var (
+	batchLimitLine = regexp.MustCompile(`(?m)^-- dude:batch-limit(?:=|\s+)(\d+)\s*$`)
+	batchSection   = regexp.MustCompile(`^-- dude:(setup|batch|cleanup)\s*$`)
+)
+
+// ApplyMigration runs one migration file's contents on conn as the runner
+// (apps/control-plane/src/db/migrate.ts) does, without recording it: a file
+// whose first line is -- dude:batch-sql runs its setup, then its batch,
+// each batch its own statement, until one reports a batch_count of 0, then
+// its cleanup. Any other file runs as one simple-protocol Exec.
+func ApplyMigration(ctx context.Context, conn *pgx.Conn, contents string) error {
+	first, _, _ := strings.Cut(contents, "\n")
+	if strings.TrimSpace(first) != "-- dude:batch-sql" {
+		_, err := conn.Exec(ctx, contents)
+		return err
+	}
+	limit := 1000
+	if m := batchLimitLine.FindStringSubmatch(contents); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n <= 0 {
+			return fmt.Errorf("dude:batch-limit %q must be a positive integer", m[1])
+		}
+		limit = n
+	}
+	sections := map[string]*strings.Builder{"setup": {}, "batch": {}, "cleanup": {}}
+	section := "setup"
+	for _, line := range strings.Split(contents, "\n")[1:] {
+		if m := batchSection.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			section = m[1]
+			continue
+		}
+		if batchLimitLine.MatchString(strings.TrimSpace(line)) {
+			continue
+		}
+		sections[section].WriteString(line + "\n")
+	}
+	setup, batch, cleanup := strings.TrimSpace(sections["setup"].String()), strings.TrimSpace(sections["batch"].String()), strings.TrimSpace(sections["cleanup"].String())
+	if setup == "" || batch == "" {
+		return fmt.Errorf("dude:batch-sql requires setup and batch sections")
+	}
+	if _, err := conn.Exec(ctx, setup); err != nil {
+		return fmt.Errorf("setup: %w", err)
+	}
+	batch = strings.ReplaceAll(batch, "__BATCH_LIMIT__", strconv.Itoa(limit))
+	for {
+		n, err := batchCount(ctx, conn, batch)
+		if err != nil {
+			return fmt.Errorf("batch: %w", err)
+		}
+		if n < 0 || n > int64(limit) {
+			return fmt.Errorf("batch_count %d outside 0..%d", n, limit)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if cleanup != "" {
+		if _, err := conn.Exec(ctx, cleanup); err != nil {
+			return fmt.Errorf("cleanup: %w", err)
+		}
+	}
+	return nil
+}
+
+// batchCount runs one batch, as its own statement and so its own
+// transaction, and returns its batch_count column.
+func batchCount(ctx context.Context, conn *pgx.Conn, batch string) (int64, error) {
+	rows, err := conn.Query(ctx, batch, pgx.QueryExecModeSimpleProtocol)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	col := -1
+	for i, f := range rows.FieldDescriptions() {
+		if f.Name == "batch_count" {
+			col = i
+		}
+	}
+	if col < 0 {
+		return 0, fmt.Errorf("returns no batch_count column")
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("returns no row")
+	}
+	vals, err := rows.Values()
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	switch v := vals[col].(type) {
+	case int32:
+		n = int64(v)
+	case int64:
+		n = v
+	default:
+		return 0, fmt.Errorf("batch_count is %T", vals[col])
+	}
+	rows.Close()
+	return n, rows.Err()
 }

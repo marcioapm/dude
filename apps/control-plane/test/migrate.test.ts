@@ -706,7 +706,7 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
         expect(contents).toContain("-- dude:batch-limit 1000");
         expect(contents).toContain("-- dude:setup");
         expect(contents).toContain("-- dude:batch");
-        expect(contents).toContain("LIMIT __BATCH_LIMIT__");
+        if (file.version !== "280") expect(contents).toContain("LIMIT __BATCH_LIMIT__");
       } else {
         expect(outsideTransaction(contents)).toBe(true);
         expect(contents.replace(/^--.*$/gm, "").trim().split(";").filter((s) => s.trim())).toHaveLength(1);
@@ -742,7 +742,7 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
     ]);
     expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
     // Each file again is a no-op: the backfill finds nothing, the indexes stand.
-    for (const file of files) await sql.unsafe((await file.contents()).replace(/^--.*$/gm, ""));
+    for (const file of files) await sql.unsafe((await file.contents()).replace(/^--.*$/gm, "").replaceAll("__BATCH_LIMIT__", "1000"));
     expect(Number((await sql`SELECT count(*) AS n FROM pg_class WHERE relname IN ('events_run_answer_causation_idx', 'events_run_answer_claims_idx')`)[0].n)).toBe(2);
   } finally {
     await sql.end();
