@@ -128,13 +128,24 @@ function batchMigration(contents: string): BatchMigration | null {
   const limit = Number(limitMatch?.[1] ?? "1000");
   if (!Number.isInteger(limit) || limit <= 0) throw new Error("dude:batch-limit must be a positive integer");
   const sections = new Map<string, string>();
-  let section = "setup";
+  // Lines before the first marker are the file's header: comments only.
+  let section = "";
   const lines: string[] = [];
-  const save = () => sections.set(section, lines.join("\n").trim());
+  const save = () => {
+    const text = lines.join("\n").trim();
+    if (section === "") {
+      if (text.replace(/^--.*$/gm, "").trim()) throw new Error("dude:batch-sql has SQL before its first section marker");
+    } else {
+      sections.set(section, text);
+    }
+  };
   for (const line of contents.split("\n").slice(1)) {
     const marker = /^-- dude:(setup|batch|cleanup)\s*$/.exec(line.trim());
     if (marker) {
-      save(); section = marker[1]!; lines.length = 0;
+      save();
+      section = marker[1]!;
+      if (sections.has(section)) throw new Error(`dude:batch-sql has more than one ${section} section`);
+      lines.length = 0;
     } else if (!/^-- dude:batch-limit(?:=|\s+)(?:\d+)\s*$/.test(line.trim())) {
       lines.push(line);
     }
@@ -144,15 +155,36 @@ function batchMigration(contents: string): BatchMigration | null {
   return { limit, setup: sections.get("setup")!, batch: sections.get("batch")!, cleanup: sections.get("cleanup") ?? "" };
 }
 
+/**
+ * The batch_count a batch's result reports: exactly one row, with a
+ * batch_count column holding an integer in 0..limit. Anything else throws,
+ * so a batch that reports nothing is never taken for one that found nothing.
+ */
+export function batchCount(result: ReadonlyArray<Record<string, unknown>>, limit: number): number {
+  if (result.length !== 1) throw new Error(`a batch must return exactly one row, not ${result.length}`);
+  const row = result[0]!;
+  if (!Object.hasOwn(row, "batch_count")) throw new Error("a batch must return a batch_count column");
+  const raw = row.batch_count;
+  const count = typeof raw === "number" ? raw
+    : typeof raw === "bigint" ? Number(raw)
+    : typeof raw === "string" && /^-?\d+$/.test(raw) ? Number(raw)
+    : Number.NaN;
+  if (!Number.isInteger(count)) throw new Error(`a batch's batch_count must be a non-null integer, not ${raw === null ? "NULL" : JSON.stringify(raw)}`);
+  if (count < 0 || count > limit) throw new Error(`a batch's batch_count ${count} is outside 0..${limit}`);
+  return count;
+}
+
 async function runBatchMigration(sql: SQL, file: MigrationFile, contents: string, sum: string, log: (msg: string) => void): Promise<void> {
   const batch = batchMigration(contents)!;
   await sql.begin(async (tx) => { await tx.unsafe(batch.setup); });
   for (;;) {
     const rows = await sql.begin(async (tx) => {
       const result = await tx.unsafe(batch.batch.replaceAll("__BATCH_LIMIT__", String(batch.limit)));
-      const count = Number((result as Array<{ batch_count?: number | string }>)[0]?.batch_count ?? 0);
-      if (!Number.isInteger(count) || count < 0 || count > batch.limit) throw new Error(`${file.name} batch must return batch_count between 0 and its limit`);
-      return count;
+      try {
+        return batchCount(result as Array<Record<string, unknown>>, batch.limit);
+      } catch (err) {
+        throw new Error(`${file.name}: ${(err as Error).message}`);
+      }
     });
     log(`applied ${file.name} batch (${rows} rows)`);
     if (rows === 0) break;
@@ -205,7 +237,11 @@ async function building(sql: SQL, index: string): Promise<boolean> {
 
 export async function migrate(
   databaseUrl: string,
-  opts: { log?: (msg: string) => void } = {},
+  opts: {
+    log?: (msg: string) => void;
+    /** The files to apply in place of the release's (listMigrationFiles); for tests. */
+    files?: MigrationFile[];
+  } = {},
 ): Promise<{ applied: string[] }> {
   const log = opts.log ?? console.log;
   // In UTC: a migration that renders a time into stored JSON (090, 091) renders it at "+00:00".
@@ -215,7 +251,7 @@ export async function migrate(
   try {
     await ensureMigrationsTable(sql);
     const already = await appliedVersions(sql);
-    const files = await listMigrationFiles();
+    const files = opts.files ?? await listMigrationFiles();
     if (files.some((f) => !already.has(f.version))) await requireBypassRLS(sql);
 
     for (const file of files) {

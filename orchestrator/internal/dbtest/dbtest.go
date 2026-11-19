@@ -461,6 +461,7 @@ func dropStale(ctx context.Context, admin *pgx.Conn, olderThan time.Duration, ma
 var (
 	batchLimitLine = regexp.MustCompile(`(?m)^-- dude:batch-limit(?:=|\s+)(\d+)\s*$`)
 	batchSection   = regexp.MustCompile(`^-- dude:(setup|batch|cleanup)\s*$`)
+	sqlComment     = regexp.MustCompile(`(?m)^\s*--.*$`)
 )
 
 // ApplyMigration runs one migration file's contents on conn as the runner
@@ -482,19 +483,33 @@ func ApplyMigration(ctx context.Context, conn *pgx.Conn, contents string) error 
 		}
 		limit = n
 	}
-	sections := map[string]*strings.Builder{"setup": {}, "batch": {}, "cleanup": {}}
-	section := "setup"
+	sections := map[string]*strings.Builder{}
+	header := &strings.Builder{}
+	current := header
 	for _, line := range strings.Split(contents, "\n")[1:] {
 		if m := batchSection.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			section = m[1]
+			if _, dup := sections[m[1]]; dup {
+				return fmt.Errorf("dude:batch-sql has more than one %s section", m[1])
+			}
+			current = &strings.Builder{}
+			sections[m[1]] = current
 			continue
 		}
 		if batchLimitLine.MatchString(strings.TrimSpace(line)) {
 			continue
 		}
-		sections[section].WriteString(line + "\n")
+		current.WriteString(line + "\n")
 	}
-	setup, batch, cleanup := strings.TrimSpace(sections["setup"].String()), strings.TrimSpace(sections["batch"].String()), strings.TrimSpace(sections["cleanup"].String())
+	if strings.TrimSpace(sqlComment.ReplaceAllString(header.String(), "")) != "" {
+		return fmt.Errorf("dude:batch-sql has SQL before its first section marker")
+	}
+	text := func(name string) string {
+		if b := sections[name]; b != nil {
+			return strings.TrimSpace(b.String())
+		}
+		return ""
+	}
+	setup, batch, cleanup := text("setup"), text("batch"), text("cleanup")
 	if setup == "" || batch == "" {
 		return fmt.Errorf("dude:batch-sql requires setup and batch sections")
 	}
@@ -523,7 +538,9 @@ func ApplyMigration(ctx context.Context, conn *pgx.Conn, contents string) error 
 }
 
 // batchCount runs one batch, as its own statement and so its own
-// transaction, and returns its batch_count column.
+// transaction, and returns its batch_count column. As the runner's
+// batchCount (migrate.ts), it fails closed: the batch must return exactly
+// one row whose batch_count is a non-null integer.
 func batchCount(ctx context.Context, conn *pgx.Conn, batch string) (int64, error) {
 	rows, err := conn.Query(ctx, batch, pgx.QueryExecModeSimpleProtocol)
 	if err != nil {
@@ -533,31 +550,44 @@ func batchCount(ctx context.Context, conn *pgx.Conn, batch string) (int64, error
 	col := -1
 	for i, f := range rows.FieldDescriptions() {
 		if f.Name == "batch_count" {
+			if col >= 0 {
+				return 0, fmt.Errorf("returns more than one batch_count column")
+			}
 			col = i
 		}
 	}
 	if col < 0 {
 		return 0, fmt.Errorf("returns no batch_count column")
 	}
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
+	var n int64
+	seen := 0
+	for rows.Next() {
+		seen++
+		if seen > 1 {
+			continue
+		}
+		vals, err := rows.Values()
+		if err != nil {
 			return 0, err
 		}
-		return 0, fmt.Errorf("returns no row")
+		switch v := vals[col].(type) {
+		case int16:
+			n = int64(v)
+		case int32:
+			n = int64(v)
+		case int64:
+			n = v
+		case nil:
+			return 0, fmt.Errorf("batch_count is NULL")
+		default:
+			return 0, fmt.Errorf("batch_count is %T, not an integer", vals[col])
+		}
 	}
-	vals, err := rows.Values()
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	var n int64
-	switch v := vals[col].(type) {
-	case int32:
-		n = int64(v)
-	case int64:
-		n = v
-	default:
-		return 0, fmt.Errorf("batch_count is %T", vals[col])
+	if seen != 1 {
+		return 0, fmt.Errorf("returns %d rows, not exactly one", seen)
 	}
-	rows.Close()
-	return n, rows.Err()
+	return n, nil
 }

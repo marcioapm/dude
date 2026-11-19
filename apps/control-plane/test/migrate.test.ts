@@ -11,11 +11,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { SQL } from "bun";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { type AddressInfo, connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
-import { listMigrationFiles, migrate, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
+import { listMigrationFiles, migrate, type MigrationFile, outsideTransaction, repoMigrationsDir } from "../src/db/migrate.ts";
 
 const OWNER_URL = process.env.DATABASE_URL ?? "postgres://dude:dude@localhost:5433/dude";
 const ROOT = join(import.meta.dir, "../../..");
@@ -874,6 +874,61 @@ test("277-279's batch starts past the saved cursor, saves the last row it took, 
     }
   } finally {
     await locker.end();
+    await sql.end();
+  }
+}, 120_000);
+
+/** A migration the runner reads from a temporary file, in place of the release's. */
+async function temporaryMigration(name: string, contents: string): Promise<MigrationFile> {
+  const path = join(work, name);
+  await writeFile(path, contents);
+  return { version: name.split("_")[0]!, name, contents: async () => (await readFile(path)).toString("utf8") };
+}
+
+test("a batch migration that does not report exactly one integer batch_count is refused and not recorded", async () => {
+  const url = await createDatabase();
+  const sql = new SQL(url);
+  try {
+    const file = (body: string) => `-- dude:batch-sql
+-- dude:setup
+CREATE TABLE IF NOT EXISTS t_fill (id int PRIMARY KEY, filled bool NOT NULL DEFAULT false);
+INSERT INTO t_fill (id) SELECT g FROM generate_series(1, 5) g ON CONFLICT DO NOTHING;
+-- dude:batch
+${body}
+`;
+    const fill = "WITH u AS (UPDATE t_fill SET filled = true WHERE id IN (SELECT id FROM t_fill WHERE NOT filled ORDER BY id LIMIT 2) RETURNING id)";
+    for (const [label, body, refusal] of [
+      ["no batch_count column", `${fill} SELECT count(*)::int AS n FROM u;`, "a batch must return a batch_count column"],
+      ["a misnamed column", `${fill} SELECT count(*)::int AS batch_counts FROM u;`, "a batch must return a batch_count column"],
+      ["no row", `${fill} SELECT count(*)::int AS batch_count FROM u WHERE false GROUP BY id;`, "a batch must return exactly one row, not 0"],
+      ["two rows", `${fill} SELECT 1 AS batch_count FROM u;`, "a batch must return exactly one row, not 2"],
+      ["a NULL batch_count", `${fill} SELECT NULL::int AS batch_count FROM (SELECT count(*) FROM u) c;`, "a batch's batch_count must be a non-null integer, not NULL"],
+      ["a fractional batch_count", `${fill} SELECT 1.5::numeric AS batch_count FROM (SELECT count(*) FROM u) c;`, "a batch's batch_count must be a non-null integer"],
+      ["a batch_count over the limit", `-- dude:batch-limit 1\n${fill} SELECT count(*)::int AS batch_count FROM u;`, "a batch's batch_count 2 is outside 0..1"],
+    ] as const) {
+      await sql`DROP TABLE IF EXISTS t_fill`;
+      const migration = await temporaryMigration("900_temporary_batch.sql", file(body));
+      const err = await migrate(url, { log: () => {}, files: [migration] }).then(() => "", (e: Error) => e.message);
+      expect([label, err]).toEqual([label, expect.stringContaining(`900_temporary_batch.sql: ${refusal}`)]);
+      expect([label, (await recorded(url)).map((m) => m.version)]).toEqual([label, []]);
+    }
+    // Rows are still unfilled: a refused batch never stands for "nothing left".
+    expect([...await sql`SELECT count(*)::int AS unfilled FROM t_fill WHERE NOT filled`]).toEqual([{ unfilled: 5 }]);
+    // Two sections of one kind are refused before anything runs, not merged or overridden.
+    await sql`DROP TABLE IF EXISTS t_fill`;
+    for (const twice of ["setup", "batch", "cleanup"]) {
+      const contents = `${file(`${fill} SELECT count(*)::int AS batch_count FROM u;`)}-- dude:cleanup\nSELECT 1;\n-- dude:${twice}\nSELECT 1;\n`;
+      const migration = await temporaryMigration("900_temporary_batch.sql", contents);
+      const err = await migrate(url, { log: () => {}, files: [migration] }).then(() => "", (e: Error) => e.message);
+      expect([twice, err]).toEqual([twice, `dude:batch-sql has more than one ${twice} section`]);
+      expect([twice, (await recorded(url)).map((m) => m.version)]).toEqual([twice, []]);
+    }
+    expect([...await sql`SELECT to_regclass('t_fill') IS NULL AS absent`]).toEqual([{ absent: true }]);
+    // The same file, reporting its batch_count, fills every row and is recorded.
+    const good = await temporaryMigration("900_temporary_batch.sql", file(`${fill} SELECT count(*)::int AS batch_count FROM u;`));
+    expect((await migrate(url, { log: () => {}, files: [good] })).applied).toEqual(["900_temporary_batch.sql"]);
+    expect([...await sql`SELECT count(*)::int AS unfilled FROM t_fill WHERE NOT filled`]).toEqual([{ unfilled: 0 }]);
+  } finally {
     await sql.end();
   }
 }, 120_000);
