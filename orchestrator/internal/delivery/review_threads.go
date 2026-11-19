@@ -273,7 +273,7 @@ func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdict
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, ''
 		FROM review_findings WHERE id = $1`, findingID)
 	if err != nil {
 		return nil, err

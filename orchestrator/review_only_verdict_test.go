@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,128 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
+
+// Infrastructure failures get one fresh lens, not a missing review.
+func TestAReviewOnlyFailedLensRetriesOnce(t *testing.T) {
+	for _, c := range []struct {
+		name, reason          string
+		again, stopped, moved bool
+		want                  int
+	}{
+		{"setup", "The setup script of greet did not finish within 15m0s.", false, false, false, 2},
+		{"twice", "The setup script of greet failed with exit code 1", true, false, false, 2},
+		{"budget", "the agent's turn failed: Reached maximum budget ($8)", false, false, false, 2},
+		{"stopped", "The setup script of greet failed with exit code 1", false, true, false, 1},
+		{"moved", "The setup script of greet did not finish within 15m0s.", false, false, true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.gh.SetChecks("success")
+			w.hangingReviews(taskCall)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+			w.startDelivery(wi)
+			w.until("review lens started", func() bool {
+				w.quietConductorDecides(wi)
+				return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND status='running'`, wi) > 0
+			})
+			runs := w.ids(`SELECT id FROM runs WHERE task_id=$1 AND phase='review' ORDER BY created_at`, wi)
+			old := runs[0]
+			var category string
+			if err := w.owner.QueryRow(context.Background(), `SELECT category FROM runs WHERE id=$1`, old).Scan(&category); err != nil {
+				t.Fatal(err)
+			}
+			if c.moved {
+				w.gh.CommitFiles("feature/greet", "new head", map[string]string{"new.md": "new\n"})
+				w.sync()
+			}
+			status, control := "failed", "none"
+			if c.stopped {
+				status, control = "aborted", "abort"
+			}
+			mustExec(t, w.owner, `UPDATE runs SET status=$2::run_status, error=$3, control=$4, control_reason=CASE WHEN $2='aborted' THEN 'stopped by conductor' END, ended_at=now() WHERE id=$1`, old, status, c.reason, control)
+			w.until("retry or verdict", func() bool {
+				return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND category=$2`, wi, category) > 1 || w.waitingOnPR(wi)
+			})
+			if got := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND category=$2`, wi, category); got != c.want {
+				t.Fatalf("lens runs=%d want %d", got, c.want)
+			}
+			if got := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND category<>$2`, wi, category); got != 0 {
+				t.Fatalf("retried %d unrelated lenses", got)
+			}
+			if c.want == 2 {
+				// Replay the durable wait after creation: it must keep this Run.
+				mustExec(t, w.owner, `UPDATE workflow_runs SET status='running', awaiting_signals='[]' WHERE task_id=$1 AND step='awaitReview'`, wi)
+				w.advanced()
+				result := "completed"
+				if c.again {
+					result = "failed"
+				}
+				mustExec(t, w.owner, `UPDATE runs SET status=$3::run_status, error=CASE WHEN $3='failed' THEN $4 END, ended_at=now() WHERE task_id=$1 AND phase='review' AND id<>$2`, wi, old, result, c.reason)
+			}
+			w.until("final verdict", func() bool { return w.waitingOnPR(wi) })
+			w.advanced()
+			if got := w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND category=$2`, wi, category); got != c.want {
+				t.Fatalf("after resume: %d runs want %d", got, c.want)
+			}
+			if !c.moved {
+				reviews := w.dudeReviews(wi, n)
+				if len(reviews) != 1 {
+					t.Fatalf("reviews=%+v", reviews)
+				}
+				if c.again || c.stopped {
+					if reviews[0].State != "COMMENTED" || !strings.Contains(reviews[0].Body, category) || !strings.Contains(reviews[0].Body, c.reason) {
+						t.Fatalf("incomplete: %+v", reviews[0])
+					}
+				} else if reviews[0].State != "APPROVED" {
+					t.Fatalf("complete: %+v", reviews[0])
+				}
+			}
+		})
+	}
+}
+
+func TestAReviewOnlyIncompleteVerdictSeparatesCheckedFindings(t *testing.T) {
+	w := newWorld(t)
+	w.gh.SetChecks("success")
+	w.hangingReviews(taskCall)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+	w.startDelivery(wi)
+	w.until("lens in flight", func() bool {
+		w.quietConductorDecides(wi)
+		return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND status='running'`, wi) > 0
+	})
+	ids := w.ids(`SELECT id FROM runs WHERE task_id=$1 AND phase='review'`, wi)
+	old := ids[0]
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs)
+		SELECT 'old_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', category, '{}'::jsonb FROM runs WHERE id=$1`, old)
+	mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status)
+		SELECT $2||id, organization_id, task_id, 'old_'||id, category, 'high', $3, $4::finding_status FROM runs WHERE id=$1`, old, "unchecked_", "Unchecked deadline", "open")
+	for _, c := range []struct{ id, title, status string }{{"fixed_", "Fixed deadline", "resolved"}, {"still_", "Confirmed problem", "open"}} {
+		mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status)
+			SELECT $2||id, organization_id, task_id, 'old_'||id, 'security', 'high', $3, $4::finding_status FROM runs WHERE id=$1`, old, c.id, c.title, c.status)
+	}
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs, verdicts)
+		SELECT 'judged_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', 'security', base_refs,
+		jsonb_build_object('fixed_'||id,'fixed','still_'||id,'still') FROM runs WHERE id=$1`, old)
+	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='review harness crashed', ended_at=now() WHERE id=$1`, old)
+	w.until("incomplete verdict posted", func() bool { return w.waitingOnPR(wi) })
+	reviews := w.dudeReviews(wi, n)
+	if len(reviews) != 1 || reviews[0].State != "COMMENTED" {
+		t.Fatalf("reviews=%+v", reviews)
+	}
+	body := reviews[0].Body
+	for _, want := range []string{"Could not complete the review", "**Fixed at ", "Fixed deadline", "Confirmed problem", "**Not re-checked at "} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q:\n%s", want, body)
+		}
+	}
+	unchecked := strings.Split(body, "**Not re-checked at ")
+	if len(unchecked) != 2 || !strings.Contains(unchecked[1], "Unchecked deadline") || strings.Contains(unchecked[0], "Unchecked deadline") || strings.Contains(unchecked[1], "(high)") || strings.Contains(body, "open finding(s)") {
+		t.Fatalf("unchecked assertion:\n%s", body)
+	}
+}
 
 // cleanLenses has every lens find nothing.
 func (w *world) cleanLenses() {

@@ -98,6 +98,24 @@ func (w *steps) withRequiredLenses(ctx context.Context, sc workflow.StepContext,
 	return out, reasons, nil
 }
 
+// retryableLensFailure is an infrastructure failure, never an intentional stop
+// or a reviewer's judgement about the code. Unknown failures stay incomplete.
+func retryableLensFailure(reason string) bool {
+	r := strings.ToLower(reason)
+	if strings.Contains(r, "stopped by") || strings.Contains(r, "conductor") || strings.Contains(r, "aborted") {
+		return false
+	}
+	return strings.HasPrefix(r, "the setup script of ") ||
+		strings.Contains(r, "init-failed") ||
+		strings.Contains(r, "maximum budget") || strings.Contains(r, "budget limit") ||
+		strings.Contains(r, "temporary model error") || strings.Contains(r, "rate limit") ||
+		strings.Contains(r, "api error: 529") || strings.Contains(r, "service unavailable") ||
+		strings.Contains(r, "overloaded") || strings.Contains(r, "bad gateway") ||
+		strings.Contains(r, "connection closed mid-response") || strings.Contains(r, "stream disconnected") ||
+		strings.Contains(r, "host lost") || strings.Contains(r, "host loss") ||
+		strings.Contains(r, "lux lost") || strings.Contains(r, "placement lost")
+}
+
 // minWrongEvidence is the fewest runes, trimmed, of "wrong:" evidence.
 const minWrongEvidence = 10
 
