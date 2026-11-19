@@ -602,6 +602,30 @@ func (s *Store) beforeWrite(id string) error {
 	return nil
 }
 
+// afterPost is AfterAnswerPost, if set.
+func (s *Store) afterPost(id string) error {
+	if s.AfterAnswerPost != nil {
+		if err := s.AfterAnswerPost(id); err != nil {
+			return crashed{err}
+		}
+	}
+	return nil
+}
+
+// writeFailed is a held answer's GitHub write failing with err: a transient
+// failure gives the claim back and is returned, a refusal fails the answer
+// (failed), anything else is returned as it is.
+func (s *Store) writeFailed(ctx context.Context, ref RunRef, h heldOf, err error, done *FixerAnswers) error {
+	if forge.Transient(err) {
+		s.releaseClaim(ctx, ref, h)
+		return err
+	}
+	if forge.Refused(err) {
+		return s.failed(ctx, ref, h, err.Error(), done)
+	}
+	return err
+}
+
 // releaseClaim gives a claim back after a transient GitHub failure, so a
 // later pass retries at once rather than past the lease.
 func (s *Store) releaseClaim(ctx context.Context, ref RunRef, h heldOf) {
@@ -662,19 +686,10 @@ func (s *Store) postHeldReply(ctx context.Context, gh *forge.GitHub, ref RunRef,
 		posted, err = postReply(claimed, gh, p)
 	}
 	if err != nil {
-		if forge.Transient(err) {
-			s.releaseClaim(ctx, ref, h)
-			return err
-		}
-		if forge.Refused(err) {
-			return s.failed(ctx, ref, h, err.Error(), done)
-		}
-		return err
+		return s.writeFailed(ctx, ref, h, err, done)
 	}
-	if s.AfterAnswerPost != nil {
-		if err := s.AfterAnswerPost(h.ID); err != nil {
-			return crashed{err}
-		}
+	if err := s.afterPost(h.ID); err != nil {
+		return err
 	}
 	// Recorded whether or not the delivery ended meanwhile: GitHub took
 	// it, so it is posted, and a reconciliation the end opened for it is
@@ -740,19 +755,10 @@ func (s *Store) resolveHeld(ctx context.Context, gh *forge.GitHub, ref RunRef, h
 		err = gh.ResolveReviewThread(claimed, slug, t.ID)
 	}
 	if err != nil {
-		if forge.Transient(err) {
-			s.releaseClaim(ctx, ref, h)
-			return err
-		}
-		if forge.Refused(err) {
-			return s.failed(ctx, ref, h, err.Error(), done)
-		}
-		return err
+		return s.writeFailed(ctx, ref, h, err, done)
 	}
-	if s.AfterAnswerPost != nil {
-		if err := s.AfterAnswerPost(h.ID); err != nil {
-			return crashed{err}
-		}
+	if err := s.afterPost(h.ID); err != nil {
+		return err
 	}
 	c := PRActionCheck{ref: ref, action: ActionResolveThread, prID: h.PRID, repo: h.Repo, slug: slug, number: h.Number, answerID: h.ID}
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
