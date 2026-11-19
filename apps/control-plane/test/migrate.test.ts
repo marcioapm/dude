@@ -976,6 +976,71 @@ test("277 reads one window of 100000 cursors per batch, however sparse the rows 
   }
 }, 120_000);
 
+test("two migrates at once: the second waits for the first, then finds everything applied; nothing runs twice or is left behind", async () => {
+  const { url, sql } = await migratedBefore("277");
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_cc', 'CC', 'cc')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+      SELECT 'ec' || g, 'org_cc', 'pull_request.action', 'run_cc', 'agent', 'x', 't', jsonb_build_object('answerId', 'hc' || g)
+      FROM generate_series(1, 3500) g`;
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    // Hold a row so the first migrate is inside 277's batches when the second starts.
+    const holder = await sql.reserve();
+    try {
+      await holder`BEGIN`;
+      await holder`SELECT 1 FROM events WHERE id = 'ec2500' FOR NO KEY UPDATE`;
+      const logs: [string[], string[]] = [[], []];
+      const first = migrate(url, { log: (m) => logs[0].push(m) });
+      expect(await waitForBlocked(url)).toBe(true);
+      const second = migrate(url, { log: (m) => logs[1].push(m) });
+      // The second holds no lock of the backfill's: it waits on the first's advisory lock.
+      const waitedOnAdvisory = await waitFor(async () => {
+        const [row] = await admin`SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = ${new URL(url).pathname.slice(1)} AND wait_event_type = 'Lock' AND wait_event = 'advisory'`;
+        return row.n > 0;
+      });
+      await holder`COMMIT`;
+      const results = await Promise.all([first, second].map((p) => p.then((r) => r.applied, (err: Error) => err.message)));
+      expect(waitedOnAdvisory).toBe(true);
+      expect(results).toEqual([["277_events_answer_causation_backfill.sql", "278_events_answer_causation_upgrade_repair.sql",
+        "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"], []]);
+      expect(logs[1]).toEqual([]);
+    } finally {
+      holder.release();
+    }
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
+    expect([...await sql`SELECT count(*)::int AS unfilled FROM events WHERE organization_id = 'org_cc' AND causation_id IS DISTINCT FROM 'h' || substr(id, 2)`])
+      .toEqual([{ unfilled: 0 }]);
+    expect([...await sql`SELECT version, count(*)::int AS n FROM schema_migrations WHERE version >= '277' GROUP BY version ORDER BY version`])
+      .toEqual(["277", "278", "279", "280"].map((version) => ({ version, n: 1 })));
+    // The lock is released: a third migrate takes it and finds nothing to do.
+    expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
+    expect([...await sql`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory'
+      AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`]).toEqual([{ n: 0 }]);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
+/** Polls check every 20 ms until it holds, for up to 10 s; says whether it held. */
+async function waitFor(check: () => Promise<boolean>): Promise<boolean> {
+  for (let i = 0; i < 500; i++) {
+    if (await check()) return true;
+    await Bun.sleep(20);
+  }
+  return false;
+}
+
+/** Waits until a backend in url's database is blocked by another (pg_blocking_pids); says whether one was. */
+async function waitForBlocked(url: string): Promise<boolean> {
+  return waitFor(async () => {
+    const [row] = await admin`SELECT count(*)::int AS n FROM pg_stat_activity
+      WHERE datname = ${new URL(url).pathname.slice(1)} AND cardinality(pg_blocking_pids(pid)) > 0`;
+    return row.n > 0;
+  });
+}
+
 /** A migration the runner reads from a temporary file, in place of the release's. */
 async function temporaryMigration(name: string, contents: string): Promise<MigrationFile> {
   const path = join(work, name);

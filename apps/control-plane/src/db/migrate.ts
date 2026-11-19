@@ -22,7 +22,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { SQL } from "bun";
+import { SQL, type ReservedSQL } from "bun";
 import { createHash } from "node:crypto";
 import { version } from "../build.ts";
 
@@ -235,6 +235,9 @@ async function building(sql: SQL, index: string): Promise<boolean> {
   return row?.building === true;
 }
 
+/** The advisory lock (hashtext of this key) a migrate holds for its whole run. */
+export const MIGRATE_LOCK = "dude-migrate";
+
 export async function migrate(
   databaseUrl: string,
   opts: {
@@ -247,8 +250,17 @@ export async function migrate(
   // In UTC: a migration that renders a time into stored JSON (090, 091) renders it at "+00:00".
   const sql = new SQL(databaseUrl, { connection: { TimeZone: "UTC" } });
   const applied: string[] = [];
+  let lock: ReservedSQL | undefined;
 
   try {
+    // One migrate at a time per database: a second waits here for the
+    // first to finish, then reads what it recorded. Without this a second
+    // runner that read the applied versions before the first finished would
+    // re-run a batch file's setup after the cleanup that followed it, and
+    // leave its progress table behind. A session lock on a connection of
+    // its own, released below or with the connection on any error.
+    lock = await sql.reserve();
+    await lock.unsafe(`SELECT pg_advisory_lock(hashtext('${MIGRATE_LOCK}'))`);
     await ensureMigrationsTable(sql);
     const already = await appliedVersions(sql);
     const files = opts.files ?? await listMigrationFiles();
@@ -314,6 +326,11 @@ export async function migrate(
       applied.push(file.name);
     }
   } finally {
+    if (lock) {
+      // A connection that broke drops its session lock with it.
+      await lock.unsafe(`SELECT pg_advisory_unlock(hashtext('${MIGRATE_LOCK}'))`).catch(() => {});
+      lock.release();
+    }
     await sql.end();
   }
 
