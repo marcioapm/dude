@@ -57,7 +57,7 @@ type Syncer struct {
 	// outside pull requests: branch previews follow it
 	// (servers.Service.BranchEvent). Nil: nothing.
 	BranchMoved func(ctx context.Context, org, slug, branch string, deleted bool, receivedAt time.Time) error
-	// The in-flight answers of ended deliveries (#485), settled in each
+	// The in-flight answers of ended deliveries, settled in each
 	// Reconcile pass. Nil: none.
 	Answers *delivery.AnswerReconciler
 }

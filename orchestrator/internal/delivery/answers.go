@@ -10,7 +10,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// A pull request fixer's answers (#485). A fixer's reply_on_pull_request
+// A pull request fixer's answers. A fixer's reply_on_pull_request
 // and resolve_thread, on comments in its batch, are checked as the
 // conductor's are, against dude's own records, and then held rather than
 // posted: its commits pass the checks gate and are published only after its
@@ -49,29 +49,29 @@ import (
 // resolved, failed or withheld (WakeRound, answersLine, keyed by a hash of
 // the answers settled), and may add to or correct the answers.
 //
-// Deduplicated settlement: each answer is settled by one record on the fixer's Run,
-// its chat.message (a reply) or pull_request.action (a resolution), or an
-// EvAnswerFailed, caused by it (causation_id: the answer's EvAnswerHeld
-// id, which the indexes key on). Under the task's Chat lock, a reply or a
-// resolution is claimed (EvAnswerClaimed) before GitHub is called — never
-// after the delivery's end — and no transaction is held across GitHub: a
-// second poster meanwhile finds the claim fresh and leaves it
-// (errAnswerBusy). The posted comment carries the answer's id
-// (forge.AnswerMarker), so a poster that finds an earlier claim — one
+// Deduplicated settlement: each answer is settled by one record on the
+// fixer's Run, its chat.message (a reply) or pull_request.action (a
+// resolution), or an EvAnswerFailed, caused by it (causation_id: the
+// answer's EvAnswerHeld id, which the indexes key on). Under the task's
+// Chat lock, a reply or a resolution is claimed (EvAnswerClaimed) before
+// GitHub is called — never after the delivery's end — and no transaction
+// is held across GitHub: a second poster meanwhile finds the claim fresh
+// and leaves it (errAnswerBusy). The posted comment carries the answer's
+// id (forge.AnswerMarker), so a poster that finds an earlier claim — one
 // that crashed between GitHub's answer and the record, or whose answer was
 // lost — looks for that comment first (forge.FindAnswer, dude's own
 // comments only, bounded) and records it rather than posting again. If
 // that search is truncated, the external effect remains uncertain: no
-// blind repost, no final withholding. After 24 hours a manual reconciliation
-// reason is recorded, retaining the answer and claim. This is not a
-// distributed exactly-once guarantee. A
-// claim older than answerClaimLease is taken over: its holder is taken
-// for gone (its GitHub work is bounded by the lease; posters of a task are
-// also serialised by its delivery's workflow lease; the record is
-// re-checked under the lock, so one that outlived its lease records
-// nothing twice). Resolving a resolved thread is a no-op, so a recovering
-// resolution needs no search. GitHub refusing an answer itself (a deleted comment,
-// forge.Refused) fails that answer, recorded and reported.
+// blind repost, no final withholding. After 24 hours a manual
+// reconciliation reason is recorded, retaining the answer and claim. This
+// is not a distributed exactly-once guarantee. A claim older than
+// answerClaimLease is taken over: its holder is taken for gone (its GitHub
+// work is bounded by the lease; posters of a task are also serialised by
+// its delivery's workflow lease; the record is re-checked under the lock,
+// so one that outlived its lease records nothing twice). Resolving a
+// resolved thread is a no-op, so a recovering resolution needs no search.
+// GitHub refusing an answer itself (a deleted comment, forge.Refused)
+// fails that answer, recorded and reported.
 
 // Ledger events of a fixer's held answers, on its Run.
 const (

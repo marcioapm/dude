@@ -71,7 +71,7 @@ type PRActionCheck struct {
 
 // prActors are who may take which action: the conductor all, a fixer
 // answering pull request feedback only resolve_thread, on a thread of its
-// own batch, held until its fix is published (#485).
+// own batch, held until its fix is published.
 func prActionAllowed(role, phase, action string) bool {
 	switch {
 	case role == RoleConductor && phase == "":

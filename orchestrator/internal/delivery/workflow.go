@@ -2763,7 +2763,7 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 		return park("awaitPRFix", st, pending), nil
 	}
 	// The fixer has ended: what it answered on the pull request is posted
-	// now if its fix is there, and withheld if not (#485). Before anything
+	// now if its fix is there, and withheld if not. Before anything
 	// else of this step, so that a pull request that ended, or a fixer that
 	// failed after publishing, still has its answers settled.
 	if err := w.fixerAnswers(ctx, sc, st); err != nil {
@@ -3097,7 +3097,7 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 		}
 	}
 	// None open: no later step posts the fixers' held answers, so they
-	// are withheld now, each for its own pull request's end (#485).
+	// are withheld now, each for its own pull request's end.
 	if err := w.settleHeldOnEnd(ctx, sc.OrganizationID, st.TaskID, states); err != nil {
 		return workflow.Result{}, true, err
 	}

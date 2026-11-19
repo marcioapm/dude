@@ -61,7 +61,7 @@ type Replied struct {
 // the conductor's to hear (a Refusal), and nothing is recorded.
 //
 // A pull request fixer's reply is checked the same way, scoped to its
-// batch, and then held (#485): step 1 records it (EvAnswerHeld) instead of
+// batch, and then held: step 1 records it (EvAnswerHeld) instead of
 // returning it to post, step 2 posts nothing and step 3 answers that it is
 // held. dude posts it later, through the same steps, once the fix is on the
 // pull request (PostFixerAnswers), with the stronger guarantees that path
@@ -132,8 +132,8 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		return ReplyPost{}, err
 	}
 	if caller.phase == PhaseFix {
-		// A fixer is scoped to its batch (the refusals as before), then
-		// held: its fix is not on the pull request while it runs (#485).
+		// A fixer is scoped to its batch, then held: its fix is not on
+		// the pull request while it runs.
 		batch := caller.batch
 		switch {
 		case caller.ended():
