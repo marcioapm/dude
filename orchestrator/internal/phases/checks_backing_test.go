@@ -123,7 +123,7 @@ func TestUnbackedGuidanceIsOncePerReport(t *testing.T) {
 	d := checksDecision{}
 	for _, command := range []string{"make test", "make lint"} {
 		d.Verdicts = append(d.Verdicts, checksVerdict{Command: command, Result: "unverified", Decision: delivery.VerdictUnbacked,
-			Reason: "no call", JudgeReason: unbackedHint(command, []string{}, true)})
+			Reason: "no call", JudgeReason: unbackedHint(command, []string{}, true), hinted: true})
 	}
 	text := d.sendBack()
 	if strings.Count(text, "as one bare command on one line") != 1 {

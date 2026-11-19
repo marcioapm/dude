@@ -44,6 +44,10 @@ type checksVerdict struct {
 	// read the same (their callId and waiverReason are the PR account's
 	// and the web's to show, delivery.gatedCheck: the gate reads neither).
 	JudgeReason string `json:"judgeReason,omitempty"`
+	// hinted: JudgeReason is dude's unbacked hint (unbackedHint), whatever
+	// the conductor's verdict: the send-back's guidance on reporting a
+	// call exactly goes with it, once (sendBack).
+	hinted bool
 }
 
 type checksDecision struct {
@@ -279,7 +283,7 @@ func (d checksDecision) sendBack() string {
 		Bases    string
 		Unbacked bool
 	}{failed, passable && slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Result == delivery.CheckFail }), joinBases(d.bases),
-		slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.Decision == delivery.VerdictUnbacked })})
+		slices.ContainsFunc(failed, func(v checksVerdict) bool { return v.hinted })})
 }
 
 // unpassed are the verdicts that did not pass: neither backed, waived,

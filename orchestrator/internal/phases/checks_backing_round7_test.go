@@ -10,13 +10,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// shellEnders are echoed calls whose command may end the shell before its
-// echo runs (#484 round 6): exec replaces the shell, exit and return leave
+// shellEnderCalls are echoed calls whose command may end the shell before
+// its echo runs (#484 round 6): exec replaces the shell, exit and return leave
 // it, and a sourced or eval'd script, or one run by command or builtin
 // (which run exec, exit, . and the rest as themselves), may exit it. The
 // output's last exit= line is then the script's own: run.sh here is
 // "echo exit=0; exit 1", so each call printed exit=0 and exited 1.
-var shellEnders = []struct{ name, reported, recorded string }{
+var shellEnderCalls = []struct{ name, reported, recorded string }{
 	{"exec", "exec ./run.sh", "exec ./run.sh; echo exit=$?"},
 	{"exit", "exit 1", "exit 1; echo exit=$?"},
 	{"return", "return 1", "return 1; echo exit=$?"},
@@ -32,7 +32,7 @@ var shellEnders = []struct{ name, reported, recorded string }{
 
 // The matcher backs none of them.
 func TestAnEchoAfterAShellEnderBacksNothing(t *testing.T) {
-	for _, c := range shellEnders {
+	for _, c := range shellEnderCalls {
 		t.Run(c.name, func(t *testing.T) {
 			if _, ok := sameCommand(c.reported, c.recorded); ok {
 				t.Fatalf("%q backs %q", c.recorded, c.reported)
@@ -44,7 +44,7 @@ func TestAnEchoAfterAShellEnderBacksNothing(t *testing.T) {
 // Nor does dude's reading of the ledger, with no exit code recorded (the
 // call completed, its output ending in exit=0) or with exit 0.
 func TestAnEchoAfterAShellEnderIsNotItsExit(t *testing.T) {
-	for _, c := range shellEnders {
+	for _, c := range shellEnderCalls {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)
 			completionOnly(w, "k1", c.recorded, "completed", "exit=0")
