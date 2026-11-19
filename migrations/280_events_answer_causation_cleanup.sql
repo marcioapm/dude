@@ -1,7 +1,9 @@
--- dude:no-transaction
--- 280_events_answer_causation_cleanup.sql — final idempotent retry marker.
---
--- The repair is deliberately a no-op: 277–279 are standalone UPDATEs and do
--- not create a procedure that needs cleanup.
--- dude:no-transaction
+-- dude:batch-sql
+-- dude:batch-limit 1000
+-- 280_events_answer_causation_cleanup.sql — remove durable backfill state.
+-- dude:setup
 SELECT 1;
+-- dude:batch
+SELECT 0::int AS batch_count;
+-- dude:cleanup
+DROP TABLE IF EXISTS events_answer_causation_backfill_progress;

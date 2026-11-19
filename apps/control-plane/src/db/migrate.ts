@@ -113,6 +113,55 @@ function checksum(contents: string): string {
 
 /** The marker on a migration's first line that runs it outside a transaction. */
 export const NO_TRANSACTION = "-- dude:no-transaction";
+export const BATCH_SQL = "-- dude:batch-sql";
+
+interface BatchMigration {
+  limit: number;
+  setup: string;
+  batch: string;
+  cleanup: string;
+}
+
+function batchMigration(contents: string): BatchMigration | null {
+  if (contents.split("\n", 1)[0]?.trim() !== BATCH_SQL) return null;
+  const limitMatch = contents.match(/^-- dude:batch-limit(?:=|\s+)(\d+)\s*$/m);
+  const limit = Number(limitMatch?.[1] ?? "1000");
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("dude:batch-limit must be a positive integer");
+  const sections = new Map<string, string>();
+  let section = "setup";
+  const lines: string[] = [];
+  const save = () => sections.set(section, lines.join("\n").trim());
+  for (const line of contents.split("\n").slice(1)) {
+    const marker = /^-- dude:(setup|batch|cleanup)\s*$/.exec(line.trim());
+    if (marker) {
+      save(); section = marker[1]!; lines.length = 0;
+    } else if (!/^-- dude:batch-limit(?:=|\s+)(?:\d+)\s*$/.test(line.trim())) {
+      lines.push(line);
+    }
+  }
+  save();
+  if (!sections.get("setup") || !sections.get("batch")) throw new Error("dude:batch-sql requires setup and batch sections");
+  return { limit, setup: sections.get("setup")!, batch: sections.get("batch")!, cleanup: sections.get("cleanup") ?? "" };
+}
+
+async function runBatchMigration(sql: SQL, file: MigrationFile, contents: string, sum: string, log: (msg: string) => void): Promise<void> {
+  const batch = batchMigration(contents)!;
+  await sql.begin(async (tx) => { await tx.unsafe(batch.setup); });
+  for (;;) {
+    const rows = await sql.begin(async (tx) => {
+      const result = await tx.unsafe(batch.batch.replaceAll("__BATCH_LIMIT__", String(batch.limit)));
+      const count = Number((result as Array<{ batch_count?: number | string }>)[0]?.batch_count ?? 0);
+      if (!Number.isInteger(count) || count < 0 || count > batch.limit) throw new Error(`${file.name} batch must return batch_count between 0 and its limit`);
+      return count;
+    });
+    log(`applied ${file.name} batch (${rows} rows)`);
+    if (rows === 0) break;
+  }
+  await sql.begin(async (tx) => {
+    if (batch.cleanup) await tx.unsafe(batch.cleanup);
+    await tx`INSERT INTO schema_migrations (version, name, checksum) VALUES (${file.version}, ${file.name}, ${sum})`;
+  });
+}
 
 export function outsideTransaction(contents: string): boolean {
   return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION;
@@ -188,6 +237,11 @@ export async function migrate(
       }
 
       log(`applying ${file.name}`);
+      if (batchMigration(contents)) {
+        await runBatchMigration(sql, file, contents, sum, log);
+        applied.push(file.name);
+        continue;
+      }
       if (outsideTransaction(contents)) {
         const index = concurrentIndex(contents);
         // An earlier interrupted build's leftover, which IF NOT EXISTS would
