@@ -79,8 +79,9 @@ type AnswerReconciler struct {
 	DB     *db.DB
 	Forges Forges
 	Log    *slog.Logger
-	// Now is the reconciler's clock: the rows due, the give-up bound and a
-	// retry's due time are all read on it, never on the database's; nil is
+	// Now is the reconciler's clock: the instant a pass compares due times
+	// and the give-up bound against, and a retry's due time, come from it.
+	// A row's created_at and first due_at are the database's. nil is
 	// time.Now.
 	Now func() time.Time
 }

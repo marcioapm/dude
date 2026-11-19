@@ -423,7 +423,7 @@ func TestRound7ReconciliationLeaseMargin(t *testing.T) {
 	<-errs
 }
 
-// #485 round 16: a resolution whose poster crashed after GitHub took it,
+// A resolution whose poster crashed after GitHub took it,
 // the delivery ended (merged), and GitHub's thread read failing for a moment (a
 // 502). The pass asks again, on the reconciler's own clock, until the
 // give-up bound, and settles it uncertain only past that. Every time here
