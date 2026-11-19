@@ -10,17 +10,19 @@ INSERT INTO events_answer_causation_backfill_progress (migration_version)
 VALUES ('277') ON CONFLICT (migration_version) DO NOTHING;
 -- dude:batch
 WITH candidates AS (
+  -- Keyset: the progress cursor is a scalar, so it bounds the events_pkey
+  -- scan (Index Cond) instead of filtering a scan from the table's start.
+  -- A row another transaction holds is waited for, never skipped: the
+  -- cursor moves past every row a batch takes and never comes back.
   SELECT e.id, e.cursor
   FROM events e
-  CROSS JOIN events_answer_causation_backfill_progress p
-  WHERE p.migration_version = '277'
-    AND e.cursor > p.last_cursor
+  WHERE e.cursor > (SELECT p.last_cursor FROM events_answer_causation_backfill_progress p WHERE p.migration_version = '277')
     AND e.event_type IN ('chat.message', 'pull_request.action', 'pull_request.answer_failed', 'pull_request.answer_claimed')
     AND e.causation_id IS NULL
     AND COALESCE(e.payload->>'answerId', (e.payload->'github')->>'answerId') IS NOT NULL
-  ORDER BY e.cursor, e.id
+  ORDER BY e.cursor
   LIMIT __BATCH_LIMIT__
-  FOR UPDATE OF e SKIP LOCKED
+  FOR UPDATE OF e
 ), updated AS (
   UPDATE events e
   SET causation_id = COALESCE(e.payload->>'answerId', (e.payload->'github')->>'answerId')

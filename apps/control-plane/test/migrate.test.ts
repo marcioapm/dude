@@ -749,6 +749,56 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
   }
 }, 120_000);
 
+test("277's backfill waits for a row another transaction holds, in batches, and resumes after a crash without skipping one", async () => {
+  const { url, sql } = await migratedBefore("277");
+  const locker = new SQL(url);
+  try {
+    // Written before 273's trigger: 2500 rows the backfill must fill.
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_b', 'B', 'b')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+      SELECT 'eb' || g, 'org_b', 'pull_request.action', 'run_b', 'agent', 'x', 't', jsonb_build_object('answerId', 'hb' || g)
+      FROM generate_series(1, 2500) g`;
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    const [{ held }] = await sql`SELECT cursor::text AS held FROM events WHERE id = 'eb1500'`;
+    // A crash after the first batch: its progress is kept, nothing recorded.
+    await sql`CREATE TABLE events_answer_causation_backfill_progress (migration_version text PRIMARY KEY, last_cursor bigint NOT NULL DEFAULT 0)`;
+    await sql`WITH b AS (SELECT cursor FROM events WHERE organization_id = 'org_b' ORDER BY cursor LIMIT 1000)
+      UPDATE events SET causation_id = payload->>'answerId' WHERE cursor IN (SELECT cursor FROM b)`;
+    await sql`INSERT INTO events_answer_causation_backfill_progress
+      SELECT '277', max(cursor) FROM events WHERE organization_id = 'org_b' AND causation_id IS NOT NULL`;
+    // Another transaction holds a row of the second batch while migrate runs.
+    let release!: () => void;
+    const released = new Promise<void>((r) => { release = r; });
+    let holding!: () => void;
+    const held_ = new Promise<void>((r) => { holding = r; });
+    const lock = locker.begin(async (tx) => {
+      await tx`SELECT 1 FROM events WHERE cursor = ${held}::bigint FOR NO KEY UPDATE`;
+      holding();
+      await released;
+    });
+    await held_;
+    const logs: string[] = [];
+    const run = migrate(url, { log: (m) => logs.push(m) });
+    await Bun.sleep(500);
+    release();
+    await lock;
+    expect((await run).applied).toEqual(["277_events_answer_causation_backfill.sql", "278_events_answer_causation_upgrade_repair.sql",
+      "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"]);
+    expect([...await sql`SELECT count(*)::int AS unfilled FROM events WHERE organization_id = 'org_b' AND causation_id IS DISTINCT FROM 'h' || substr(id, 2)`])
+      .toEqual([{ unfilled: 0 }]);
+    // Resumed after the first 1000: two batches of at most 1000, then one of none.
+    expect(logs.filter((m) => m.startsWith("applied 277_"))).toEqual([
+      "applied 277_events_answer_causation_backfill.sql batch (1000 rows)",
+      "applied 277_events_answer_causation_backfill.sql batch (500 rows)",
+      "applied 277_events_answer_causation_backfill.sql batch (0 rows)",
+    ]);
+  } finally {
+    await locker.end();
+    await sql.end();
+  }
+}, 120_000);
+
 test("271-272 upgrade 270 with the in-flight answers' reconciliations and the delivery-end index", async () => {
   const { url, sql } = await migratedBefore("271");
   try {
