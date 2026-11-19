@@ -460,6 +460,12 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			if first != tc.resolved {
 				t.Errorf("first thread resolved=%v, want %v", first, tc.resolved)
 			}
+			if n := a.w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='chat.notice' AND payload->>'about'='answer_reconciled' AND payload->>'answerId'=$2`, a.task, ids[3]); n != 1 {
+				t.Errorf("%d reconciliation notices, want 1", n)
+			}
+			if n := a.w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id=$1 AND key=$2`, a.task, "answer-reconciled:"+ids[3]); n != 1 {
+				t.Errorf("%d reconciliation wakes, want 1", n)
+			}
 			if tc.uncertain {
 				if n := a.w.count(`SELECT count(*) FROM events WHERE task_id=$1 AND event_type='chat.notice' AND payload->>'text' LIKE '%may have been posted; check the pull request%'`, a.task); n != 1 {
 					t.Errorf("%d uncertainty notices, want 1", n)
