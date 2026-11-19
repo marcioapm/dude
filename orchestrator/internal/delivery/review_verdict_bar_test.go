@@ -30,15 +30,19 @@ func TestTheVerdictBlocksOnMediumOrAboveAsFiled(t *testing.T) {
 		}
 	}
 	item := verdictFindingsItem([]verdictFinding{
-		{ID: "f1", Severity: "low", Trivial: true, Title: "Comment says as before"},
-		{ID: "f2", Severity: "medium", Title: "Unbounded query"},
+		{ID: "f1", Severity: "low", Trivial: true, Title: "Comment says as before", Checked: true},
+		{ID: "f2", Severity: "medium", Title: "Unbounded query", Checked: true},
+		{ID: "f3", Severity: "high", Title: "Not re-checked", Checked: false},
 	})
 	if item.OK || !strings.Contains(item.Detail, "1 open finding(s)") || !strings.Contains(item.Detail, "f2 (medium) Unbounded query") ||
-		strings.Contains(item.Detail, "f1") {
+		strings.Contains(item.Detail, "f1") || strings.Contains(item.Detail, "f3") {
 		t.Fatalf("the findings item: %+v", item)
 	}
-	if it := verdictFindingsItem([]verdictFinding{{ID: "f1", Severity: "low", Trivial: true}}); !it.OK {
+	if it := verdictFindingsItem([]verdictFinding{{ID: "f1", Severity: "low", Trivial: true, Checked: true}}); !it.OK {
 		t.Fatalf("a trivial low holds the verdict: %+v", it)
+	}
+	if it := verdictFindingsItem([]verdictFinding{{ID: "f1", Severity: "high", Title: "Unchecked", Checked: false}}); !it.OK {
+		t.Fatalf("an unchecked finding holds the verdict: %+v", it)
 	}
 }
 
