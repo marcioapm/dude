@@ -267,10 +267,18 @@ func (g *GitHub) FindOwnReview(ctx context.Context, slug string, number int, tas
 type DiffLines struct {
 	Known bool
 	Hunks []Hunk
+	Added map[int]struct{}
+}
+
+// IsAdded says whether line is an added line on the head side.
+func (d DiffLines) IsAdded(line int) bool {
+	_, ok := d.Added[line]
+	return d.Known && line > 0 && ok
 }
 
 // Hunk is the lines one hunk shows on each side (added, removed and
 // context): Left..Left+LeftLines-1 in the base, Right.. in the head.
+// Added head lines are tracked separately by DiffLines.IsAdded.
 type Hunk struct{ Left, LeftLines, Right, RightLines int }
 
 // hunk is the index of the hunk showing line on side, and whether one does.
@@ -288,8 +296,7 @@ func (d DiffLines) hunk(side string, line int) (int, bool) {
 }
 
 // Shows says line of the head's file is inside one of the diff's hunks
-// (its RIGHT side): a line the pull request added, or one beside its
-// change. False when no patch is known.
+// (its RIGHT side), including unchanged context.
 func (d DiffLines) Shows(line int) bool {
 	_, in := d.hunk("RIGHT", line)
 	return d.Known && line > 0 && in
@@ -301,23 +308,36 @@ var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@
 // gives it) into DiffLines: each hunk is what its header says it spans.
 // Only a header starts with "@@"; a hunk's lines start with ' ', + or -.
 func parsePatch(patch string) DiffLines {
-	d := DiffLines{Known: true}
+	d := DiffLines{Known: true, Added: map[int]struct{}{}}
+	var right int
 	for _, line := range strings.Split(patch, "\n") {
-		if !strings.HasPrefix(line, "@@") {
-			continue // most lines; the regexp is for headers only
-		}
-		m := hunkHeader.FindStringSubmatch(line)
-		if m == nil {
+		if strings.HasPrefix(line, "@@") {
+			m := hunkHeader.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			n := func(s string) int {
+				if s == "" {
+					return 1 // "-l" alone is one line
+				}
+				v, _ := strconv.Atoi(s)
+				return v
+			}
+			right = n(m[3])
+			d.Hunks = append(d.Hunks, Hunk{Left: n(m[1]), LeftLines: n(m[2]), Right: right, RightLines: n(m[4])})
 			continue
 		}
-		n := func(s string) int {
-			if s == "" {
-				return 1 // "-l" alone is one line
-			}
-			v, _ := strconv.Atoi(s)
-			return v
+		if right == 0 || line == "\\ No newline at end of file" {
+			continue
 		}
-		d.Hunks = append(d.Hunks, Hunk{Left: n(m[1]), LeftLines: n(m[2]), Right: n(m[3]), RightLines: n(m[4])})
+		switch {
+		case strings.HasPrefix(line, "+"):
+			d.Added[right] = struct{}{}
+			right++
+		case strings.HasPrefix(line, "-"):
+		case strings.HasPrefix(line, " "):
+			right++
+		}
 	}
 	return d
 }

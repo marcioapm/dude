@@ -52,7 +52,7 @@ func TestTheVerdictBlocksOnMediumOrAboveAsFiled(t *testing.T) {
 // filed. A writing delivery's findings are never read so.
 func TestAPullRequestsOwnLinesAreNeverOnTheBase(t *testing.T) {
 	diff := map[string]forge.DiffLines{
-		"a_test.go": {Known: true, Hunks: []forge.Hunk{{Left: 10, LeftLines: 3, Right: 10, RightLines: 8}}},
+		"a_test.go": {Known: true, Hunks: []forge.Hunk{{Left: 10, LeftLines: 3, Right: 10, RightLines: 8}}, Added: map[int]struct{}{12: {}}},
 		"big.go":    {},
 	}
 	no := func() *bool { b := false; return &b }

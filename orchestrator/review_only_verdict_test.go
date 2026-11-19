@@ -115,8 +115,16 @@ func TestAReviewOnlyIncompleteVerdictSeparatesCheckedFindings(t *testing.T) {
 	}
 	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs, finding_ids, verdicts)
 		SELECT 'judged_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', 'security', base_refs,
-		ARRAY['unchecked_'||id, 'fixed_'||id, 'still_'||id],
-		jsonb_build_object('unchecked_'||id,'fixed','fixed_'||id,'fixed','still_'||id,'still') FROM runs WHERE id=$1`, old)
+		ARRAY['fixed_'||id, 'still_'||id],
+		jsonb_build_object('fixed_'||id,'fixed','still_'||id,'still') FROM runs WHERE id=$1`, old)
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs, finding_ids, verdicts)
+		SELECT 'judged_unchecked_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', category, base_refs,
+		ARRAY['unchecked_'||id], jsonb_build_object('unchecked_'||id,'fixed') FROM runs WHERE id=$1`, old)
+	// A newer same-category completed run is authoritative even when it omits
+	// a finding that an older run judged.
+	mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs, finding_ids, verdicts)
+		SELECT 'newer_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', category, base_refs,
+		ARRAY[]::text[], '{}'::jsonb FROM runs WHERE id=$1`, old)
 	mustExec(t, w.owner, `UPDATE runs SET status='failed', error='review harness crashed', ended_at=now() WHERE id=$1`, old)
 	w.until("incomplete verdict posted", func() bool { return w.waitingOnPR(wi) })
 	reviews := w.dudeReviews(wi, n)

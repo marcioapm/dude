@@ -370,7 +370,7 @@ func ownLines(findings []verdictFinding, diff map[string]forge.DiffLines, review
 		if f.Introduced == nil || *f.Introduced || f.File == "" || f.Line <= 0 {
 			continue
 		}
-		if diff[f.File].Shows(f.Line) {
+		if diff[f.File].IsAdded(f.Line) {
 			yes := true
 			findings[i].Introduced = &yes
 		}
@@ -597,7 +597,7 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		if in.Unfinished, lenses, err = lensOutcomesTx(ctx, tx, st, pr.Repo, head); err != nil {
 			return err
 		}
-		if findings, err = verdictFindingsTx(ctx, tx, st, pr.Repo); err != nil {
+		if findings, err = incompleteFindingsTx(ctx, tx, st, pr.Repo, head); err != nil {
 			return err
 		}
 		if len(in.Unfinished) > 0 {
@@ -634,6 +634,14 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	gates := DoReadyGate(ctx, gh, c)
 	if len(gates) == 0 {
 		return workflow.Result{}, fmt.Errorf("no gate read for %s", prID)
+	}
+	if len(in.Unfinished) == 0 && slices.ContainsFunc(findings, func(f verdictFinding) bool { return !f.Checked }) {
+		for i := range gates[0].Items {
+			if gates[0].Items[i].Key == ReadyReviewed {
+				gates[0].Items[i].OK = false
+				gates[0].Items[i].Detail = "not every finding was authoritatively judged at " + short(head)
+			}
+		}
 	}
 	// A finding filed on the base at a line the pull request wrote is the
 	// pull request's (ownLines): its diff, read once for this verdict at
@@ -1129,10 +1137,11 @@ func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head 
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
 		j.id IS NOT NULL, COALESCE(j.judgement, '')
 		FROM review_findings f LEFT JOIN LATERAL (
-			SELECT k.id, CASE WHEN k.id = f.run_id THEN 'still' ELSE k.verdicts->>f.id END judgement
+			SELECT CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
+				THEN k.verdicts->>f.id ELSE '' END AS judgement
 			FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review'
 			AND k.status = 'completed' AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4
-			AND (k.id = f.run_id OR (k.category = f.category AND f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')))
+			AND k.category IS NOT DISTINCT FROM f.category
 			ORDER BY k.created_at DESC, k.id DESC LIMIT 1
 		) j ON true WHERE f.task_id = $1 AND (f.status = 'open' OR f.status = 'resolved' AND j.judgement = 'fixed')
 		AND `+strings.ReplaceAll(thisAttempt, "review_findings.run_id", "f.run_id")+` AND COALESCE(f.repo, $3) = $3
