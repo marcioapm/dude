@@ -702,12 +702,21 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
     expect(trigger).not.toMatch(/DROP\s+TRIGGER/i);
     for (const file of files.slice(1)) {
       const contents = await file.contents();
-      if (file.version === "277" || file.version === "278" || file.version === "279" || file.version === "280") {
+      if (file.version === "277") {
+        // The one batch file: setup and a windowed batch, no default limit line, no empty cleanup.
         expect(contents.split("\n", 1)[0]?.trim()).toBe("-- dude:batch-sql");
-        expect(contents).toContain("-- dude:batch-limit 1000");
+        expect(contents).not.toContain("-- dude:batch-limit");
+        expect(contents).not.toContain("-- dude:cleanup");
         expect(contents).toContain("-- dude:setup");
         expect(contents).toContain("-- dude:batch");
-        if (file.version !== "280") expect(contents).toContain("LIMIT __BATCH_LIMIT__");
+        expect(contents).toContain("LIMIT __BATCH_LIMIT__");
+        expect(contents).toContain("e.cursor <= (SELECT hi FROM bounds)");
+      } else if (file.version === "278" || file.version === "279" || file.version === "280") {
+        // Plain transactional files: 278 and 279 do nothing, 280 drops 277's progress table.
+        expect(outsideTransaction(contents)).toBe(false);
+        expect(contents).not.toContain("dude:");
+        const statements = contents.replace(/^--.*$/gm, "").trim();
+        expect(statements).toBe(file.version === "280" ? "DROP TABLE IF EXISTS events_answer_causation_backfill_progress;" : "SELECT 1;");
       } else {
         expect(outsideTransaction(contents)).toBe(true);
         expect(contents.replace(/^--.*$/gm, "").trim().split(";").filter((s) => s.trim())).toHaveLength(1);
@@ -822,6 +831,7 @@ test("277's backfill waits for a row another transaction holds, in batches, and 
   }
 }, 120_000);
 
+// Titled before 278 and 279 became no-ops (kept so the test's ID stands); 277 is now the only batch file.
 test("277-279's batch starts past the saved cursor, saves the last row it took, and its setup keeps a saved cursor", async () => {
   const { url, sql } = await migratedBefore("277");
   const locker = new SQL(url);
@@ -834,7 +844,7 @@ test("277-279's batch starts past the saved cursor, saves the last row it took, 
     await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
     const cursors = (await sql`SELECT cursor::text AS c FROM events WHERE organization_id = 'org_k' ORDER BY cursor`).map((r: { c: string }) => r.c);
     const section = (contents: string, name: string) => contents.split(/^-- dude:(?:setup|batch|cleanup)\s*$/m)[["setup", "batch", "cleanup"].indexOf(name) + 1]!;
-    for (const file of (await listMigrationFiles()).filter((f) => ["277", "278", "279"].includes(f.version))) {
+    for (const file of (await listMigrationFiles()).filter((f) => ["277"].includes(f.version))) {
       const contents = await file.contents();
       await sql`DROP TABLE IF EXISTS events_answer_causation_backfill_progress`;
       await sql`UPDATE events SET causation_id = NULL WHERE organization_id = 'org_k'`;
@@ -874,6 +884,94 @@ test("277-279's batch starts past the saved cursor, saves the last row it took, 
     }
   } finally {
     await locker.end();
+    await sql.end();
+  }
+}, 120_000);
+
+/** 277's batch section, ready to run, at limit. */
+async function backfillBatch(limit: number): Promise<string> {
+  const file = (await listMigrationFiles()).find((f) => f.version === "277")!;
+  return (await file.contents()).split(/^-- dude:batch\s*$/m)[1]!.replaceAll("__BATCH_LIMIT__", String(limit));
+}
+
+test("277 reads one window of 100000 cursors per batch, however sparse the rows it fills, and stops at the table's last cursor", async () => {
+  // An empty events table: one batch, of none.
+  {
+    const { url, sql } = await migratedBefore("277");
+    try {
+      expect([...await sql`SELECT count(*)::int AS n FROM events`]).toEqual([{ n: 0 }]);
+      const logs: string[] = [];
+      expect((await migrate(url, { log: (m) => logs.push(m) })).applied).toContain("277_events_answer_causation_backfill.sql");
+      expect(logs.filter((m) => m.startsWith("applied 277_"))).toEqual(["applied 277_events_answer_causation_backfill.sql batch (0 rows)"]);
+    } finally {
+      await sql.end();
+    }
+  }
+  const { url, sql } = await migratedBefore("277");
+  try {
+    expect([...await sql`SELECT count(*)::int AS n FROM events`]).toEqual([{ n: 0 }]);
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_w', 'W', 'w')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    // Old history, sparse: one record exactly on the first window's edge and
+    // one just past the third window's start; the rows between fill nothing.
+    const at = async (cursor: number, id: string, answer: string | null) => {
+      await sql`SELECT setval(pg_get_serial_sequence('events', 'cursor'), ${cursor - 1}::bigint)`;
+      await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+        VALUES (${id}, 'org_w', 'pull_request.action', 'run_w', 'agent', 'x', 't',
+          ${answer === null ? sql`'{}'::jsonb` : sql`jsonb_build_object('answerId', ${answer}::text)`})`;
+    };
+    await at(5, "ew_none", null);
+    await at(100000, "ew_edge", "hw_edge");
+    await at(250001, "ew_far", "hw_far");
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    const file = (await listMigrationFiles()).find((f) => f.version === "277")!;
+    await sql.unsafe((await file.contents()).split(/^-- dude:batch\s*$/m)[0]!);
+    const batch = await backfillBatch(1000);
+    const step = async () => {
+      const [row] = await sql.begin(async (tx) => await tx.unsafe(batch));
+      const [{ saved }] = await sql`SELECT last_cursor::int AS saved FROM events_answer_causation_backfill_progress WHERE migration_version = '277'`;
+      const filled = (await sql`SELECT id FROM events WHERE organization_id = 'org_w' AND causation_id IS NOT NULL ORDER BY cursor`).map((r: { id: string }) => r.id);
+      return { count: row.batch_count, saved, filled };
+    };
+    // A batch that is not full exhausts its window and saves the window's end.
+    expect(await step()).toEqual({ count: 1, saved: 100000, filled: ["ew_edge"] });
+    // A window with no row to fill still reports 1 while the table goes on past it.
+    expect(await step()).toEqual({ count: 1, saved: 200000, filled: ["ew_edge"] });
+    expect(await step()).toEqual({ count: 1, saved: 300000, filled: ["ew_edge", "ew_far"] });
+    // Past the table's last cursor: 0, and the runner stops.
+    expect(await step()).toEqual({ count: 0, saved: 400000, filled: ["ew_edge", "ew_far"] });
+
+    // Resumed mid-window: the row just past the resumed window's end is taken by the next window.
+    await sql`UPDATE events SET causation_id = NULL WHERE id = 'ew_far'`;
+    await sql`UPDATE events_answer_causation_backfill_progress SET last_cursor = 150000 WHERE migration_version = '277'`;
+    expect(await step()).toEqual({ count: 1, saved: 250000, filled: ["ew_edge"] });
+    expect(await step()).toEqual({ count: 1, saved: 350000, filled: ["ew_edge", "ew_far"] });
+    expect(await step()).toEqual({ count: 0, saved: 450000, filled: ["ew_edge", "ew_far"] });
+
+    // A full batch saves its last row, not the window's end: the rest of the window is the next batch's.
+    await sql`UPDATE events SET causation_id = NULL WHERE organization_id = 'org_w'`;
+    await sql`UPDATE events_answer_causation_backfill_progress SET last_cursor = 0 WHERE migration_version = '277'`;
+    const [full] = await sql.begin(async (tx) => await tx.unsafe(await backfillBatch(1)));
+    expect(full.batch_count).toBe(1);
+    expect([...await sql`SELECT last_cursor::int AS saved FROM events_answer_causation_backfill_progress`]).toEqual([{ saved: 100000 }]);
+
+    // Through the runner, from the start: one batch per window up to the last cursor, then 0.
+    await sql`UPDATE events SET causation_id = NULL WHERE organization_id = 'org_w'`;
+    await sql`DROP TABLE events_answer_causation_backfill_progress`;
+    const logs: string[] = [];
+    expect((await migrate(url, { log: (m) => logs.push(m) })).applied).toEqual(["277_events_answer_causation_backfill.sql",
+      "278_events_answer_causation_upgrade_repair.sql", "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"]);
+    expect(logs.filter((m) => m.startsWith("applied 277_"))).toEqual([
+      "applied 277_events_answer_causation_backfill.sql batch (1 rows)",
+      "applied 277_events_answer_causation_backfill.sql batch (1 rows)",
+      "applied 277_events_answer_causation_backfill.sql batch (1 rows)",
+      "applied 277_events_answer_causation_backfill.sql batch (0 rows)",
+    ]);
+    expect([...await sql`SELECT id, causation_id FROM events WHERE organization_id = 'org_w' ORDER BY cursor`]).toEqual([
+      { id: "ew_none", causation_id: null }, { id: "ew_edge", causation_id: "hw_edge" }, { id: "ew_far", causation_id: "hw_far" },
+    ]);
+    expect([...await sql`SELECT to_regclass('events_answer_causation_backfill_progress') IS NULL AS dropped`]).toEqual([{ dropped: true }]);
+  } finally {
     await sql.end();
   }
 }, 120_000);
