@@ -698,7 +698,8 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
       "278_events_answer_causation_upgrade_repair.sql", "279_events_answer_causation_backfill.sql", "280_events_answer_causation_cleanup.sql"]);
     const trigger = await files[0]!.contents();
     expect(outsideTransaction(trigger)).toBe(true);
-    expect(trigger).toContain("CREATE TRIGGER events_answer_causation_compat");
+    expect(trigger).toContain("CREATE OR REPLACE TRIGGER events_answer_causation_compat");
+    expect(trigger).not.toMatch(/DROP\s+TRIGGER/i);
     for (const file of files.slice(1)) {
       const contents = await file.contents();
       if (file.version === "277" || file.version === "278" || file.version === "279" || file.version === "280") {
@@ -741,6 +742,28 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
         def: "CREATE INDEX events_run_answer_claims_idx ON public.events USING btree (run_id, causation_id, cursor) WHERE (event_type = 'pull_request.answer_claimed'::text)" },
     ]);
     expect((await migrate(url, { log: () => {} })).applied).toEqual([]);
+    // 273 again, one statement at a time as the runner sends them: an old
+    // writer inserting after any of them still gets its causation_id.
+    const statements: string[] = [];
+    let current = "";
+    let inBody = false;
+    for (const line of trigger.replace(/^--.*$/gm, "").split("\n")) {
+      current += `${line}\n`;
+      if ((line.match(/\$\$/g) ?? []).length % 2 === 1) inBody = !inBody;
+      if (!inBody && line.trim().endsWith(";")) { statements.push(current.trim()); current = ""; }
+    }
+    expect(current.trim()).toBe("");
+    expect(statements.length).toBeGreaterThanOrEqual(2);
+    for (const [i, statement] of statements.entries()) {
+      await sql.unsafe(statement);
+      await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, causation_id, payload)
+        VALUES (${`e_rerun_${i}`}, 'org_c', 'pull_request.action', 'run_c', 'agent', 'x', 't', NULL, jsonb_build_object('answerId', ${`h_rerun_${i}`}::text))`;
+    }
+    expect([...await sql`SELECT id, causation_id FROM events WHERE id LIKE 'e_rerun_%' ORDER BY id`])
+      .toEqual(statements.map((_, i) => ({ id: `e_rerun_${i}`, causation_id: `h_rerun_${i}` })));
+    expect([...await sql`SELECT p.prosecdef, p.proconfig FROM pg_proc p WHERE p.proname = 'events_answer_causation_compat'`])
+      .toEqual([{ prosecdef: true, proconfig: ["search_path=public, pg_temp"] }]);
+    expect(Number((await sql`SELECT count(*) AS n FROM pg_trigger WHERE tgname = 'events_answer_causation_compat' AND NOT tgisinternal`)[0].n)).toBe(1);
     // Each file again is a no-op: the backfill finds nothing, the indexes stand.
     for (const file of files) await sql.unsafe((await file.contents()).replace(/^--.*$/gm, "").replaceAll("__BATCH_LIMIT__", "1000"));
     expect(Number((await sql`SELECT count(*) AS n FROM pg_class WHERE relname IN ('events_run_answer_causation_idx', 'events_run_answer_claims_idx')`)[0].n)).toBe(2);
