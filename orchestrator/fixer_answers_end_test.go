@@ -387,8 +387,9 @@ func expireReconciliationAnswer(t *testing.T, a *answering, ref delivery.RunRef)
 
 // The reconciliation due time has a full extra lease beyond the claim lease:
 // at claim+lease a bounded GitHub write may still be in flight, while at
-// claim+2*lease the row is eligible. The timestamps are controlled in SQL;
-// this test does not sleep or depend on wall-clock passage.
+// claim+2*lease the row is eligible. Every time is the reconciler's injected
+// clock, read off the claim itself; nothing is moved in SQL, and the test
+// does not sleep or depend on wall-clock passage.
 func TestRound7ReconciliationLeaseMargin(t *testing.T) {
 	a, ref := endedWithHeld(t)
 	ids := a.answerIDs(ref.RunID)
@@ -404,20 +405,174 @@ func TestRound7ReconciliationLeaseMargin(t *testing.T) {
 	<-b.inside
 	a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 	var claimed time.Time
-	if err := a.w.owner.QueryRow(context.Background(), `SELECT occurred_at FROM events WHERE id=$1`, ids[0]).Scan(&claimed); err != nil {
+	if err := a.w.owner.QueryRow(context.Background(), `SELECT max(occurred_at) FROM events WHERE run_id = $1 AND event_type = $2
+		AND COALESCE(causation_id, payload->>'answerId') = $3`, ref.RunID, delivery.EvAnswerClaimed, ids[0]).Scan(&claimed); err != nil {
 		t.Fatal(err)
 	}
-	a.w.prs.Answers.Now = func() time.Time { return claimed.Add(2 * time.Minute) }
-	if n, err := a.w.prs.Answers.Sweep(context.Background()); err != nil || n != 0 {
-		t.Fatalf("claim+lease sweep settled %d: %v", n, err)
+	for _, at := range []time.Duration{2 * time.Minute, 4*time.Minute - time.Microsecond} {
+		a.w.prs.Answers.Now = func() time.Time { return claimed.Add(at) }
+		if n, err := a.w.prs.Answers.Sweep(context.Background()); err != nil || n != 0 {
+			t.Fatalf("claim+%v sweep settled %d: %v", at, n, err)
+		}
 	}
 	a.w.prs.Answers.Now = func() time.Time { return claimed.Add(4 * time.Minute) }
-	mustExec(t, a.w.owner, `UPDATE answer_reconciliations SET due_at = now() - interval '1 second' WHERE answer_id = $1`, ids[0])
 	if n, err := a.w.prs.Answers.Sweep(context.Background()); err != nil || n != 1 {
 		t.Fatalf("claim+2*lease sweep settled %d: %v", n, err)
 	}
 	b.open()
 	<-errs
+}
+
+// #485 round 16: a resolution whose poster crashed after GitHub took it,
+// the delivery ended (merged), and GitHub's thread read failing for a moment (a
+// 502). The pass asks again, on the reconciler's own clock, until the
+// give-up bound, and settles it uncertain only past that. Every time here
+// is the injected clock's; nothing is moved in SQL.
+func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
+	// crashed has the resolution's poster crash after GitHub took it, the
+	// pull request merge (the conductor stays live, so its wake can be
+	// counted), and GitHub's thread read fail with a 502. It returns the
+	// answer, and its row's due and creation times.
+	crashed := func(t *testing.T) (*answering, delivery.RunRef, string, time.Time, time.Time) {
+		a, ref := endedWithHeld(t)
+		ids := a.answerIDs(ref.RunID)
+		crash := errors.New("resolution poster crashed")
+		a.store.AfterAnswerPost = func(id string) error {
+			if id == ids[3] {
+				return crash
+			}
+			return nil
+		}
+		if _, err := a.post(); !errors.Is(err, crash) {
+			t.Fatalf("resolution crash: %v", err)
+		}
+		a.store.AfterAnswerPost = nil
+		a.w.gh.Merge(1)
+		a.w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 502 })
+		a.w.until("the task done", func() bool {
+			a.w.sync()
+			return a.w.count(`SELECT count(*) FROM tasks WHERE id = $1 AND status = 'done'`, a.task) == 1
+		})
+		if n := a.w.count(`SELECT count(*) FROM runs r WHERE r.task_id = $1 AND `+delivery.LiveConductor, a.task); n != 1 {
+			t.Fatalf("%d live conductors after the merge, want 1: the wake is counted", n)
+		}
+		var due, created time.Time
+		if err := a.w.owner.QueryRow(context.Background(), `SELECT due_at, created_at FROM answer_reconciliations WHERE answer_id = $1`, ids[3]).
+			Scan(&due, &created); err != nil {
+			t.Fatal(err)
+		}
+		return a, ref, ids[3], due, created
+	}
+	sweep := func(t *testing.T, a *answering, at time.Time) int {
+		t.Helper()
+		a.w.prs.Answers.Now = func() time.Time { return at }
+		n, err := a.w.prs.Answers.Sweep(context.Background())
+		if err != nil {
+			t.Fatalf("sweep at %v: %v", at, err)
+		}
+		return n
+	}
+	open := func(a *answering, id string) bool {
+		return a.w.count(`SELECT count(*) FROM answer_reconciliations WHERE answer_id = $1 AND settled_at IS NULL`, id) == 1
+	}
+	dueAt := func(t *testing.T, a *answering, id string) time.Time {
+		t.Helper()
+		var due time.Time
+		if err := a.w.owner.QueryRow(context.Background(), `SELECT due_at FROM answer_reconciliations WHERE answer_id = $1`, id).Scan(&due); err != nil {
+			t.Fatal(err)
+		}
+		return due
+	}
+	notices := func(a *answering, id string) int {
+		return a.w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'answer_reconciled'
+			AND payload->>'answerId' = $2`, a.task, id)
+	}
+	wakes := func(a *answering, id string) int {
+		return a.w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND key = $2`, a.task, "answer-reconciled:"+id)
+	}
+
+	t.Run("the first pass retries and leaves it open", func(t *testing.T) {
+		a, ref, id, due, _ := crashed(t)
+		clock := due.Add(time.Second)
+		if n := sweep(t, a, clock); n != 0 {
+			t.Errorf("the pass settled %d on a 502, want none", n)
+		}
+		if got := a.outcome(t, ref.RunID, id); got != "" {
+			t.Errorf("a 502 on the first pass settled the answer %q, want it left open", got)
+		}
+		if !open(a, id) {
+			t.Errorf("the reconciliation was settled on a 502")
+		}
+		if n := notices(a, id); n != 0 {
+			t.Errorf("%d notices of an answer still being read, want none", n)
+		}
+		// Put off a minute on the reconciler's clock, not the database's.
+		if got, want := dueAt(t, a, id), clock.Add(time.Minute); !got.Equal(want) {
+			t.Errorf("retried at %v, want %v: a minute past the pass's own now", got, want)
+		}
+	})
+	t.Run("a retry after its due time settles it", func(t *testing.T) {
+		a, ref, id, due, _ := crashed(t)
+		clock := due.Add(time.Second)
+		sweep(t, a, clock)
+		a.w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 0 })
+		// GitHub reads again, but the retry is not due yet: left alone.
+		if n := sweep(t, a, clock.Add(30*time.Second)); n != 0 {
+			t.Errorf("a pass before the retry's due time settled %d", n)
+		}
+		if !open(a, id) {
+			t.Fatalf("the reconciliation was settled before its retry was due")
+		}
+		if n := sweep(t, a, clock.Add(time.Minute)); n != 1 {
+			t.Errorf("the retry settled %d, want 1", n)
+		}
+		if got := a.outcome(t, ref.RunID, id); got != "posted" {
+			t.Errorf("the resolution GitHub took ended %q on retry, want posted", got)
+		}
+		if first, _ := a.resolved(); !first {
+			t.Errorf("the first thread is not resolved")
+		}
+		sweep(t, a, clock.Add(2*time.Hour))
+		if n := notices(a, id); n != 1 {
+			t.Errorf("%d reconciliation notices, want 1", n)
+		}
+		if n := wakes(a, id); n != 1 {
+			t.Errorf("%d reconciliation wakes, want 1", n)
+		}
+	})
+	t.Run("past the give-up bound it is uncertain, told once", func(t *testing.T) {
+		a, ref, id, due, created := crashed(t)
+		clock := due.Add(time.Second)
+		sweep(t, a, clock)
+		// Every retry still fails; short of the bound, it stays open.
+		short := created.Add(time.Hour - time.Second)
+		if n := sweep(t, a, short); n != 0 || !open(a, id) {
+			t.Fatalf("a second short of the bound settled %d (open %v)", n, open(a, id))
+		}
+		past := short.Add(time.Minute + time.Second)
+		// Sweep's count is not asserted here: retryOr's give-up settles the
+		// row but reconcile reports it unsettled (pre-existing; see report).
+		sweep(t, a, past)
+		if open(a, id) {
+			t.Errorf("the reconciliation is still open past the give-up bound")
+		}
+		if got := a.outcome(t, ref.RunID, id); got != "uncertain" {
+			t.Errorf("a read failing past the bound ended %q, want uncertain", got)
+		}
+		for i := range 3 {
+			sweep(t, a, past.Add(time.Duration(i+1)*time.Hour))
+		}
+		if n := notices(a, id); n != 1 {
+			t.Errorf("%d reconciliation notices, want 1", n)
+		}
+		if n := a.w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
+			AND payload->>'text' LIKE '%may have been posted; check the pull request%github 502%'`, a.task); n != 1 {
+			t.Errorf("%d notices saying the read failed, want 1", n)
+		}
+		if n := wakes(a, id); n != 1 {
+			t.Errorf("%d reconciliation wakes, want 1", n)
+		}
+	})
 }
 
 // but also its terminal action marker. A resolved thread is posted exactly once;
@@ -492,7 +647,10 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			}
 			a.store.AfterAnswerPost = nil
 			a.w.gh.Set(func(s *fakegithub.Server) {
-				s.ThreadsStatus = 502
+				// Refused, not failing: asking again will not mend it, so
+				// it is uncertain at once (a transient read is retried:
+				// TestRound16ATransientResolutionReadIsRetried).
+				s.ThreadsStatus = 403
 				s.ResolvedThreads[s.ThreadID(a.first)] = false
 			})
 			expireReconciliationAnswer(t, a, ref)

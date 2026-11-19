@@ -79,8 +79,18 @@ type AnswerReconciler struct {
 	DB     *db.DB
 	Forges Forges
 	Log    *slog.Logger
-	// Now is the clock the give-up bound is read on; nil is time.Now.
+	// Now is the reconciler's clock: the rows due, the give-up bound and a
+	// retry's due time are all read on it, never on the database's; nil is
+	// time.Now.
 	Now func() time.Time
+}
+
+// now is the reconciler's clock (Now).
+func (a *AnswerReconciler) now() time.Time {
+	if a.Now != nil {
+		return a.Now()
+	}
+	return time.Now()
 }
 
 func (a *AnswerReconciler) log() *slog.Logger {
@@ -96,16 +106,20 @@ func (a *AnswerReconciler) log() *slog.Logger {
 const answerReconcileDue = `SELECT answer_id, organization_id FROM answer_reconciliations
 	WHERE settled_at IS NULL AND due_at <= $2 ORDER BY due_at LIMIT $1`
 
+// answerReconcileLater puts a row whose pass failed off until $2, a time on
+// the reconciler's clock (Now), not the database's.
+const answerReconcileLater = `UPDATE answer_reconciliations SET due_at = $2
+	WHERE answer_id = $1 AND settled_at IS NULL`
+
 // Sweep settles the rows due, and returns how many it settled. One that
 // fails is logged and retried later; the batch goes on.
 func (a *AnswerReconciler) Sweep(ctx context.Context) (int, error) {
 	type due struct{ ID, Org string }
 	var todo []due
+	// One instant for the whole pass: the rows it takes, the bound it gives
+	// up at and the time it retries one at are on the same clock.
+	now := a.now()
 	if err := a.DB.InSystem(ctx, "answer-reconciler", func(tx pgx.Tx) error {
-		now := time.Now()
-		if a.Now != nil {
-			now = a.Now()
-		}
 		rows, err := tx.Query(ctx, answerReconcileDue, answerReconcileBatch, now)
 		if err != nil {
 			return err
@@ -117,15 +131,14 @@ func (a *AnswerReconciler) Sweep(ctx context.Context) (int, error) {
 	}
 	n := 0
 	for _, d := range todo {
-		settled, err := a.reconcile(ctx, d.Org, d.ID)
+		settled, err := a.reconcile(ctx, now, d.Org, d.ID)
 		if ctx.Err() != nil {
 			return n, ctx.Err()
 		}
 		if err != nil {
 			a.log().Warn("reconciling an ended delivery's in-flight answer failed", "answer", d.ID, "error", err)
 			_ = a.DB.InOrg(ctx, d.Org, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE answer_reconciliations SET due_at = now() + make_interval(secs => $2)
-					WHERE answer_id = $1 AND settled_at IS NULL`, d.ID, answerReconcileRetry.Seconds())
+				_, err := tx.Exec(ctx, answerReconcileLater, d.ID, now.Add(answerReconcileRetry))
 				return err
 			})
 			continue
@@ -148,8 +161,9 @@ type reconcileRow struct {
 }
 
 // reconcile settles one row: dude's records first (its poster may have
-// recorded it since), then GitHub, read with no transaction open.
-func (a *AnswerReconciler) reconcile(ctx context.Context, org, id string) (bool, error) {
+// recorded it since), then GitHub, read with no transaction open. now is
+// the pass's instant on the reconciler's clock.
+func (a *AnswerReconciler) reconcile(ctx context.Context, now time.Time, org, id string) (bool, error) {
 	var r reconcileRow
 	open := false
 	if err := a.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -174,7 +188,7 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, org, id string) (bool,
 	}
 	gh, err := a.Forges.For(ctx, org)
 	if err != nil && forge.Transient(err) {
-		return false, a.retryOr(ctx, r, err)
+		return false, a.retryOr(ctx, now, r, err)
 	}
 	if err != nil || gh == nil || r.slug == "" {
 		why := "no GitHub to read it with"
@@ -186,7 +200,12 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, org, id string) (bool,
 	if r.h.Kind == answerResolve {
 		threads, err := gh.ReviewThreads(ctx, r.slug, r.h.Number)
 		switch {
+		case forge.Transient(err):
+			// A GitHub that failed for a moment (a 502) is asked again,
+			// until the give-up bound.
+			return false, a.retryOr(ctx, now, r, err)
 		case err != nil:
+			// An answer GitHub will not mend by asking again.
 			return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 		}
 		t := forge.ThreadOf(threads, forge.LineCommentID(r.h.Thread))
@@ -205,7 +224,7 @@ func (a *AnswerReconciler) reconcile(ctx context.Context, org, id string) (bool,
 	case errors.Is(err, forge.ErrSearchIncomplete):
 		return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, "the search for its comment was cut at its bound", forge.Posted{}, "")
 	case forge.Transient(err):
-		return false, a.retryOr(ctx, r, err)
+		return false, a.retryOr(ctx, now, r, err)
 	case err != nil:
 		return true, a.settle(ctx, r, reconciledUncertain, uncertainAnswer, err.Error(), forge.Posted{}, "")
 	case posted.ID != "":
@@ -222,11 +241,8 @@ func isLineComment(id string) bool {
 
 // retryOr leaves a row GitHub did not answer for a later pass, until
 // answerReconcileGiveUp past its creation, when it is settled uncertain.
-func (a *AnswerReconciler) retryOr(ctx context.Context, r reconcileRow, err error) error {
-	now := time.Now()
-	if a.Now != nil {
-		now = a.Now()
-	}
+// now is the pass's instant on the reconciler's clock.
+func (a *AnswerReconciler) retryOr(ctx context.Context, now time.Time, r reconcileRow, err error) error {
 	if now.Sub(r.created) < answerReconcileGiveUp {
 		return err
 	}
