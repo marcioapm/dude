@@ -12,6 +12,14 @@
  * again on the next migrate. One that builds an index concurrently is
  * recorded only once the index is valid (dropIfInvalid).
  *
+ * A file whose first line is `-- dude:batch-sql` is a batch migration, for a
+ * data change too large for one transaction: it runs in many transactions
+ * and resumes where it stopped (see BATCH_SQL).
+ *
+ * One migrate runs at a time per database: each holds a session advisory
+ * lock (MIGRATE_LOCK) for its whole run and reads what is applied only once
+ * it has it.
+ *
  *   bun run src/db/migrate.ts                  # apply pending migrations
  *   bun run src/db/migrate.ts --status         # list applied/pending
  *
@@ -113,6 +121,32 @@ function checksum(contents: string): string {
 
 /** The marker on a migration's first line that runs it outside a transaction. */
 export const NO_TRANSACTION = "-- dude:no-transaction";
+
+/**
+ * The marker on a batch migration's first line. Its protocol:
+ *
+ * - Sections. After the marker, comment lines, then `-- dude:setup`,
+ *   `-- dude:batch` and optionally `-- dude:cleanup`, each on a line of its
+ *   own and each at most once; setup and batch must not be empty. An
+ *   optional `-- dude:batch-limit N` line sets the limit (default 1000).
+ * - Placeholder. `__BATCH_LIMIT__` in the batch is replaced by the limit.
+ * - Transactions. Setup runs in one transaction. Then the batch runs again
+ *   and again, each run its own transaction, so a batch's row locks and
+ *   writes are released at its commit. Last, cleanup runs in one
+ *   transaction with the file's schema_migrations record: a cleanup never
+ *   commits unless the file is recorded.
+ * - batch_count. Each batch must return exactly one row with an integer
+ *   batch_count column in 0..limit; anything else fails the migration,
+ *   which is then not recorded. The runner stops after a batch reports 0,
+ *   so a batch reports more than 0 while work remains, even when it changed
+ *   no row itself (277 reads one window of cursors per batch and reports 1
+ *   while windows remain).
+ * - Resumability. The batch keeps its own progress in the database (277's
+ *   progress table), so a migrate interrupted between batches, or refused
+ *   at its record, picks up from the last committed batch when it is run
+ *   again. Setup must therefore be idempotent and keep saved progress, and
+ *   a batch must be safe to run again over rows an earlier one filled.
+ */
 export const BATCH_SQL = "-- dude:batch-sql";
 
 interface BatchMigration {

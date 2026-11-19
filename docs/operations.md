@@ -786,9 +786,13 @@ validate` reports the same.
    release. If its `FEATURES` lists `validate`, run both `validate`s
    ([below](#validating-a-configuration)) and stop on a failure.
 2. Run the new `dude-migrate` with `DATABASE_URL` as the owner. It applies
-   what is new, each file in a transaction, and is safe to run again. It
-   refuses a migration whose file changed after it was applied.
+   what is new and is safe to run again. Most files run in one transaction
+   each; the exceptions are below. It refuses a migration whose file
+   changed after it was applied.
    `dude-migrate --status` lists applied and pending migrations.
+   One `dude-migrate` runs at a time per database: a second one started
+   meanwhile waits for the first (on an advisory lock), then finds the
+   first's migrations applied.
    A file whose first line is `-- dude:no-transaction` runs outside a
    transaction: one statement Postgres refuses inside one, such as
    `CREATE INDEX CONCURRENTLY` (076 builds `runs_conductor_run_idx` so,
@@ -798,6 +802,33 @@ validate` reports the same.
    index: drop it (`DROP INDEX CONCURRENTLY runs_conductor_run_idx`, or 107's
    `sessions_tier_idx`, or 108's `directives_resends_idx`) and run
    `dude-migrate` again.
+   A file whose first line is `-- dude:batch-sql` is a batch migration
+   (277 fills `events.causation_id` on answer records written before 273).
+   It takes many transactions, one per batch of at most 1000 rows, and
+   logs `applied <file> batch (<n> rows)` after each. Stopped part-way (a
+   killed process, a failed batch, a refused record), it resumes from the
+   last committed batch when `dude-migrate` runs again; nothing is skipped
+   or done twice. Between such runs its progress table
+   (`events_answer_causation_backfill_progress`) may exist; 280 drops it
+   once 277 is recorded. Leave it alone.
+   A batch waits for any transaction that holds one of the `events` rows
+   it fills, as long as that transaction stays open; there is no
+   timeout. A migrate that seems stuck shows in `pg_stat_activity`: its
+   backend has `wait_event_type = 'Lock'`, and `pg_blocking_pids(pid)`
+   names the session holding the row. Finish or end that session and the
+   batch goes on.
+   An install with a lot of answer history may, once 277 is done, rebuild
+   the indexes it grew, as the owner, one statement each (REINDEX takes one
+   index; `CONCURRENTLY` blocks no writes):
+
+   ```
+   REINDEX INDEX CONCURRENTLY events_pkey;
+   REINDEX INDEX CONCURRENTLY events_run_answer_causation_idx;
+   REINDEX INDEX CONCURRENTLY events_run_answer_claims_idx;
+   ```
+
+   A dense backfill updates many rows, and was measured to double the size
+   of `events_pkey`. dude-migrate does not do this itself.
    A migration that adds a uniqueness rule checks the data first and stops,
    naming what breaks it, before anything changes: 094 for two repositories
    of a project checked out under one name (rename one), 095 for two

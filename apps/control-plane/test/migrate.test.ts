@@ -1149,6 +1149,27 @@ async function temporaryMigration(name: string, contents: string): Promise<Migra
   return { version: name.split("_")[0]!, name, contents: async () => (await readFile(path)).toString("utf8") };
 }
 
+test("operations.md's Upgrading section describes batch migrations, and its REINDEX statements run on a migrated database", async () => {
+  const ops = await readFile(join(ROOT, "docs/operations.md"), "utf8");
+  const upgrading = ops.slice(ops.indexOf("## Upgrading"), ops.indexOf("### Validating a configuration"));
+  expect(upgrading).not.toContain("each file in a transaction");
+  for (const fact of ["-- dude:batch-sql", "many transactions", "resumes from the", "events_answer_causation_backfill_progress",
+    "pg_stat_activity", "pg_blocking_pids", "advisory lock"]) {
+    expect([fact, upgrading.includes(fact)]).toEqual([fact, true]);
+  }
+  const reindex = [...upgrading.matchAll(/^\s*(REINDEX INDEX CONCURRENTLY \w+;)$/gm)].map((m) => m[1]!);
+  expect(reindex).toEqual(["REINDEX INDEX CONCURRENTLY events_pkey;", "REINDEX INDEX CONCURRENTLY events_run_answer_causation_idx;",
+    "REINDEX INDEX CONCURRENTLY events_run_answer_claims_idx;"]);
+  const url = await createDatabase();
+  await migrate(url, { log: () => {} });
+  const sql = new SQL(url);
+  try {
+    for (const statement of reindex) await sql.unsafe(statement);
+  } finally {
+    await sql.end();
+  }
+}, 120_000);
+
 test("a batch migration that does not report exactly one integer batch_count is refused and not recorded", async () => {
   const url = await createDatabase();
   const sql = new SQL(url);
