@@ -799,6 +799,62 @@ test("277's backfill waits for a row another transaction holds, in batches, and 
   }
 }, 120_000);
 
+test("277-279's batch starts past the saved cursor, saves the last row it took, and its setup keeps a saved cursor", async () => {
+  const { url, sql } = await migratedBefore("277");
+  const locker = new SQL(url);
+  try {
+    await sql`INSERT INTO organizations (id, name, slug) VALUES ('org_k', 'K', 'k')`;
+    await sql`ALTER TABLE events DISABLE TRIGGER events_answer_causation_compat`;
+    await sql`INSERT INTO events (id, organization_id, event_type, run_id, actor_type, actor_id, source, payload)
+      SELECT 'ek' || g, 'org_k', 'pull_request.action', 'run_k', 'agent', 'x', 't', jsonb_build_object('answerId', 'hk' || g)
+      FROM generate_series(1, 5) g`;
+    await sql`ALTER TABLE events ENABLE TRIGGER events_answer_causation_compat`;
+    const cursors = (await sql`SELECT cursor::text AS c FROM events WHERE organization_id = 'org_k' ORDER BY cursor`).map((r: { c: string }) => r.c);
+    const section = (contents: string, name: string) => contents.split(/^-- dude:(?:setup|batch|cleanup)\s*$/m)[["setup", "batch", "cleanup"].indexOf(name) + 1]!;
+    for (const file of (await listMigrationFiles()).filter((f) => ["277", "278", "279"].includes(f.version))) {
+      const contents = await file.contents();
+      await sql`DROP TABLE IF EXISTS events_answer_causation_backfill_progress`;
+      await sql`UPDATE events SET causation_id = NULL WHERE organization_id = 'org_k'`;
+      await sql.unsafe(section(contents, "setup"));
+      // A cursor saved by an earlier, interrupted run: the first two are behind it.
+      await sql`UPDATE events_answer_causation_backfill_progress SET last_cursor = ${cursors[1]}::bigint WHERE migration_version = '277'`;
+      await sql.unsafe(section(contents, "setup"));
+      const batch = section(contents, "batch").replaceAll("__BATCH_LIMIT__", "2");
+      // A row another transaction holds is waited for, never skipped past.
+      let release!: () => void;
+      const released = new Promise<void>((r) => { release = r; });
+      let holding!: () => void;
+      const holds = new Promise<void>((r) => { holding = r; });
+      const lock = locker.begin(async (tx) => {
+        await tx`SELECT 1 FROM events WHERE id = 'ek3' FOR NO KEY UPDATE`;
+        holding();
+        await released;
+      });
+      await holds;
+      const waited = await sql.begin(async (tx) => {
+        await tx`SET LOCAL lock_timeout = '300ms'`;
+        await tx.unsafe(batch);
+      }).then(() => "took a batch", (err: Error) => err.message);
+      release();
+      await lock;
+      expect([file.name, waited]).toEqual([file.name, "canceling statement due to lock timeout"]);
+      const [first] = await sql.unsafe(batch);
+      expect([file.name, Number(first.batch_count)]).toEqual([file.name, 2]);
+      const [{ saved }] = await sql`SELECT last_cursor::text AS saved FROM events_answer_causation_backfill_progress WHERE migration_version = '277'`;
+      expect([file.name, saved]).toEqual([file.name, cursors[3]]);
+      expect([file.name, (await sql`SELECT id FROM events WHERE organization_id = 'org_k' AND causation_id IS NOT NULL ORDER BY cursor`).map((r: { id: string }) => r.id)])
+        .toEqual([file.name, ["ek3", "ek4"]]);
+      const [second] = await sql.unsafe(batch);
+      expect([file.name, Number(second.batch_count)]).toEqual([file.name, 1]);
+      const [third] = await sql.unsafe(batch);
+      expect([file.name, Number(third.batch_count)]).toEqual([file.name, 0]);
+    }
+  } finally {
+    await locker.end();
+    await sql.end();
+  }
+}, 120_000);
+
 test("271-272 upgrade 270 with the in-flight answers' reconciliations and the delivery-end index", async () => {
   const { url, sql } = await migratedBefore("271");
   try {
