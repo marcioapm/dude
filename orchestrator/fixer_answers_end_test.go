@@ -586,6 +586,11 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 		want      string
 		resolved  bool
 		uncertain bool
+		// thread is the first thread as the pass read it on GitHub, and so
+		// the branch it settled by: "absent" (no thread has its root
+		// comment), "unresolved" (there, not resolved), "resolved", or ""
+		// for a read that failed.
+		thread string
 	}{
 		{"resolved", func(a *answering, ref delivery.RunRef, ids []string) {
 			crashOn := errors.New("resolution poster crashed")
@@ -601,7 +606,7 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			a.store.AfterAnswerPost = nil
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 			expireReconciliationAnswer(t, a, ref)
-		}, "posted", true, false},
+		}, "posted", true, false, "resolved"},
 		{"absent", func(a *answering, ref delivery.RunRef, ids []string) {
 			crash := errors.New("resolution poster crashed")
 			a.store.AfterAnswerPost = func(id string) error {
@@ -614,10 +619,12 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 				t.Fatalf("resolution crash: %v", err)
 			}
 			a.store.AfterAnswerPost = nil
-			a.w.gh.Set(func(s *fakegithub.Server) { s.ResolvedThreads[s.ThreadID(a.first)] = false })
+			// The thread is gone from GitHub (its root comment deleted): the
+			// read finds no thread for it at all.
+			a.w.gh.DeleteLineComment(1, a.first)
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 			expireReconciliationAnswer(t, a, ref)
-		}, "withheld", false, false},
+		}, "withheld", false, false, "absent"},
 		{"unresolved", func(a *answering, ref delivery.RunRef, ids []string) {
 			crash := errors.New("resolution poster crashed")
 			a.store.AfterAnswerPost = func(id string) error {
@@ -630,10 +637,11 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 				t.Fatalf("resolution crash: %v", err)
 			}
 			a.store.AfterAnswerPost = nil
+			// The thread is there, and a person unresolved it.
 			a.w.gh.Set(func(s *fakegithub.Server) { s.ResolvedThreads[s.ThreadID(a.first)] = false })
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 			expireReconciliationAnswer(t, a, ref)
-		}, "withheld", false, false},
+		}, "withheld", false, false, "unresolved"},
 		{"unreadable", func(a *answering, ref delivery.RunRef, ids []string) {
 			crash := errors.New("resolution poster crashed")
 			a.store.AfterAnswerPost = func(id string) error {
@@ -655,7 +663,7 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			})
 			expireReconciliationAnswer(t, a, ref)
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
-		}, "uncertain", false, true},
+		}, "uncertain", false, true, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -668,6 +676,28 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			a.w.sync()
 			if got := a.outcome(t, ref.RunID, ids[3]); got != tc.want {
 				t.Fatalf("resolution outcome %q, want %q", got, tc.want)
+			}
+			// The branch the pass took: the first thread as GitHub gives
+			// it, read as the pass reads it (ReviewThreads, ThreadOf).
+			// Withholding writes nothing to GitHub, so this is what the
+			// pass read. Absent and unresolved both end withheld; this
+			// tells them apart.
+			if tc.thread != "" {
+				slug := forge.SlugFromURL(a.w.str(`SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id
+					JOIN events h ON h.payload->>'prId' = pr.id WHERE h.id = $1`, ids[3]))
+				threads, err := a.gh.ReviewThreads(context.Background(), slug, 1)
+				if err != nil {
+					t.Fatalf("reading the threads: %v", err)
+				}
+				branch := "absent"
+				if th := forge.ThreadOf(threads, a.first); th != nil && th.Resolved {
+					branch = "resolved"
+				} else if th != nil {
+					branch = "unresolved"
+				}
+				if branch != tc.thread {
+					t.Errorf("the pass settled by the %q branch, want %q", branch, tc.thread)
+				}
 			}
 			first, second := a.resolved()
 			if first != tc.resolved {
