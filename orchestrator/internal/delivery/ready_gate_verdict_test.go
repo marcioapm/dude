@@ -196,15 +196,26 @@ func TestTheReviewVerdictProfile(t *testing.T) {
 		{name: "a finding said to be already on the base", key: ReadyFindings,
 			setup:  func(f *gateFixture) string { h := f.ready(); f.finding("false"); return h },
 			merge:  answer{false, "fnd_v (high)"},
-			review: answer{true, "no open finding at the fix bar introduced by the pull request"}},
+			review: answer{true, "no open finding at medium or above introduced by the pull request"}},
 		{name: "a finding said nothing of", key: ReadyFindings,
 			setup:  func(f *gateFixture) string { h := f.ready(); f.finding("NULL"); return h },
 			merge:  answer{false, "fnd_v (high)"},
-			review: answer{false, "1 open finding(s) at the fix bar introduced by the pull request: fnd_v (high)"}},
+			review: answer{false, "1 open finding(s) at medium or above introduced by the pull request: fnd_v (high)"}},
 		{name: "a finding the pull request introduced", key: ReadyFindings,
 			setup:  func(f *gateFixture) string { h := f.ready(); f.finding("true"); return h },
 			merge:  answer{false, "fnd_v (high)"},
 			review: answer{false, "fnd_v (high)"}},
+		// The fix bar holds the merge on a trivial low; a review verdict's
+		// bar is the severity as filed, which a low never reaches.
+		{name: "a trivial low", key: ReadyFindings,
+			setup: func(f *gateFixture) string {
+				h := f.ready()
+				f.exec(`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status, trivial)
+					VALUES ('fnd_t', $1, 'wi_g', 'run_g02', 'correctness', 'low', 'A comment says as before', 'open', true)`)
+				return h
+			},
+			merge:  answer{false, "fnd_t (low)"},
+			review: answer{true, "no open finding at medium or above introduced by the pull request"}},
 		{name: "a person's feedback", key: ReadyQuestions,
 			setup:  func(f *gateFixture) string { h := f.ready(); f.personsFeedback(); return h },
 			merge:  answer{false, "1 feedback item(s)"},

@@ -287,6 +287,14 @@ func (d DiffLines) hunk(side string, line int) (int, bool) {
 	return 0, false
 }
 
+// Shows says line of the head's file is inside one of the diff's hunks
+// (its RIGHT side): a line the pull request added, or one beside its
+// change. False when no patch is known.
+func (d DiffLines) Shows(line int) bool {
+	_, in := d.hunk("RIGHT", line)
+	return d.Known && line > 0 && in
+}
+
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
 // parsePatch reads a file's patch (hunks only, as GitHub's files listing

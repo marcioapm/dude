@@ -165,13 +165,17 @@ func TestPullDiffLinesReadsThePatch(t *testing.T) {
 	if _, ok := a.hunk("RIGHT", 12); ok {
 		t.Error("right line 12 is in no hunk")
 	}
+	// Shows is the head side's: what a pull request's own lines are.
+	if !a.Shows(22) || a.Shows(12) || a.Shows(0) || got["nope.txt"].Shows(1) {
+		t.Error("Shows disagrees with the hunks")
+	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"filename":"huge.json","status":"modified","additions":90000}]`))
 	}))
 	defer srv.Close()
 	got, err = NewGitHub(Credential{Secret: "x", APIBaseURL: srv.URL}).PullDiffLines(context.Background(), "acme/repo", 1)
-	if d, ok := got["huge.json"]; err != nil || !ok || d.Known {
+	if d, ok := got["huge.json"]; err != nil || !ok || d.Known || d.Shows(1) {
 		t.Fatalf("no patch: %+v %v", got, err)
 	}
 	inline, folded := PlaceComments([]ReviewComment{{Path: "huge.json", Line: 1}}, got)

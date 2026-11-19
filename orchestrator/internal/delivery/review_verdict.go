@@ -319,10 +319,59 @@ type verdictFinding struct {
 	earlier *inlinePost
 }
 
-// blocks says the finding holds APPROVE back: at the fix bar, and not said
-// to be on the base already.
+// verdictSeverities are what holds a review-only verdict's APPROVE back,
+// as the reviewer filed it. Not the fix bar (atFixBar): there a trivial
+// low is dude's own to fix; here a low of any kind is the author's to
+// weigh, posted as a nit, never a reason to request changes.
+var verdictSeverities = []string{"blocking", "high", "medium"}
+
+// blocks says the finding holds APPROVE back: medium or above as filed,
+// and not said to be on the base already. (Every verdictFinding is open.)
 func (f verdictFinding) blocks() bool {
-	return (f.Introduced == nil || *f.Introduced) && IsBlocking(atFixBar([]FindingState{{Severity: f.Severity, Status: "open", Trivial: f.Trivial}})[0])
+	return (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
+}
+
+// verdictFindingsItem is the verdict's findings item, from the findings as
+// the review shows them (blocks): the gate's, its introduced read again
+// against the pull request's own lines (ownLines).
+func verdictFindingsItem(findings []verdictFinding) GateItem {
+	var blocking []string
+	for _, f := range findings {
+		if f.blocks() {
+			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, f.Severity, f.Title))
+		}
+	}
+	return findingsItem(blocking, verdictBar)
+}
+
+// ownLines takes a finding filed `introduced: no` at a line inside a hunk
+// the pull request adds or changes (diff, its files' patches) as
+// introduced: the pull request wrote that line, so its problem is the
+// pull request's. One with no file or line, or in a file the pull request
+// does not change, or one GitHub sent no patch for, keeps what it was
+// filed with. Only a review-only verdict reads introduced so (reviewOnly);
+// a writing delivery's findings are left as filed.
+func ownLines(findings []verdictFinding, diff map[string]forge.DiffLines, reviewOnly bool) {
+	if !reviewOnly {
+		return
+	}
+	for i, f := range findings {
+		if f.Introduced == nil || *f.Introduced || f.File == "" || f.Line <= 0 {
+			continue
+		}
+		if diff[f.File].Shows(f.Line) {
+			yes := true
+			findings[i].Introduced = &yes
+		}
+	}
+}
+
+// onBaseCandidates says some finding is filed on the base at a line: the
+// pull request's diff is read for ownLines only then.
+func onBaseCandidates(findings []verdictFinding) bool {
+	return slices.ContainsFunc(findings, func(f verdictFinding) bool {
+		return f.Introduced != nil && !*f.Introduced && f.File != "" && f.Line > 0
+	})
 }
 
 // inlineText is the words of dude's inline comment for the finding.
@@ -360,7 +409,7 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 	}
 	var comments []forge.ReviewComment
 	var ids []string
-	var onBase, stillOpen []string
+	var onBase, stillOpen, suggestions []string
 	for _, f := range findings {
 		if f.Introduced != nil && !*f.Introduced {
 			onBase = append(onBase, fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f)))
@@ -370,6 +419,12 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			line := fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f))
 			if e.URL != "" {
 				line += ": " + e.URL
+			}
+			// Still open lists what holds the verdict; a nit commented on
+			// earlier is a suggestion, and holds nothing.
+			if !f.blocks() {
+				suggestions = append(suggestions, line)
+				continue
 			}
 			stillOpen = append(stillOpen, e.Head, line)
 			continue
@@ -389,6 +444,9 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			fmt.Fprintf(&b, "\n\n**Still open from %s**", short(last))
 		}
 		b.WriteString("\n" + stillOpen[i+1])
+	}
+	if len(suggestions) > 0 {
+		fmt.Fprintf(&b, "\n\n**Suggestions (not blocking)**\n%s", strings.Join(suggestions, "\n"))
 	}
 	if len(onBase) > 0 {
 		fmt.Fprintf(&b, "\n\n**Already on %s (not blocking)**\n%s", base, strings.Join(onBase, "\n"))
@@ -526,6 +584,27 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	gates := DoReadyGate(ctx, gh, c)
 	if len(gates) == 0 {
 		return workflow.Result{}, fmt.Errorf("no gate read for %s", prID)
+	}
+	// A finding filed on the base at a line the pull request wrote is the
+	// pull request's (ownLines): its diff, read once for this verdict at
+	// the head the gate just read, decides it, and the findings item is
+	// the review's own reading of them.
+	var diff map[string]forge.DiffLines
+	if gates[0].Err == nil && st.Source.ReviewOnly() && onBaseCandidates(findings) && gh != nil {
+		diff, err = gh.PullDiffLines(ctx, pr.Slug, pr.Number)
+		if err != nil && !forge.Refused(err) {
+			return workflow.Result{}, workflow.Wait{After: max(forge.RetryAfter(err), readyGateRetry), Why: "reading the pull request's diff for the verdict: " + err.Error()}
+		}
+		// Refused (no such pull request, a diff too large): no line is
+		// known to be the pull request's; each finding stays as filed.
+		ownLines(findings, diff, st.Source.ReviewOnly())
+	}
+	if gates[0].Err == nil {
+		for i, it := range gates[0].Items {
+			if it.Key == ReadyFindings {
+				gates[0].Items[i] = verdictFindingsItem(findings)
+			}
+		}
 	}
 	now := time.Now()
 	in.Gate, in.CIAsked = gates[0], v.CIAsked == head

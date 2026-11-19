@@ -550,6 +550,15 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 	if err != nil {
 		return GateItem{}, err
 	}
+	if introducedOnly {
+		// A review verdict's bar is the severity as filed (verdictFinding's
+		// blocks), never the fix bar: a low, trivial or not, holds nothing.
+		var vs []verdictFinding
+		for _, f := range found {
+			vs = append(vs, verdictFinding{ID: f.ID, Severity: f.Severity, Title: f.Title})
+		}
+		return verdictFindingsItem(vs), nil
+	}
 	states := make([]FindingState, len(found))
 	for i, f := range found {
 		states[i] = f.FindingState
@@ -560,15 +569,20 @@ func gateFindingsTx(ctx context.Context, tx pgx.Tx, taskID string, attempt int, 
 			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, found[i].Severity, found[i].Title))
 		}
 	}
-	bar := "at the fix bar"
-	if introducedOnly {
-		bar += " introduced by the pull request"
-	}
+	return findingsItem(blocking, "at the fix bar"), nil
+}
+
+// verdictBar is the findings item's words for a review verdict's bar.
+const verdictBar = "at medium or above introduced by the pull request"
+
+// findingsItem is the findings item for the blocking findings' lines, at
+// the bar bar names.
+func findingsItem(blocking []string, bar string) GateItem {
 	if len(blocking) == 0 {
-		return GateItem{Key: ReadyFindings, OK: true, Detail: "no open finding " + bar}, nil
+		return GateItem{Key: ReadyFindings, OK: true, Detail: "no open finding " + bar}
 	}
 	return GateItem{Key: ReadyFindings, Detail: fmt.Sprintf("%d open finding(s) %s: %s",
-		len(blocking), bar, strings.Join(blocking, "; "))}, nil
+		len(blocking), bar, strings.Join(blocking, "; "))}
 }
 
 // gateQuestionsTx is the questions item: no question of the conductor's
