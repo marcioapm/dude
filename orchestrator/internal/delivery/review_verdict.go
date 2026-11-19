@@ -653,6 +653,17 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		if err != nil && !forge.Refused(err) {
 			return workflow.Result{}, workflow.Wait{After: max(forge.RetryAfter(err), readyGateRetry), Why: "reading the pull request's diff for the verdict: " + err.Error()}
 		}
+		if err == nil {
+			// /pulls/files has no ref. Verify that the unpinned response still
+			// belongs to the head used by the gate before classifying findings.
+			now, headErr := gh.Head(ctx, pr.Slug, pr.Number)
+			if headErr != nil {
+				return workflow.Result{}, workflow.Wait{After: max(forge.RetryAfter(headErr), readyGateRetry), Why: "rechecking the pull request's head after reading its diff: " + headErr.Error()}
+			}
+			if now != head {
+				return workflow.Result{}, workflow.Wait{After: readyGateRetry, Why: "the pull request moved while reading its diff"}
+			}
+		}
 		// Refused (no such pull request, a diff too large): no line is
 		// known to be the pull request's; each finding stays as filed.
 		ownLines(findings, diff, st.Source.ReviewOnly())
@@ -872,6 +883,14 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		if err != nil {
 			return "", workflow.Wait{After: readyGateRetry, Why: "reading the diff before the review: " + err.Error()}
 		}
+		now, err = gh.Head(ctx, pr.Slug, pr.Number)
+		if err != nil {
+			return "", workflow.Wait{After: readyGateRetry, Why: "rechecking the head after reading the diff: " + err.Error()}
+		}
+		if now != head {
+			return "", w.s.Emit(ctx, org, st, EvReviewAbandoned, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
+				"head": head, "why": "head_moved", "githubHead": now})
+		}
 		inline, folded := forge.PlaceComments(comments, diff)
 		in := forge.SubmitReview{Slug: pr.Slug, Number: pr.Number, CommitID: head, Event: event,
 			Body: forge.FoldComments(marked, folded), Comments: inline}
@@ -967,6 +986,14 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		diff, err := gh.PullDiffLines(ctx, pr.Slug, pr.Number)
 		if err != nil {
 			return retry(err, "reading the diff before refreshing dude's review")
+		}
+		now, err = gh.Head(ctx, pr.Slug, pr.Number)
+		if err != nil {
+			return retry(err, "rechecking the head after refreshing dude's diff")
+		}
+		if now != head {
+			v.settled(v.ChecksNoted)
+			return nil
 		}
 		var inline []forge.ReviewComment
 		if inline, folded = forge.PlaceComments(comments, diff); read && !posted {
