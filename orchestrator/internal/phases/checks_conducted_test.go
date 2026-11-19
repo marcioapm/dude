@@ -787,6 +787,12 @@ func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
 		{"a background checkout", "", [][]any{{"git checkout " + sha + " & make test", 2}}, "none recorded"},
 		{"an ANSI-C quote at the base", "", [][]any{{"git checkout " + sha + ` && make test $'\'' ; true '\'`, 2}}, "none recorded"},
 		{"tabs at the base", "", [][]any{{"git checkout\t" + sha + "  &&\tmake  test", 2}}, "exit 2"},
+		// #484 round 6: a report with a redirect is not the call without it
+		// (bash t.sh > t.sh empties t.sh before bash reads it), so the base
+		// call's exit is not the reported command's.
+		{"reported with a redirect onto its script, run without", "bash t.sh > t.sh", [][]any{{"git checkout " + sha + " && bash t.sh", 2, "FAIL: TestX\nexit status 2"}}, "none recorded"},
+		{"reported with its output discarded, run without", "make test > /dev/null 2>&1", [][]any{{"git checkout " + sha + " && make test", 2, "FAIL: TestX\nexit status 2"}}, "none recorded"},
+		{"reported merging stderr, run without", "make test 2>&1", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 2, "FAIL: TestX\nexit status 2"}}, "none recorded"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newHarnessWorld(t)

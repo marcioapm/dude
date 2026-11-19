@@ -126,6 +126,15 @@ var unprovenPasses = []struct{ name, reported, recorded string }{
 	// Only echo prints the status: true takes exit=$? and prints nothing,
 	// so the output's last line is ./run.sh's own, and the call exits 0.
 	{"a status passed to true, not echoed", "./run.sh", "./run.sh; true exit=$?"},
+	// #484 round 6: the -u guard reads every expansion of the report, its
+	// pipe stages and redirect targets too. With F unset, bash exits 1 and
+	// dash 2 on each report; each recorded call exits 0.
+	{"a -u report expanding $F in a pipe stage, run without -u", "set -euo pipefail && make test | tail -n 5 $F", "set -o pipefail && make test | tail -n 5 $F"},
+	{"a -u report expanding ${F} in a pipe stage, run without -u", "set -euo pipefail && make test | tail -n 5 ${F}", "set -o pipefail && make test | tail -n 5 ${F}"},
+	{`a -u report expanding "$F" in a pipe stage, run without -u`, `set -euo pipefail; make test | tail "$F"`, `set -o pipefail; make test | tail "$F"`},
+	{"a -u report expanding $F in a redirect target, run without -u", "set -euo pipefail && make test > log$F", "make test > log$F"},
+	{"a -u report expanding ${F} in a redirect target, run without -u", "set -euo pipefail && make test 2> err${F}", "set -o pipefail && make test 2> err${F}"},
+	{`a -u report expanding "$F" in a redirect target, run without -u`, `set -euo pipefail && make test > "$F"`, `make test > "$F"`},
 }
 
 // unreadReports are reported commands dude does not read (a comment, a
