@@ -276,12 +276,12 @@ func (a *AnswerReconciler) settle(ctx context.Context, r reconcileRow, outcome, 
 			}
 		case reconciledWithheld:
 			// Directly: failAnswerTx leaves an answer in reconciliation alone.
-			if _, err := ledger.Append(ctx, tx, r.ref.Event(EvAnswerFailed, ledger.ActorSystem, map[string]any{"answerId": r.h.ID,
+			if _, err := ledger.Append(ctx, tx, answerEvent(r.ref, EvAnswerFailed, r.h.ID, map[string]any{"answerId": r.h.ID,
 				"kind": r.h.Kind, "error": why, "withheld": true})); err != nil {
 				return err
 			}
 		default:
-			if _, err := ledger.Append(ctx, tx, r.ref.Event(EvAnswerFailed, ledger.ActorSystem, map[string]any{"answerId": r.h.ID,
+			if _, err := ledger.Append(ctx, tx, answerEvent(r.ref, EvAnswerFailed, r.h.ID, map[string]any{"answerId": r.h.ID,
 				"kind": r.h.Kind, "error": fmt.Sprintf("%s: %s", why, detail), "uncertain": true})); err != nil {
 				return err
 			}

@@ -31,6 +31,11 @@ CREATE TABLE answer_reconciliations (
 );
 -- The pass's candidates: open, by when they are due. Settled rows leave it.
 CREATE INDEX answer_reconciliations_due_idx ON answer_reconciliations (due_at) WHERE settled_at IS NULL;
+-- A fixer's answers in reconciliation, which its poster's selection leaves
+-- out (delivery.reconciling): by Run, as that probe names it, never every
+-- row the organization ever reconciled.
+CREATE INDEX answer_reconciliations_run_idx ON answer_reconciliations (run_id, answer_id);
+-- The task's delete cascades here.
 CREATE INDEX answer_reconciliations_task_idx ON answer_reconciliations (task_id);
 ALTER TABLE answer_reconciliations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE answer_reconciliations FORCE ROW LEVEL SECURITY;

@@ -447,6 +447,6 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: c.ref.Org, ProjectID: c.ref.ProjectID,
 		TaskID: c.ref.TaskID, RunID: c.ref.RunID, ActorType: ledger.ActorAgent, ActorID: c.ref.RunID,
-		Source: ledger.SourceOrchestrator, CorrelationID: c.ref.TaskID, Payload: payload})
+		Source: ledger.SourceOrchestrator, CorrelationID: c.ref.TaskID, CausationID: c.answerID, Payload: payload})
 	return payload, err
 }

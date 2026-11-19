@@ -56,15 +56,19 @@ const (
 // { why }.
 const EvAnswersEnded = "pull_request.answers_ended"
 
+// endedAfterSQL is endedAfterTx's ($1 the task, $2 the answer).
+var endedAfterSQL = `SELECT COALESCE(m.why, '') FROM (SELECT m.payload->>'why' AS why, m.cursor FROM events m
+		WHERE m.task_id = $1 AND m.event_type = '` + EvAnswersEnded + `' ORDER BY m.cursor DESC LIMIT 1) m
+	WHERE m.cursor > (SELECT h.cursor FROM events h WHERE h.id = $2)`
+
 // endedAfterTx is why the task's delivery ended after held answer id was
-// made ("" if it has not): the newest EvAnswersEnded with a later cursor.
-// Its type is a literal: events_task_answers_ended_idx (migration 272).
+// made ("" if it has not): the task's newest EvAnswersEnded, if its cursor
+// is later. The task's newest, read on events_task_answers_ended_idx
+// (migration 272; its type a literal), then compared: never every
+// delivery's end in the organization since the answer.
 func endedAfterTx(ctx context.Context, tx pgx.Tx, taskID, id string) (string, error) {
 	var why string
-	err := tx.QueryRow(ctx, `SELECT COALESCE(m.payload->>'why', '') FROM events m
-		WHERE m.task_id = $1 AND m.event_type = '`+EvAnswersEnded+`'
-		  AND m.cursor > (SELECT h.cursor FROM events h WHERE h.id = $2)
-		ORDER BY m.cursor DESC LIMIT 1`, taskID, id).Scan(&why)
+	err := tx.QueryRow(ctx, endedAfterSQL, taskID, id).Scan(&why)
 	if err == pgx.ErrNoRows {
 		return "", nil
 	}
@@ -114,17 +118,7 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 			return nil, err
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT h.run_id, r.project_id, h.id, h.payload,
-			COALESCE((SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo,
-				e.payload->>'headSha' AS head FROM events e WHERE e.run_id = h.run_id AND `+isCommitCreated("e")+`
-				ORDER BY e.payload->>'repo', e.cursor DESC) c), '{}'::jsonb),
-			c.occurred_at
-		FROM runs r JOIN events h ON h.run_id = r.id AND `+isHeld("h")+`
-		LEFT JOIN LATERAL (SELECT c.occurred_at FROM events c
-			WHERE c.run_id = h.run_id AND c.event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("c")+` = h.id
-			ORDER BY c.cursor DESC LIMIT 1) c ON true
-		WHERE r.task_id = $1 AND r.phase = 'fix' AND NOT `+answerSettled("h")+`
-		ORDER BY r.created_at, r.id, h.cursor`, taskID)
+	rows, err := tx.Query(ctx, endHeldSQL, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +188,20 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 	}
 	return out, nil
 }
+
+// endHeldSQL is the delivery end's read ($1 the task): every unsettled
+// held answer of its fix Runs, its fixer's heads, and its latest claim.
+var endHeldSQL = `SELECT h.run_id, r.project_id, h.id, h.payload,
+			COALESCE((SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo,
+				e.payload->>'headSha' AS head FROM events e WHERE e.run_id = h.run_id AND ` + isCommitCreated("e") + `
+				ORDER BY e.payload->>'repo', e.cursor DESC) c), '{}'::jsonb),
+			c.occurred_at
+		FROM runs r JOIN events h ON h.run_id = r.id AND ` + isHeld("h") + `
+		LEFT JOIN LATERAL (SELECT c.occurred_at FROM events c
+			WHERE c.run_id = h.run_id AND c.event_type = '` + EvAnswerClaimed + `' AND ` + settledAnswerID("c") + ` = h.id
+			ORDER BY c.cursor DESC LIMIT 1) c ON true
+		WHERE r.task_id = $1 AND r.phase = 'fix' AND NOT ` + answerSettled("h") + `
+		ORDER BY r.created_at, r.id, h.cursor`
 
 // answerReconcileAfter is how long after a claim the pass reads GitHub for
 // an in-flight answer of an ended delivery: twice the claim's lease, past

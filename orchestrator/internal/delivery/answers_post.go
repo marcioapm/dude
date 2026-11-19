@@ -156,14 +156,7 @@ func (s *Store) PostFixerAnswers(ctx context.Context, org, taskID string, gh *fo
 // settled and a fix published, oldest publication first, each with its
 // published head by repository (its latest) and when it ended.
 func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixerToPost, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id, r.project_id, COALESCE(r.ended_at, r.created_at),
-			(SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo, e.payload->>'headSha' AS head
-				FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+` ORDER BY e.payload->>'repo', e.cursor DESC) c),
-			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`) AS published
-		FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix' AND r.status IN ('completed', 'failed', 'aborted')
-		  AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND `+isCommitCreated("e")+`)
-		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND `+isHeld("h")+` AND NOT `+answerSettled("h")+` AND NOT `+reconciling("h")+`)
-		ORDER BY published, r.id`, taskID)
+	rows, err := tx.Query(ctx, fixersToPostSQL, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -181,30 +174,51 @@ func fixersToPostTx(ctx context.Context, tx pgx.Tx, org, taskID string) ([]fixer
 	return out, rows.Err()
 }
 
+// fixersToPostSQL is fixersToPostTx's selection ($1 the task).
+var fixersToPostSQL = `SELECT r.id, r.project_id, COALESCE(r.ended_at, r.created_at),
+			(SELECT jsonb_object_agg(c.repo, c.head) FROM (SELECT DISTINCT ON (e.payload->>'repo') e.payload->>'repo' AS repo, e.payload->>'headSha' AS head
+				FROM events e WHERE e.run_id = r.id AND ` + isCommitCreated("e") + ` ORDER BY e.payload->>'repo', e.cursor DESC) c),
+			(SELECT min(e.cursor) FROM events e WHERE e.run_id = r.id AND ` + isCommitCreated("e") + `) AS published
+		FROM runs r WHERE r.task_id = $1 AND r.phase = 'fix' AND r.status IN ('completed', 'failed', 'aborted')
+		  AND EXISTS (SELECT 1 FROM events e WHERE e.run_id = r.id AND ` + isCommitCreated("e") + `)
+		  AND EXISTS (SELECT 1 FROM events h WHERE h.run_id = r.id AND ` + isHeld("h") + ` AND NOT ` + answerSettled("h") + ` AND NOT ` + reconciling("h") + `)
+		ORDER BY published, r.id`
+
 // answerSettled (SQL) says the EvAnswerHeld event h is settled: a record
-// on its Run names it (its reply's chat.message, its resolution's
-// pull_request.action, or its EvAnswerFailed).
-// Its event types and the answer's id expression are literally those of
-// events_run_answer_settled_idx (migration 269), so a generic plan finds
-// the record by (run, answer id) there.
+// on its Run caused by it (its reply's chat.message, its resolution's
+// pull_request.action, or its EvAnswerFailed: answerEvent).
+// Its event types, and causation_id, are literally those of
+// events_run_answer_causation_idx (migrations 273, 274): plain column equality
+// is leakproof, so under RLS (run, answer) is that index's condition, not
+// a filter over every settling record of the Run.
 func answerSettled(h string) string {
 	return `EXISTS (SELECT 1 FROM events s WHERE s.run_id = ` + h + `.run_id
 		AND s.event_type IN ('` + EvChatMessage + `', '` + EvPullRequestAction + `', '` + EvAnswerFailed + `')
 		AND ` + settledAnswerID("s") + ` = ` + h + `.id)`
 }
 
-// reconciling (SQL) says the EvAnswerHeld event h was in flight when its
-// delivery ended: the reconciliation settles it, never a poster's new
-// claim (answers_end.go).
-func reconciling(h string) string {
-	return `EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.answer_id = ` + h + `.id)`
+// settledAnswerID (SQL) is the held answer a settling record or a claim on
+// events e names: its causation_id (answerEvent). The payload's answerId
+// is kept for people and older readers; it is not what the queries match,
+// as ->> is not leakproof and an expression on it is no index condition
+// under RLS.
+func settledAnswerID(e string) string {
+	return e + `.causation_id`
 }
 
-// settledAnswerID (SQL) is the held answer a settling record on events e
-// names: a pull_request.action's or EvAnswerFailed's answerId, a
-// chat.message's github.answerId.
-func settledAnswerID(e string) string {
-	return `COALESCE(` + e + `.payload->>'answerId', ` + e + `.payload->'github'->>'answerId')`
+// reconciling (SQL) says the EvAnswerHeld event h was in flight when its
+// delivery ended: the reconciliation settles it, never a poster's new
+// claim (answers_end.go). By Run and answer: answer_reconciliations_run_idx.
+func reconciling(h string) string {
+	return `EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.run_id = ` + h + `.run_id AND x.answer_id = ` + h + `.id)`
+}
+
+// answerEvent is a held answer's claim or settling record on ref's Run,
+// caused by the answer (its EvAnswerHeld id).
+func answerEvent(ref RunRef, typ, answerID string, payload map[string]any) ledger.Event {
+	e := ref.Event(typ, ledger.ActorSystem, payload)
+	e.CausationID = answerID
+	return e
 }
 
 // isHeld and isCommitCreated (SQL) say events e is an EvAnswerHeld or a
@@ -220,12 +234,15 @@ type heldOf struct {
 	heldAnswer
 }
 
+// unsettledSQL is unsettledTx's ($1 the Run).
+var unsettledSQL = `SELECT h.id, h.payload FROM events h WHERE h.run_id = $1 AND ` + isHeld("h") + `
+		AND NOT ` + answerSettled("h") + ` AND NOT ` + reconciling("h") + `
+		ORDER BY h.payload->>'kind' = '` + answerResolve + `', h.cursor`
+
 // unsettledTx is Run runID's held answers not settled: replies in the
 // order made, then resolutions in the order made.
 func unsettledTx(ctx context.Context, tx pgx.Tx, runID string) ([]heldOf, error) {
-	rows, err := tx.Query(ctx, `SELECT h.id, h.payload FROM events h WHERE h.run_id = $1 AND `+isHeld("h")+`
-		AND NOT `+answerSettled("h")+` AND NOT `+reconciling("h")+`
-		ORDER BY h.payload->>'kind' = '`+answerResolve+`', h.cursor`, runID)
+	rows, err := tx.Query(ctx, unsettledSQL, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,11 +262,13 @@ func unsettledTx(ctx context.Context, tx pgx.Tx, runID string) ([]heldOf, error)
 	return out, rows.Err()
 }
 
+// settledSQL is settledTx's ($1 the Run, $2 the answer).
+var settledSQL = `SELECT ` + answerSettled("h") + ` FROM (SELECT $1::text AS run_id, $2::text AS id) h`
+
 // settledTx says held answer id of Run runID is settled.
 func settledTx(ctx context.Context, tx pgx.Tx, runID, id string) (bool, error) {
 	var ok bool
-	err := tx.QueryRow(ctx, `SELECT `+answerSettled("h")+` FROM (SELECT $1::text AS run_id, $2::text AS id) h`,
-		runID, id).Scan(&ok)
+	err := tx.QueryRow(ctx, settledSQL, runID, id).Scan(&ok)
 	return ok, err
 }
 
@@ -273,19 +292,22 @@ func failAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why stri
 	if withheld {
 		p["withheld"] = true
 	}
-	_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerFailed, ledger.ActorSystem, p))
+	_, err := ledger.Append(ctx, tx, answerEvent(ref, EvAnswerFailed, h.ID, p))
 	return err
 }
+
+// inFlightSQL is inFlightTx's ($1 the Run, $2 the answer, $3 the lease in seconds).
+var inFlightSQL = `SELECT EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.run_id = $1 AND x.answer_id = $2)
+		OR COALESCE((SELECT NOT COALESCE((c.payload->>'released')::bool, false) AND c.occurred_at > now() - make_interval(secs => $3)
+			FROM events c WHERE c.run_id = $1 AND c.event_type = '` + EvAnswerClaimed + `' AND ` + settledAnswerID("c") + ` = $2
+			ORDER BY c.cursor DESC LIMIT 1), false)`
 
 // inFlightTx says held answer id may be being written to GitHub: its latest
 // claim is unreleased and inside its lease, or the delivery's end left it
 // to reconcile (answer_reconciliations).
 func inFlightTx(ctx context.Context, tx pgx.Tx, runID, id string) (bool, error) {
 	var busy bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.answer_id = $2)
-		OR COALESCE((SELECT NOT COALESCE((c.payload->>'released')::bool, false) AND c.occurred_at > now() - make_interval(secs => $3)
-			FROM events c WHERE c.run_id = $1 AND c.event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("c")+` = $2
-			ORDER BY c.cursor DESC LIMIT 1), false)`, runID, id, answerClaimLease.Seconds()).Scan(&busy)
+	err := tx.QueryRow(ctx, inFlightSQL, runID, id, answerClaimLease.Seconds()).Scan(&busy)
 	return busy, err
 }
 
@@ -520,6 +542,12 @@ var errAnswerEnded = errors.New("the delivery ended: the answer is not claimed")
 // crashing there.
 type BeforeAnswerWrite func(answerID string) error
 
+// claimLookupSQL is the latest claim on a held answer ($1 the Run, $2 the
+// answer): events_run_answer_claims_idx (migration 275) by (run, answer),
+// latest first.
+var claimLookupSQL = `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
+	WHERE run_id = $1 AND event_type = '` + EvAnswerClaimed + `' AND ` + settledAnswerID("events") + ` = $2 ORDER BY cursor DESC LIMIT 1`
+
 // claimAnswerTx claims held answer h for a GitHub write, under the task's
 // Chat lock: skip when it is settled already; errAnswerEnded when the
 // delivery ended after it was made (no claim, ever, after the end);
@@ -539,9 +567,7 @@ func (s *Store) claimAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h held
 	}
 	var at time.Time
 	var released bool
-	err = tx.QueryRow(ctx, `SELECT occurred_at, COALESCE((payload->>'released')::bool, false) FROM events
-		WHERE run_id = $1 AND event_type = '`+EvAnswerClaimed+`' AND `+settledAnswerID("events")+` = $2 ORDER BY cursor DESC LIMIT 1`,
-		ref.RunID, h.ID).Scan(&at, &released)
+	err = tx.QueryRow(ctx, claimLookupSQL, ref.RunID, h.ID).Scan(&at, &released)
 	switch {
 	case err == nil:
 		if !released && time.Since(at) < answerClaimLease {
@@ -562,7 +588,7 @@ func (s *Store) writeClaimTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldO
 			return err
 		}
 	}
-	_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID}))
+	_, err := ledger.Append(ctx, tx, answerEvent(ref, EvAnswerClaimed, h.ID, map[string]any{"answerId": h.ID}))
 	return err
 }
 
@@ -580,7 +606,7 @@ func (s *Store) beforeWrite(id string) error {
 // later pass retries at once rather than past the lease.
 func (s *Store) releaseClaim(ctx context.Context, ref RunRef, h heldOf) {
 	_ = s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		_, err := ledger.Append(ctx, tx, ref.Event(EvAnswerClaimed, ledger.ActorSystem, map[string]any{"answerId": h.ID, "released": true}))
+		_, err := ledger.Append(ctx, tx, answerEvent(ref, EvAnswerClaimed, h.ID, map[string]any{"answerId": h.ID, "released": true}))
 		return err
 	})
 }
