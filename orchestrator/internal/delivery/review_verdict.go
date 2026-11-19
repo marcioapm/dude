@@ -119,7 +119,8 @@ type verdictInput struct {
 	Gate PRGate
 	// Lenses whose latest review Run at H failed or was aborted (the gate
 	// reads completed Runs only).
-	Unfinished []string
+	Unfinished   []string
+	FailureNotes []string
 	// The conductor was asked about the failing checks at H already.
 	CIAsked bool
 	// ci_stuck: checks pending at H past the organization's patience.
@@ -237,10 +238,15 @@ func decideVerdict(in verdictInput) verdictDecision {
 		notes = append(notes, "Before approving: "+strings.Join(asked, "; "))
 	}
 	post := func(event, reason, headline string) verdictDecision {
+		if reason == reasonLensFailed || reason == reasonNotReviewed {
+			// The historical gate's findings count is not evidence at H.
+			notes = slices.DeleteFunc(slices.Clone(notes), func(n string) bool { return n == items[ReadyFindings].Detail })
+		}
 		return verdictDecision{Action: verdictPost, Event: event, Reason: reason, Headline: headline, Notes: notes}
 	}
 	// 2. Not every lens finished at H: nothing to vouch for.
 	if len(in.Unfinished) > 0 {
+		notes = append(notes, in.FailureNotes...)
 		return post(forge.EventComment, reasonLensFailed, fmt.Sprintf("Could not complete the review at %s: %s did not finish", h, strings.Join(in.Unfinished, ", ")))
 	}
 	if it := items[ReadyReviewed]; !it.OK {
@@ -314,15 +320,69 @@ type verdictFinding struct {
 	Line                                                    int
 	Trivial                                                 bool
 	Introduced                                              *bool
+	Checked                                                 bool
+	Judgement                                               string
 	// The inline comment an earlier review of dude's made for it, if one
 	// did: not repeated, listed as still open (design §6.4).
 	earlier *inlinePost
 }
 
-// blocks says the finding holds APPROVE back: at the fix bar, and not said
-// to be on the base already.
+// verdictSeverities are what holds a review-only verdict's APPROVE back,
+// as the reviewer filed it. Not the fix bar (atFixBar): there a trivial
+// low is dude's own to fix; here a low of any kind is the author's to
+// weigh, posted as a nit, never a reason to request changes.
+var verdictSeverities = []string{"blocking", "high", "medium"}
+
+// blocks says the finding holds APPROVE back: medium or above as filed,
+// and not said to be on the base already. (Every verdictFinding is open.)
 func (f verdictFinding) blocks() bool {
-	return (f.Introduced == nil || *f.Introduced) && IsBlocking(atFixBar([]FindingState{{Severity: f.Severity, Status: "open", Trivial: f.Trivial}})[0])
+	return (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
+}
+
+// verdictFindingsItem is the verdict's findings item, from the findings as
+// the review shows them (blocks): the gate's, its introduced read again
+// against the pull request's own lines (ownLines).
+func verdictFindingsItem(findings []verdictFinding) GateItem {
+	var blocking []string
+	for _, f := range findings {
+		if !f.Checked || f.Judgement == "fixed" {
+			continue
+		}
+		if f.blocks() {
+			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, f.Severity, f.Title))
+		}
+	}
+	return findingsItem(blocking, verdictBar)
+}
+
+// ownLines takes a finding filed `introduced: no` at a line inside a hunk
+// the pull request adds or changes (diff, its files' patches) as
+// introduced: the pull request wrote that line, so its problem is the
+// pull request's. One with no file or line, or in a file the pull request
+// does not change, or one GitHub sent no patch for, keeps what it was
+// filed with. Only a review-only verdict reads introduced so (reviewOnly);
+// a writing delivery's findings are left as filed.
+func ownLines(findings []verdictFinding, diff map[string]forge.DiffLines, reviewOnly bool) {
+	if !reviewOnly {
+		return
+	}
+	for i, f := range findings {
+		if f.Introduced == nil || *f.Introduced || f.File == "" || f.Line <= 0 {
+			continue
+		}
+		if diff[f.File].IsAdded(f.Line) {
+			yes := true
+			findings[i].Introduced = &yes
+		}
+	}
+}
+
+// onBaseCandidates says some finding is filed on the base at a line: the
+// pull request's diff is read for ownLines only then.
+func onBaseCandidates(findings []verdictFinding) bool {
+	return slices.ContainsFunc(findings, func(f verdictFinding) bool {
+		return f.Introduced != nil && !*f.Introduced && f.File != "" && f.Line > 0
+	})
 }
 
 // inlineText is the words of dude's inline comment for the finding.
@@ -354,14 +414,29 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 	}
 	b.WriteString(".\n")
 	for _, n := range d.Notes {
+		if d.Reason == reasonLensFailed || d.Reason == reasonNotReviewed {
+			// The historical gate's findings count is not evidence at H.
+			if strings.Contains(n, "open finding(s)") {
+				continue
+			}
+		}
 		if !strings.Contains(d.Headline, n) {
 			b.WriteString("\n- " + n)
 		}
 	}
 	var comments []forge.ReviewComment
 	var ids []string
-	var onBase, stillOpen []string
+	var onBase, stillOpen, suggestions, unchecked, fixed []string
+	incomplete := d.Reason == reasonLensFailed || d.Reason == reasonNotReviewed
 	for _, f := range findings {
+		if incomplete && !f.Checked {
+			unchecked = append(unchecked, "- "+f.Title+where(f))
+			continue
+		}
+		if f.Judgement == "fixed" {
+			fixed = append(fixed, "- "+f.Title+where(f))
+			continue
+		}
 		if f.Introduced != nil && !*f.Introduced {
 			onBase = append(onBase, fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f)))
 			continue
@@ -370,6 +445,12 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			line := fmt.Sprintf("- %s (%s)%s", f.Title, f.Severity, where(f))
 			if e.URL != "" {
 				line += ": " + e.URL
+			}
+			// Still open lists what holds the verdict; a nit commented on
+			// earlier is a suggestion, and holds nothing.
+			if !f.blocks() {
+				suggestions = append(suggestions, line)
+				continue
 			}
 			stillOpen = append(stillOpen, e.Head, line)
 			continue
@@ -389,6 +470,15 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			fmt.Fprintf(&b, "\n\n**Still open from %s**", short(last))
 		}
 		b.WriteString("\n" + stillOpen[i+1])
+	}
+	if len(unchecked) > 0 {
+		fmt.Fprintf(&b, "\n\n**Not re-checked at %s** (the lens that would judge them did not finish)\n%s", short(head), strings.Join(unchecked, "\n"))
+	}
+	if len(fixed) > 0 {
+		fmt.Fprintf(&b, "\n\n**Fixed at %s**\n%s", short(head), strings.Join(fixed, "\n"))
+	}
+	if len(suggestions) > 0 {
+		fmt.Fprintf(&b, "\n\n**Suggestions (not blocking)**\n%s", strings.Join(suggestions, "\n"))
 	}
 	if len(onBase) > 0 {
 		fmt.Fprintf(&b, "\n\n**Already on %s (not blocking)**\n%s", base, strings.Join(onBase, "\n"))
@@ -507,8 +597,26 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		if in.Unfinished, lenses, err = lensOutcomesTx(ctx, tx, st, pr.Repo, head); err != nil {
 			return err
 		}
-		if findings, err = verdictFindingsTx(ctx, tx, st, pr.Repo); err != nil {
+		if findings, err = incompleteFindingsTx(ctx, tx, st, pr.Repo, head); err != nil {
 			return err
+		}
+		if len(in.Unfinished) > 0 {
+			details, err := tx.Query(ctx, `SELECT DISTINCT ON (category) COALESCE(category, ''), COALESCE(error, status::text)
+				FROM runs k WHERE `+reviewedFrom+` AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4 AND k.category = ANY($5)
+				ORDER BY category, created_at DESC, id DESC`, st.TaskID, st.Attempt, pr.Repo, head, in.Unfinished)
+			if err != nil {
+				return err
+			}
+			var category, reason string
+			if _, err = pgx.ForEachRow(details, []any{&category, &reason}, func() error {
+				in.FailureNotes = append(in.FailureNotes, category+": "+reason)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if findings, err = incompleteFindingsTx(ctx, tx, st, pr.Repo, head); err != nil {
+				return err
+			}
 		}
 		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return err
@@ -526,6 +634,46 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	gates := DoReadyGate(ctx, gh, c)
 	if len(gates) == 0 {
 		return workflow.Result{}, fmt.Errorf("no gate read for %s", prID)
+	}
+	if len(in.Unfinished) == 0 && slices.ContainsFunc(findings, func(f verdictFinding) bool { return !f.Checked }) {
+		for i := range gates[0].Items {
+			if gates[0].Items[i].Key == ReadyReviewed {
+				gates[0].Items[i].OK = false
+				gates[0].Items[i].Detail = "not every finding was authoritatively judged at " + short(head)
+			}
+		}
+	}
+	// A finding filed on the base at a line the pull request wrote is the
+	// pull request's (ownLines): its diff, read once for this verdict at
+	// the head the gate just read, decides it, and the findings item is
+	// the review's own reading of them.
+	var diff map[string]forge.DiffLines
+	if gates[0].Err == nil && st.Source.ReviewOnly() && onBaseCandidates(findings) && gh != nil {
+		diff, err = gh.PullDiffLines(ctx, pr.Slug, pr.Number)
+		if err != nil && !forge.Refused(err) {
+			return workflow.Result{}, workflow.Wait{After: max(forge.RetryAfter(err), readyGateRetry), Why: "reading the pull request's diff for the verdict: " + err.Error()}
+		}
+		if err == nil {
+			// /pulls/files has no ref. Verify that the unpinned response still
+			// belongs to the head used by the gate before classifying findings.
+			now, headErr := gh.Head(ctx, pr.Slug, pr.Number)
+			if headErr != nil {
+				return workflow.Result{}, workflow.Wait{After: max(forge.RetryAfter(headErr), readyGateRetry), Why: "rechecking the pull request's head after reading its diff: " + headErr.Error()}
+			}
+			if now != head {
+				return workflow.Result{}, workflow.Wait{After: readyGateRetry, Why: "the pull request moved while reading its diff"}
+			}
+		}
+		// Refused (no such pull request, a diff too large): no line is
+		// known to be the pull request's; each finding stays as filed.
+		ownLines(findings, diff, st.Source.ReviewOnly())
+	}
+	if gates[0].Err == nil {
+		for i, it := range gates[0].Items {
+			if it.Key == ReadyFindings {
+				gates[0].Items[i] = verdictFindingsItem(findings)
+			}
+		}
 	}
 	now := time.Now()
 	in.Gate, in.CIAsked = gates[0], v.CIAsked == head
@@ -705,7 +853,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		if claimed {
 			// An earlier run's answer was lost, or it stopped short: find
 			// the review before posting anything, at increasing delays.
-			found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
+			found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim, head)
 			if err != nil {
 				return "", reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(delay, v.LostSubmits, v.LostLookups)),
 					Why: "looking for dude's review: " + err.Error()}
@@ -734,6 +882,14 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 		diff, err := gh.PullDiffLines(ctx, pr.Slug, pr.Number)
 		if err != nil {
 			return "", workflow.Wait{After: readyGateRetry, Why: "reading the diff before the review: " + err.Error()}
+		}
+		now, err = gh.Head(ctx, pr.Slug, pr.Number)
+		if err != nil {
+			return "", workflow.Wait{After: readyGateRetry, Why: "rechecking the head after reading the diff: " + err.Error()}
+		}
+		if now != head {
+			return "", w.s.Emit(ctx, org, st, EvReviewAbandoned, map[string]any{"claimId": claim, "pullRequestId": pr.ID,
+				"head": head, "why": "head_moved", "githubHead": now})
 		}
 		inline, folded := forge.PlaceComments(comments, diff)
 		in := forge.SubmitReview{Slug: pr.Slug, Number: pr.Number, CommitID: head, Event: event,
@@ -792,7 +948,7 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		return reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(w.s.reviewRecoverDelay(), v.LostSubmits, 0)),
 			Why: what + ": " + err.Error()}
 	}
-	found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim)
+	found, ok, err := gh.FindOwnReview(ctx, pr.Slug, pr.Number, st.TaskID, claim, head)
 	if err != nil {
 		return retry(err, "looking for dude's review to refresh")
 	}
@@ -831,12 +987,31 @@ func (w *steps) refreshReview(ctx context.Context, sc workflow.StepContext, st *
 		if err != nil {
 			return retry(err, "reading the diff before refreshing dude's review")
 		}
+		now, err = gh.Head(ctx, pr.Slug, pr.Number)
+		if err != nil {
+			return retry(err, "rechecking the head after refreshing dude's diff")
+		}
+		if now != head {
+			v.settled(v.ChecksNoted)
+			return nil
+		}
 		var inline []forge.ReviewComment
 		if inline, folded = forge.PlaceComments(comments, diff); read && !posted {
 			folded = append(inline, folded...)
 		}
 	}
 	body := forge.FoldComments(marked, folded)
+	// UpdateReview sends only a body and cannot pin the commit. Recheck after
+	// all old-head data has been prepared, including the no-comment path, so a
+	// moved head never receives a stale refresh write or edit event.
+	now, err = gh.Head(ctx, pr.Slug, pr.Number)
+	if err != nil {
+		return retry(err, "rechecking the head before updating dude's review")
+	}
+	if now != head {
+		v.settled(v.ChecksNoted)
+		return nil
+	}
 	// A body GitHub already holds is not sent again; one an ambiguous
 	// answer left there is recorded edited all the same.
 	edited := v.LostSubmits > 0
@@ -959,7 +1134,7 @@ func (w *steps) statusComment(ctx context.Context, sc workflow.StepContext, st *
 // completed (lenses).
 func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) (unfinished, lenses []string, err error) {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT ON (k.category) k.category, k.status::text FROM runs k WHERE `+reviewedFrom+`
-		AND k.category IS NOT NULL AND k.base_refs->>$3 = $4 ORDER BY k.category, k.created_at DESC, k.id DESC`,
+		AND k.replaced_by IS NULL AND k.category IS NOT NULL AND k.base_refs->>$3 = $4 ORDER BY k.category, k.created_at DESC, k.id DESC`,
 		st.TaskID, st.Attempt, repo, head)
 	if err != nil {
 		return nil, nil, err
@@ -977,20 +1152,35 @@ func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string
 	return unfinished, lenses, err
 }
 
-// verdictFindingsTx is the attempt's open findings in repo, for the review.
-func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) ([]verdictFinding, error) {
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced
-		FROM review_findings WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND COALESCE(repo, $3) = $3
-		ORDER BY created_at, id`, st.TaskID, st.Attempt, repo)
+// incompleteFindingsTx is the attempt's findings, each with whether it was
+// checked at H. A finding raised at H is checked by its own raising Run
+// (r): a completed, unreplaced review Run of its category at H, judging it
+// still. An earlier one needs an explicit judgement at H (j): the newest
+// such Run of its category must list it in finding_ids (what it was given
+// to judge; the findings it raised are not there) with fixed or still.
+// Simply having run the category at H is not proof it checked an old one.
+func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) ([]verdictFinding, error) {
+	rows, err := tx.Query(ctx, `SELECT f.id, f.severity::text, f.title, f.description, f.suggested_fix, COALESCE(f.acceptance, ''),
+		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
+		COALESCE(j.judgement, '') <> '' OR r.id IS NOT NULL,
+		COALESCE(NULLIF(j.judgement, ''), CASE WHEN r.id IS NOT NULL THEN 'still' END, '')
+		FROM review_findings f LEFT JOIN runs r ON r.id = f.run_id AND r.task_id = $1 AND r.attempt = $2
+			AND r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL AND r.base_refs->>$3 = $4
+			AND r.category IS NOT DISTINCT FROM f.category
+		LEFT JOIN LATERAL (
+			SELECT k.id, CASE WHEN f.id = ANY(k.finding_ids) AND k.verdicts->>f.id IN ('fixed', 'still')
+				THEN k.verdicts->>f.id ELSE '' END AS judgement
+			FROM runs k WHERE k.task_id = $1 AND k.attempt = $2 AND k.phase = 'review'
+			AND k.status = 'completed' AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4
+			AND k.category IS NOT DISTINCT FROM f.category
+			ORDER BY k.created_at DESC, k.id DESC LIMIT 1
+		) j ON true WHERE f.task_id = $1 AND (f.status = 'open' OR f.status = 'resolved' AND j.judgement = 'fixed')
+		AND `+strings.ReplaceAll(thisAttempt, "review_findings.run_id", "f.run_id")+` AND COALESCE(f.repo, $3) = $3
+		ORDER BY f.created_at, f.id`, st.TaskID, st.Attempt, repo, head)
 	if err != nil {
 		return nil, err
 	}
-	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[verdictFinding])
-	slices.SortStableFunc(out, func(a, b verdictFinding) int {
-		return cmp.Compare(severityRank[a.Severity], severityRank[b.Severity])
-	})
-	return out, err
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[verdictFinding])
 }
 
 // awaitReviewOnly is a review-only task's pull request wait: no fixer.

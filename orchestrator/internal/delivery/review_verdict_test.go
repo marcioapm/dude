@@ -92,6 +92,15 @@ func TestDecideVerdictCoversEveryRow(t *testing.T) {
 	}
 }
 
+func TestIncompleteVerdictDoesNotCallUncheckedFindingsOpen(t *testing.T) {
+	f := verdictFinding{ID: "unchecked", Title: "Old deadline finding", Severity: "high", File: "a.go", Line: 3, earlier: &inlinePost{Head: "older"}}
+	d := decideVerdict(verdictInput{Gate: gateAt(GateItem{Key: ReadyFindings, Detail: "1 open finding(s) at the fix bar: unchecked"}), Unfinished: []string{"security"}})
+	body, inline, _ := verdictReviewOf(d, "a8f3e1c0ffee", "main", []string{"correctness"}, []verdictFinding{f}, "")
+	if !strings.Contains(body, "**Not re-checked at a8f3e1c**") || strings.Contains(body, "Still open") || strings.Contains(body, "open finding(s)") || strings.Contains(body, "(high)") || len(inline) != 0 {
+		t.Fatalf("unchecked finding asserted open:\n%s\ninline=%+v", body, inline)
+	}
+}
+
 // The review's body: findings on the base listed, never inline; blocking
 // ones inline when they name a line; non-blocking ones marked nits.
 func TestVerdictReviewPlacesFindings(t *testing.T) {

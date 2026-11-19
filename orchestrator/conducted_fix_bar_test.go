@@ -30,6 +30,8 @@ func TestAConductedLoopFixesAMediumFindingThePolicyLoopShips(t *testing.T) {
 		{"medium, conducted", true, "severity: medium", "fix"},
 		{"medium, deliver", false, "severity: medium", "fix"},
 		{"trivial low, conducted", true, "severity: low\ntrivial: yes", "fix"},
+		// The review-only bar (a low never blocks) is not the writing one.
+		{"trivial low, deliver", false, "severity: low\ntrivial: yes", "fix"},
 		{"low, conducted", true, "severity: low\ntrivial: no", "simplify"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

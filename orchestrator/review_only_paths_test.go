@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
@@ -41,6 +42,47 @@ func TestAHeadMovingBetweenTheClaimAndTheDiffPostsNothing(t *testing.T) {
 	}
 	if got := w.dudeReviews(wi, n); len(got) != 0 {
 		t.Fatalf("a review was posted at a head the pull request no longer shows: %+v", got)
+	}
+}
+
+// T-F1b: the author pushes while the verdict reads /pulls/files. The diff
+// must not classify findings or produce a review body for the old head; the
+// next evaluation follows the new head. That is a new round at the new
+// head, after the review-only debounce: a second here, not 3 minutes.
+func TestAHeadMovingDuringVerdictDiffRetriesWithoutMixedHeadReview(t *testing.T) {
+	w := newWorld(t)
+	w.reRounds(time.Second)
+	w.gh.SetChecks("success")
+	pushed := false
+	var wi string
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.Intercept = func(r *http.Request) int {
+			if !pushed && wi != "" && r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/1/files") {
+				pushed = true
+				w.gh.CommitFiles("feature/greet", "alice's later change", map[string]string{"later.md": "later\n"})
+			}
+			return 0
+		}
+	})
+	wi = w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+	w.cleanLenses()
+	w.startDelivery(wi)
+	w.agentsDone(wi, "the replacement head's review", func() bool {
+		return pushed && len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi)
+	})
+	got := w.dudeReviews(wi, n)
+	if len(got) != 1 {
+		t.Fatalf("expected the next evaluation to post one review, got %+v", got)
+	}
+	if got[0].CommitID != w.gh.SHA("feature/greet") {
+		t.Fatalf("the next evaluation used the wrong head: review=%s branch=%s", got[0].CommitID, w.gh.SHA("feature/greet"))
+	}
+	if strings.Contains(got[0].Body, "later.md") {
+		t.Fatalf("a mixed-head body was posted: %s", got[0].Body)
+	}
+	if got := w.gh.SHA("feature/greet"); got == "" {
+		t.Fatal("the replacement head is empty")
 	}
 }
 

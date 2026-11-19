@@ -81,6 +81,8 @@ type State struct {
 	// must have finished for the round to be complete. Empty in a round
 	// started before it was kept: ReviewRound finds them.
 	ReviewRunIDs []string `json:"reviewRunIds,omitempty"`
+	// Lens/head pairs that used their one automatic review-only retry.
+	ReviewOnlyRetried map[string]bool `json:"reviewOnlyRetried,omitempty"`
 	// The categories the next review round is limited to: a retry of a
 	// round whose reviewers in them failed.
 	RetryCategories []string `json:"retryCategories,omitempty"`
@@ -1234,6 +1236,52 @@ func (w *steps) awaitReview(ctx context.Context, sc workflow.StepContext) (workf
 	failed, err := w.s.EndedUnfinished(ctx, sc.OrganizationID, round)
 	if err != nil {
 		return workflow.Result{}, err
+	}
+	if len(failed) > 0 && st.Source.ReviewOnly() {
+		states, err := w.s.PullRequestStates(ctx, sc.OrganizationID, st.PullRequestIDs)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		gh, err := w.forges.For(ctx, sc.OrganizationID)
+		if err != nil {
+			return workflow.Result{}, err
+		}
+		current := true
+		for _, p := range states {
+			head := p.HeadSHA
+			if gh != nil {
+				if head, err = gh.Head(ctx, p.Slug, p.Number); err != nil {
+					return workflow.Result{}, err
+				}
+			}
+			current = current && head == st.ReviewingHeads[p.Repo]
+		}
+		if current && maps.Equal(st.Heads, st.ReviewingHeads) {
+			head := headsID(st.ReviewingHeads)
+			var categories []string
+			for _, f := range failed {
+				var stopped bool
+				if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
+					return tx.QueryRow(ctx, `SELECT control = 'abort' OR control_reason IS NOT NULL AND status = 'aborted' FROM runs WHERE id = $1`, f.ID).Scan(&stopped)
+				}); err != nil {
+					return workflow.Result{}, err
+				}
+				if !stopped && !st.ReviewOnlyRetried[f.Category+":"+head] && retryableLensFailure(f.Error) {
+					categories = append(categories, f.Category)
+				}
+			}
+			if len(categories) > 0 {
+				if st.ReviewOnlyRetried == nil {
+					st.ReviewOnlyRetried = map[string]bool{}
+				}
+				for _, c := range categories {
+					st.ReviewOnlyRetried[c+":"+head] = true
+				}
+				st.RetryCategories = categories
+				st.Retries++
+				return workflow.Result{Next: "review", State: st}, nil
+			}
+		}
 	}
 	if len(failed) > 0 && !st.Source.ReviewOnly() {
 		// (A review-only round goes on to its verdict, which comments
