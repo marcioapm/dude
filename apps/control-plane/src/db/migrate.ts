@@ -156,9 +156,12 @@ interface BatchMigration {
   cleanup: string;
 }
 
+/** A batch migration's limit line (multiline: a line of the file). */
+const BATCH_LIMIT_LINE = /^-- dude:batch-limit(?:=|\s+)(\d+)\s*$/m;
+
 function batchMigration(contents: string): BatchMigration | null {
-  if (contents.split("\n", 1)[0]?.trim() !== BATCH_SQL) return null;
-  const limitMatch = contents.match(/^-- dude:batch-limit(?:=|\s+)(\d+)\s*$/m);
+  if (firstLine(contents) !== BATCH_SQL) return null;
+  const limitMatch = contents.match(BATCH_LIMIT_LINE);
   const limit = Number(limitMatch?.[1] ?? "1000");
   if (!Number.isInteger(limit) || limit <= 0) throw new Error("dude:batch-limit must be a positive integer");
   const sections = new Map<string, string>();
@@ -180,7 +183,7 @@ function batchMigration(contents: string): BatchMigration | null {
       section = marker[1]!;
       if (sections.has(section)) throw new Error(`dude:batch-sql has more than one ${section} section`);
       lines.length = 0;
-    } else if (!/^-- dude:batch-limit(?:=|\s+)(?:\d+)\s*$/.test(line.trim())) {
+    } else if (!BATCH_LIMIT_LINE.test(line.trim())) {
       lines.push(line);
     }
   }
@@ -208,8 +211,7 @@ export function batchCount(result: ReadonlyArray<Record<string, unknown>>, limit
   return count;
 }
 
-async function runBatchMigration(sql: SQL, file: MigrationFile, contents: string, sum: string, log: (msg: string) => void): Promise<void> {
-  const batch = batchMigration(contents)!;
+async function runBatchMigration(sql: SQL, file: MigrationFile, batch: BatchMigration, sum: string, log: (msg: string) => void): Promise<void> {
   await sql.begin(async (tx) => { await tx.unsafe(batch.setup); });
   for (;;) {
     const rows = await sql.begin(async (tx) => {
@@ -229,8 +231,13 @@ async function runBatchMigration(sql: SQL, file: MigrationFile, contents: string
   });
 }
 
+function firstLine(contents: string): string | undefined {
+  return contents.split("\n", 1)[0]?.trim();
+}
+
 export function outsideTransaction(contents: string): boolean {
-  return contents.split("\n", 1)[0]?.trim() === NO_TRANSACTION || contents.split("\n", 1)[0]?.trim() === BATCH_SQL;
+  const first = firstLine(contents);
+  return first === NO_TRANSACTION || first === BATCH_SQL;
 }
 
 /** The index a no-transaction file builds with CREATE INDEX CONCURRENTLY, or null. */
@@ -285,8 +292,9 @@ const MIGRATE_LOCK_POLL_MS = 1000;
  */
 export async function applyMigration(sql: SQL, file: MigrationFile, contents: string, log: (msg: string) => void = () => {}): Promise<void> {
   const sum = checksum(contents);
-  if (batchMigration(contents)) {
-    await runBatchMigration(sql, file, contents, sum, log);
+  const batch = batchMigration(contents);
+  if (batch) {
+    await runBatchMigration(sql, file, batch, sum, log);
     return;
   }
   if (outsideTransaction(contents)) {
