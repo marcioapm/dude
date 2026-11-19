@@ -19,7 +19,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// TestRound3MaskedBranch404StaysHeld adopts the correctness review probe.
+// A 404 on the branch's ref while the repository also reads 404 is
+// GitHub masking access, not a gone branch: the answers stay held.
 func TestRound3MaskedBranch404StaysHeld(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_probe")
@@ -41,8 +42,9 @@ func TestRound3MaskedBranch404StaysHeld(t *testing.T) {
 	}
 }
 
-// Both reviewers independently reproduced this crash window. An incomplete
-// marker search must retain the answer honestly, including past the bound.
+// A poster crashing between GitHub taking a reply and its record, with
+// more comments on the pull request than the marker search reads: an
+// incomplete search must retain the answer honestly, including past the bound.
 func TestRound3RecoveryBeyondTenPagesDoesNotDuplicate(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_reviewer")
@@ -78,9 +80,7 @@ func TestRound3RecoveryBeyondTenPagesDoesNotDuplicate(t *testing.T) {
 	}
 }
 
-// #485 round 3: the reviews' findings on round 2, as tests.
-
-// Reviewer (rev485t-t, finding 2; rev485t-q F1): a fixer that published to
+// A fixer that published to
 // another repository only, none of it on the pull request its answers are
 // on, has them withheld there: "its fix did not change target".
 func TestReviewerAnswersWhereTheFixerPublishedNothing(t *testing.T) {
@@ -164,7 +164,7 @@ func (a *answering) stepGoesOn(t *testing.T, ref delivery.RunRef, what string) {
 	t.Logf("%s: recorded %q", what, why)
 }
 
-// Reviewer (rev485t-t, finding 1; rev485t-q F2), adopted: GitHub refusing
+// GitHub refusing
 // the containment compare outright (a 403: a token that may no longer
 // read compares) is neither transient nor proof the fix is absent. The
 // step goes on (no failure for a retry to count towards dead-lettering),
@@ -451,7 +451,7 @@ func TestAFixerWithManyAnswersWakesItsConductorOnce(t *testing.T) {
 	}
 }
 
-// Reviewer R9 (rev485t-t, finding 3): two posters truly racing on a held
+// Two posters truly racing on a held
 // reply's claim. Store.BeforeAnswerClaim holds the first poster after it
 // read the answer unsettled and unclaimed, until the second has read it
 // too (or two seconds pass): under the task's Chat lock the second cannot
@@ -505,7 +505,7 @@ func TestAFixersRacingPostersPostEachAnswerOnce(t *testing.T) {
 	a.countPosted(t, "Fixed:", 1)
 }
 
-// Reviewer R12 (rev485t-t, finding 3): the head is read from the pull
+// The head is read from the pull
 // request's branch, not its own read, which trails a push by seconds. A
 // fix force-pushed away while the pull request's read still shows it
 // (fakegithub's LaggingHead) has its answers withheld.
@@ -528,7 +528,7 @@ func TestAFixersAnswersAreWithheldWhenOnlyAStalePullRequestReadShowsTheFix(t *te
 	}
 }
 
-// Reviewer R7 (rev485t-t, finding 3): a fixer's replies land before its
+// A fixer's replies land before its
 // threads are resolved — "say so in it first" — as GitHub took them
 // (fakegithub's write log).
 func TestAFixersRepliesLandBeforeItsThreadsAreResolved(t *testing.T) {
@@ -550,7 +550,7 @@ func TestAFixersRepliesLandBeforeItsThreadsAreResolved(t *testing.T) {
 	}
 }
 
-// R14, defence in depth: a poster that outlived its claim's lease between
+// Defence in depth: a poster that outlived its claim's lease between
 // GitHub taking its reply and its record (a stall: AfterAnswerPost) finds
 // the answer settled by the poster that took the stale claim over (which
 // found the reply by its marker) and records nothing more: each answer is
@@ -587,7 +587,7 @@ func TestAFixersAnswerOutlivingItsClaimIsRecordedOnce(t *testing.T) {
 	}
 }
 
-// F5 (rev485t-q): a recovering poster finds an earlier post of an answer
+// A recovering poster finds an earlier post of an answer
 // by its marker only in a comment by dude's own login. Someone else's
 // comment carrying the answer's marker and dude's reply marker (anyone can
 // type them) is not taken for dude's post: the real answer is posted.
@@ -636,7 +636,7 @@ func TestAFixersAnswerIsNotTakenForSomeoneElsesMarkedComment(t *testing.T) {
 	}
 }
 
-// Perf F4: a fixer resolving several threads of one pull request has its
+// A fixer resolving several threads of one pull request has its
 // threads read from GitHub once in the pass, not once per resolution.
 func TestAFixersResolutionsReadThePullRequestsThreadsOnce(t *testing.T) {
 	a := newAnswering(t, newWorld(t))

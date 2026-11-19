@@ -19,14 +19,13 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
-// #485 round 5: a delivery's end against a poster in flight. The end never
-// withholds an answer a poster holds (it may be on GitHub a moment later);
-// it withholds what nobody holds, blocks new claims, and leaves the held
-// one to its poster (posted, failed) or, if the poster is gone, to the
-// pr-reconciler's pass (posted, withheld, uncertain). These tests use only
-// what the delivery had before (a transport barrier in the poster's GitHub client, the
-// poster's AfterAnswerPost as the crash, the pass through the syncer), so
-// they run, and fail, on the code before the fix too.
+// A delivery's end against a poster in flight. The end never withholds an
+// answer a poster holds (it may be on GitHub a moment later); it withholds
+// what nobody holds, blocks new claims, and leaves the held one to its
+// poster (posted, failed) or, if the poster is gone, to the pr-reconciler's
+// pass (posted, withheld, uncertain). They drive it from outside only: a
+// transport barrier in the poster's GitHub client, the poster's
+// AfterAnswerPost as the crash, the pass through the syncer.
 
 // barrier holds the first GitHub write match picks, in the poster's own
 // HTTP transport, until opened: the poster has claimed the answer and is
@@ -118,7 +117,7 @@ func (a *answering) told() string {
 }
 
 // claimsAfterEnd counts claims recorded after the task's delivery ended
-// for its answers (none before the fix: there was no end to read).
+// for its answers.
 func (a *answering) claimsAfterEnd() int {
 	return a.w.count(`SELECT count(*) FROM events c WHERE c.task_id = $1 AND c.event_type = $2
 		AND c.cursor > (SELECT min(m.cursor) FROM events m WHERE m.task_id = $1 AND m.event_type = 'pull_request.answers_ended')`,

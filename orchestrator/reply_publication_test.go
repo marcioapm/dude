@@ -11,7 +11,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
-// #485, decision (a): a pull request fixer's "fixed" reply and thread
+// A pull request fixer's "fixed" reply and thread
 // resolution must not reach GitHub while its fix is unpublished. Its calls
 // are captured; dude posts them itself once the published fix is on the
 // pull request, whoever decides the delivery, and wakes a conductor with

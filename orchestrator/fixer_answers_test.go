@@ -20,7 +20,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// #485, decision (a): dude posts a pull request fixer's answers itself,
+// dude posts a pull request fixer's answers itself,
 // once the fix is verified on the pull request. These tests drive the
 // capture through delivery's own checks and the posting through
 // Store.PostFixerAnswers, the step's work, on a fixer Run they write; the
@@ -180,7 +180,7 @@ func (a *answering) countPosted(t *testing.T, prefix string, n int) {
 	}
 }
 
-// Reviewer B's gap test (F1, F2), adjusted to decision (a): every item of
+// Every item of
 // a three-item fixer batch (two line comments and an issue comment) is
 // captured, not just the first or the line comments, and nothing reaches
 // GitHub before publication; the conductor's reply and resolution, while
