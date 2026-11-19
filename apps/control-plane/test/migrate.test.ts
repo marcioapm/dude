@@ -701,8 +701,16 @@ test("273-280 move a held answer's records to causation_id, backfilled, indexed,
     expect(trigger).toContain("CREATE TRIGGER events_answer_causation_compat");
     for (const file of files.slice(1)) {
       const contents = await file.contents();
-      expect(outsideTransaction(contents)).toBe(true);
-      expect(contents.replace(/^--.*$/gm, "").trim().split(";").filter((s) => s.trim())).toHaveLength(1);
+      if (file.version === "277" || file.version === "278" || file.version === "279" || file.version === "280") {
+        expect(contents.split("\n", 1)[0]?.trim()).toBe("-- dude:batch-sql");
+        expect(contents).toContain("-- dude:batch-limit 1000");
+        expect(contents).toContain("-- dude:setup");
+        expect(contents).toContain("-- dude:batch");
+        expect(contents).toContain("LIMIT __BATCH_LIMIT__");
+      } else {
+        expect(outsideTransaction(contents)).toBe(true);
+        expect(contents.replace(/^--.*$/gm, "").trim().split(";").filter((s) => s.trim())).toHaveLength(1);
+      }
     }
     // Records written before 273: every settling type and a claim, named
     // in the payload only; one already caused by something else; and
