@@ -614,9 +614,6 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 			}); err != nil {
 				return err
 			}
-			if findings, err = incompleteFindingsTx(ctx, tx, st, pr.Repo, head); err != nil {
-				return err
-			}
 		}
 		if in.Asks, err = openAuthorAsksTx(ctx, tx, st.TaskID, st.Attempt); err != nil {
 			return err
@@ -858,7 +855,7 @@ func (w *steps) postReview(ctx context.Context, sc workflow.StepContext, st *Sta
 				return "", reviewRetry{After: max(forge.RetryAfter(err), reviewRetryDelay(delay, v.LostSubmits, v.LostLookups)),
 					Why: "looking for dude's review: " + err.Error()}
 			}
-			if ok && found.CommitID == head {
+			if ok {
 				v.settled(note)
 				return event, w.submitted(ctx, sc, st, pr, base, found, true, w.reviewPosts(ctx, gh, pr, found.ID, comments, ids))
 			}
@@ -1150,22 +1147,6 @@ func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string
 		return nil
 	})
 	return unfinished, lenses, err
-}
-
-// verdictFindingsTx is the attempt's open findings in repo, for the review.
-func verdictFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo string) ([]verdictFinding, error) {
-	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, true, ''
-		FROM review_findings WHERE task_id = $1 AND status = 'open' AND `+thisAttempt+` AND COALESCE(repo, $3) = $3
-		ORDER BY created_at, id`, st.TaskID, st.Attempt, repo)
-	if err != nil {
-		return nil, err
-	}
-	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[verdictFinding])
-	slices.SortStableFunc(out, func(a, b verdictFinding) int {
-		return cmp.Compare(severityRank[a.Severity], severityRank[b.Severity])
-	})
-	return out, err
 }
 
 // incompleteFindingsTx requires a completed Run's explicit judgement at H;
