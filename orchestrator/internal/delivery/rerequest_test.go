@@ -66,6 +66,8 @@ func newRerequestFixture(t *testing.T, repos ...string) *rerequestFixture {
 		g := fakegithub.New(bare, "acme/"+name)
 		f.gh[name] = g
 		mux.Handle("/repos/acme/"+name+"/", g.Handler())
+		// The repository itself: a branch's 404 is "gone" only once it reads.
+		mux.Handle("/repos/acme/"+name, g.Handler())
 		f.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
 			VALUES ($2, $1, 'prj_q', $3, $4, 'main')`, "repo_"+name, name, "https://github.com/acme/"+name+".git")
 		f.exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch,
