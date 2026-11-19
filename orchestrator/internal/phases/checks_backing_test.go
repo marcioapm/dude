@@ -120,11 +120,15 @@ func TestASubagentsRecordedCallBacksAPass(t *testing.T) {
 }
 
 func TestUnbackedGuidanceIsOncePerReport(t *testing.T) {
-	d := checksDecision{}
+	var checks []delivery.Check
+	var verdicts []delivery.ConductedCheck
 	for _, command := range []string{"make test", "make lint"} {
-		d.Verdicts = append(d.Verdicts, checksVerdict{Command: command, Result: "unverified", Decision: delivery.VerdictUnbacked,
-			Reason: "no call", JudgeReason: unbackedHint(command, []string{}, true), hinted: true})
+		checks = append(checks, delivery.Check{Command: command, Result: delivery.CheckPass, Evidence: "no call"})
+		verdicts = append(verdicts, delivery.ConductedCheck{Command: command, Verdict: delivery.VerdictUnbacked})
 	}
+	asked := &delivery.ChecksAsked{Turn: 3, Check: checks, Closest: map[int][]string{0: {}, 1: {}}}
+	d := verdictDecision(checksDecision{}, checks, asked, &delivery.ConductedChecks{Turn: 3, Checks: verdicts,
+		Missing: delivery.ConductedMissing{Verdict: delivery.MissingNone}})
 	text := d.sendBack()
 	if strings.Count(text, "as one bare command on one line") != 1 {
 		t.Fatalf("guidance must appear exactly once: %s", text)
