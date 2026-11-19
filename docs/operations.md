@@ -791,8 +791,11 @@ validate` reports the same.
    changed after it was applied.
    `dude-migrate --status` lists applied and pending migrations.
    One `dude-migrate` runs at a time per database: a second one started
-   meanwhile waits for the first (on an advisory lock), then finds the
-   first's migrations applied.
+   meanwhile waits, polling the first's advisory lock, until the first
+   finishes, then finds the first's migrations applied.
+   That lock is session-scoped, so `dude-migrate` needs a direct or
+   session-mode connection, not PgBouncer in transaction mode, as the
+   backend does ([Postgres](#postgres)).
    A file whose first line is `-- dude:no-transaction` runs outside a
    transaction: one statement Postgres refuses inside one, such as
    `CREATE INDEX CONCURRENTLY` (076 builds `runs_conductor_run_idx` so,
