@@ -144,7 +144,14 @@ describe("activity", () => {
     expect(refused("pair_attempted", "this head/base pair was already attempted"))
       .toBe("could not resolve #41's conflicts with main: it already tried this branch against this base");
     expect(refused("run_failed", "lux 0 stream_ended: exec ended"))
-      .toBe("could not resolve #41's conflicts with main: the agent resolving it stopped before it finished");
+      .toBe("base merge Run failed: lux 0 stream_ended: exec ended while merging main into #41");
+    expect(refused("run_failed", "")).toBe("base merge Run failed while merging main into #41");
+    const failed = pullRequestActivity(event("pull_request.action", {
+      action: "integration-refused", number: 0, base: "main", cause: "run_failed", error: "provider 429: rate limited",
+    }), true);
+    expect(failed?.text).toBe("base merge Run failed: provider 429: rate limited while merging main into the branch in web");
+    expect(failed?.parts?.filter((p) => typeof p !== "string")).toEqual([{ mono: "main" }]);
+    expect(failed?.byDude).toBe(true);
     expect(refused("no_merge", "the integration Run finished without publishing a merge"))
       .toBe("could not resolve #41's conflicts with main: the agent resolving it finished without merging the base in");
     expect(refused("", "integration fix budget exhausted")).toBe("could not resolve #41's conflicts with main");

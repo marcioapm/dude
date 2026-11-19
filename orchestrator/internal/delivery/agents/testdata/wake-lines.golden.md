@@ -70,6 +70,10 @@ Your review · security Run run_rev failed: lux: the host went away xxxxxxxxxxxx
 
 Escalation: stuck. Actions: retry, accept, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. Retry needs your direction for the next fix in its note.
 
+## escalated-integration-failed
+
+Escalation: integration failed. Actions: retry, wait, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The base merge Run run_int failed: provider 429: rate limited retried then failed. It is no conflict dude could not resolve: the Run integrating main into web#4 stopped before it finished. Retry the integration once its cause is gone (a provider refusing, a crash, a timeout), or wait.
+
 ## escalated-test-failed
 
 Escalation: test failed criteria. Actions: retry, accept, stop. Decide non-person-only actions directly with decide_escalation and your note; explicit retries may extend rounds. Person-only actions need ask_person: one question, exactly one recommended choice, proposed reason where required; the owner's pick decides directly. The test's verdict per criterion and its evidence are on the task; accept or waive ships past a criterion nobody saw work, and needs a reason: the note you propose, or the person's own. Criteria: 2 (fail): Paying sends a receipt.

@@ -387,6 +387,10 @@ func (e *Escalation) Actions() []string {
 			out = append(out, "retry")
 		}
 		out = append(out, "wait")
+	case ReasonIntegrationFailed:
+		// The integration Run again, or back to waiting on the pull
+		// request (or opening it) as a conflict would.
+		out = append(out, "retry", "wait")
 	case "ci_stuck":
 		// A person resolves the conflict, or sees to CI, on GitHub; dude
 		// waits on the pull request again.
@@ -1648,9 +1652,17 @@ func (w *steps) awaitSimplify(ctx context.Context, sc workflow.StepContext) (wor
 		return w.escalate(ctx, sc, st, "pr_fix_failed", map[string]any{"runId": runID, "error": out.Error, "phase": PhaseSimplify})
 	}
 	st.SimplifyRetried = false
-	// A failed or empty simplification is not a failure of the task: the
-	// code was simple enough already. Carry on with what we had — unless
-	// the conductor queued a review behind it: then it is told at once.
+	if !out.Succeeded && st.Pipeline == nil {
+		// A simplifier that failed is a decision, as any phase's failure
+		// is: resume it, try again or stop. Going on to the test would
+		// ship code no simplifier passed over, and say nothing. One a
+		// conductor's pipeline queued a review behind is its decision
+		// already (pipelineGoesOn, the failure said).
+		return w.escalate(ctx, sc, st, "simplify_failed", map[string]any{"runId": runID, "error": out.Error})
+	}
+	// An empty simplification is not a failure of the task: the code was
+	// simple enough already. Carry on with what we had — unless the
+	// conductor queued a review behind it: then it is told at once.
 	if !out.Succeeded || len(out.Heads) == 0 {
 		// Started while the pull requests waited: back to them, its CI the
 		// test, as after a fix of the pull request. After a fix pushed to
@@ -3320,7 +3332,7 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 	// A queued review goes with what stopped: the person decides first.
 	st.Pipeline = nil
 	switch reason {
-	case "pull_request_conflict":
+	case "pull_request_conflict", ReasonIntegrationFailed:
 		if st.Integration != nil {
 			st.Escalation.Step = "prFix"
 		}
@@ -3342,7 +3354,9 @@ func (w *steps) escalate(ctx context.Context, sc workflow.StepContext, st *State
 		// its task still runs: a missing RetryStep entry, said loudly.
 		return workflow.Result{}, fmt.Errorf("escalation %s at step %s offers retry with no step to go back to (RetryStep)", reason, sc.Step)
 	}
-	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") {
+	// A failed integration is retried, never resumed: what it merges is
+	// decided afresh from the heads (ReasonIntegrationFailed).
+	if ids := st.Escalation.RunIDs(); len(ids) > 0 && strings.HasSuffix(reason, "_failed") && reason != ReasonIntegrationFailed {
 		// A Run failed, and lux keeps it: the step waiting on it can wait on
 		// it again, resumed. Every one, for a round of several.
 		kept := true
@@ -3383,7 +3397,8 @@ var RetryStep = map[string]string{
 	"testVerdict": "test",
 	"prFix":       "prFix",
 	"awaitPRFix":  "prFix",
-	// A simplifier that failed twice after a pull request fix.
+	// A simplifier that failed twice after a pull request fix, or once
+	// (simplify_failed) elsewhere.
 	"awaitSimplify": "simplify",
 }
 
@@ -3651,7 +3666,7 @@ func (w *steps) decide(ctx context.Context, sc workflow.StepContext) (workflow.R
 			}
 			handOpen = true
 		}
-		if len(st.PRFeedback) > 0 && (e.Reason == "pull_request_conflict" || e.Reason == "ci_stuck") {
+		if len(st.PRFeedback) > 0 && (e.integrationEscalation() || e.Reason == "ci_stuck") {
 			// Feedback arrived with the conflict: fixed now it is resolved.
 			return workflow.Result{Next: "prFix", State: st}, nil
 		}
@@ -3993,6 +4008,10 @@ func escalatedLine(e *Escalation) string {
 		Message    string             `json:"message"`
 		Unverified []UnverifiedCheck  `json:"unverified"`
 		Asks       []DischargeOpenAsk `json:"asks"`
+		Repo       string             `json:"repo"`
+		Number     int                `json:"number"`
+		Base       string             `json:"base"`
+		Error      string             `json:"error"`
 	}
 	e.decode(&d)
 	var criteria []string
@@ -4024,6 +4043,11 @@ func escalatedLine(e *Escalation) string {
 			asks = append(asks, fmt.Sprintf("runId %s, turn %d, ask %s", a.RunID, a.Turn, a.Key))
 		}
 	}
+	var integration *integrationFailedFacts
+	if reason == ReasonIntegrationFailed {
+		integration = &integrationFailedFacts{Repo: d.Repo, Number: d.Number, Base: d.Base, RunID: e.RunID(),
+			Error: clip(oneLine(d.Error), escalatedItemMax)}
+	}
 	return render(escalatedTmpl, struct {
 		Reason                        string
 		Actions, FindingIDs           []string
@@ -4031,9 +4055,17 @@ func escalatedLine(e *Escalation) string {
 		Criteria, Unverified          []string
 		CriteriaLeft, UnverifiedLeft  int
 		Asks                          []string
+		Integration                   *integrationFailedFacts
 	}{strings.ReplaceAll(reason, "_", " "), e.Actions(), e.findingIDs(),
 		reason == ReasonTestFailedCriteria || reason == ReasonTestBlocked,
-		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, unverifiedLeft, asks})
+		reason == "stuck", reason == ReasonNotConverging, criteria, unverified, criteriaLeft, unverifiedLeft, asks, integration})
+}
+
+// integrationFailedFacts are what an integration_failed wake names: the
+// pull request (0 before it opened), its base, the failed Run and its error.
+type integrationFailedFacts struct {
+	Repo, Base, RunID, Error string
+	Number                   int
 }
 
 // The escalated wake lists at most escalatedItemsMax criteria or checks,

@@ -536,6 +536,15 @@ export const PAUSE_WORDS: Record<DudePause, { parked: string; composer: string }
   },
 };
 
+/**
+ * A park because the model provider kept refusing the agent's turns
+ * (`run.parked` with `model`): still `dude_pause` idle, but not quiet.
+ */
+export const MODEL_PARK_WORDS = {
+  parked: "Parked: the model provider kept refusing its turns. Resume it once the provider is back.",
+  composer: "Parked while the model provider refused it. Resume it once the provider is back.",
+};
+
 /** What the transcript says for what dude did to a Run, by event type. */
 const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Record<string, unknown>) => string }> = {
   "run.parked": {
@@ -544,6 +553,7 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
     // or its turn failed, rather than because nobody wrote.
     text: (p) => typeof p.stopped === "string" ? "Its container stopped: your next message resumes it."
       : typeof p.failedTurns === "number" ? "Parked after its turn failed: your next message resumes it."
+      : p.model === true ? MODEL_PARK_WORDS.parked
       : PAUSE_WORDS[p.reason as DudePause]?.parked ?? "Parked.",
   },
   "run.unparked": { notice: "unparked", text: () => "Taken back up where it left off." },
@@ -551,7 +561,11 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
   // A conducted idle park its conductor left: the person's now.
   "run.idle_handed_over": {
     notice: "notice",
-    text: (p) => `The conductor did not act on the quiet ${typeof p.role === "string" && p.role ? p.role.replaceAll("_", " ") : "agent"}; it is handed to you.`,
+    text: (p) => {
+      const role = typeof p.role === "string" && p.role ? p.role.replaceAll("_", " ") : "agent";
+      return p.model === true ? `The conductor did not act on the ${role} the model provider kept refusing; it is handed to you.`
+        : `The conductor did not act on the quiet ${role}; it is handed to you.`;
+    },
   },
   [EventTypes.RunTurnStopped]: { notice: "nudged", text: () => "Its model gave no answer for 10 minutes: dude stopped the turn." },
   [EventTypes.RunTurnRetried]: { notice: "notice", text: turnRetriedNotice },
@@ -572,7 +586,8 @@ const NOTICES: Record<string, { notice: NoticeTurn["notice"]; text: (payload: Re
 
 /**
  * A turn dude retries after a temporary model error (`run.turn.retried`),
- * in one line: "Model busy (429). Retrying in 2m 23s (attempt 2 of 4)."
+ * in one line: "Model busy (429). Retrying in 2m 23s (attempt 2)."
+ * (older events also say "of 4": their maxAttempts.)
  * The status is the one the agent's error names; an error that names none
  * (a dropped stream) is a temporary model error.
  */
@@ -740,6 +755,8 @@ export interface Conversation {
   start: StartState | null;
   /** The current Run's start that failed, until a next Run (Try again, a next message) is created: the header says so. */
   startFailed: StartState | null;
+  /** The Run's latest park is for the model provider's refusals (`run.parked` with `model`), until it is taken back up. */
+  modelPark: boolean;
 }
 
 /** A todo as the harness emits it inside a `todowrite` call. */
@@ -784,6 +801,8 @@ export interface Projection {
   conductorRequests: Set<string>;
   /** The parked notice said while a conductor-held request kept the Run, said again once the person holds it. */
   conductorRequestPark: NoticeTurn | null;
+  /** The latest park is the model provider's (Conversation.modelPark). */
+  modelPark: boolean;
   repoRequestsById: Map<string, RepositoryRequestTurn>;
   /** Where the progress row is in `turns`, once there is one. */
   progressIndex: number | null;
@@ -903,6 +922,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     conductorQuestionId: null,
     conductorRequests: new Set(),
     conductorRequestPark: null,
+    modelPark: false,
     repoRequestsById: new Map(),
     progressIndex: null,
     plan: [],
@@ -1680,6 +1700,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         const turn: NoticeTurn = { kind: "notice", id: event.eventId, notice, text: words, at: event.occurredAt };
         if (heldRequest) state.conductorRequestPark = turn;
         else if (event.eventType === "run.parked" || event.eventType === "run.unparked") state.conductorRequestPark = null;
+        if (event.eventType === "run.parked" || event.eventType === "run.unparked") state.modelPark = event.eventType === "run.parked" && payload.model === true;
         if (notice === "unparked" && typeof payload.epoch === "number") {
           // Its timing came first and was said on its own: that notice is
           // this return.
@@ -2013,6 +2034,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       lands: state.lands,
       start: shownStart(state.start, runStatus),
       startFailed: state.failedStart?.turn.start ?? null,
+      modelPark: state.modelPark,
     };
   }
 
@@ -2065,6 +2087,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     lands: state.lands,
     start: null,
     startFailed: state.failedStart?.turn.start ?? null,
+    modelPark: false,
   };
 }
 

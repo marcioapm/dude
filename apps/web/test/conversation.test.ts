@@ -16,7 +16,7 @@ import { EventRow } from "@dude/design-system/components";
 import { renderTurn, summarize } from "../src/screens/RunScreen.tsx";
 import { EventTypes } from "@dude/domain";
 import type { Machine, MachineMove, MachineRaisedPayload, MachineRefusedPayload, MachineRequestedPayload, MachineResetPayload, PersistedEvent } from "@dude/domain";
-import { CONDUCTOR_REQUEST_WORDS, CONDUCTOR_WAIT_WORDS, PAUSE_WORDS, conductorWaitComposer, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
+import { CONDUCTOR_REQUEST_WORDS, CONDUCTOR_WAIT_WORDS, MODEL_PARK_WORDS, PAUSE_WORDS, conductorWaitComposer, actorName, apply, emptyProjection, humanActor, landsHint, project, snapshot, steerWait, toolUsage, type HumanTurn, type ToolTurn } from "../src/api/conversation.ts";
 import { stepsOf, startVerbOf } from "../src/startCue.tsx";
 import { roleLabel } from "../src/machines.ts";
 import { modelCostShown } from "../src/api/client.ts";
@@ -1196,6 +1196,23 @@ describe("an agent that asks", () => {
     // An event from before it named the role.
     expect(project([ev("run.idle_handed_over", { reason: "idle" })], "paused").turns)
       .toContainEqual(expect.objectContaining({ kind: "notice", text: "The conductor did not act on the quiet agent; it is handed to you." }));
+  });
+
+  test("a park for the model provider's refusals says so, not that the agent went quiet", () => {
+    const parked = project([
+      ev("run.parked", { reason: "idle", model: true, message: "parked: the model provider has refused for 2h1m" }),
+      ev("run.idle_handed_over", { reason: "idle", taskStatus: "running", handedOverFrom: "conductor", role: "implementer", model: true }),
+    ], "paused");
+    expect(parked.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual([
+      MODEL_PARK_WORDS.parked,
+      "The conductor did not act on the implementer the model provider kept refusing; it is handed to you.",
+    ]);
+    expect(parked.modelPark).toBe(true);
+    // Taken back up, then parked as quiet: the quiet words again.
+    const later = project([ev("run.parked", { reason: "idle", model: true }), ev("run.unparked", { reason: "idle" }),
+      ev("run.parked", { reason: "idle" })], "paused");
+    expect(later.modelPark).toBe(false);
+    expect(later.turns.filter((t) => t.kind === "notice").at(-1)).toMatchObject({ text: PAUSE_WORDS.idle.parked });
   });
 
   test("the question waits for an answer, and once answered its turn is the record: no second turn", () => {

@@ -3529,7 +3529,9 @@ func (s *Server) repoPath(url string) string {
 	return s.Repo
 }
 
-// commit writes files on top of base and points branch at the result.
+// commit writes files on top of base and points branch at the result: at
+// base itself when the files are already as base has them, as lux pushes
+// an unchanged checkout's HEAD.
 func commit(repo, base, branch string, files map[string]string, message string) (string, error) {
 	if message == "" {
 		message = "agent work"
@@ -3566,6 +3568,11 @@ func commit(repo, base, branch string, files map[string]string, message string) 
 	tree, err := git("write-tree")
 	if err != nil {
 		return "", err
+	}
+	if was, err := git("rev-parse", base+"^{tree}"); err == nil && was == tree {
+		// Nothing changed: as lux, which pushes the checkout's HEAD, base.
+		_, err = git("update-ref", "refs/heads/"+branch, base)
+		return base, err
 	}
 	sha, err := git("commit-tree", tree, "-p", base, "-m", message)
 	if err != nil {

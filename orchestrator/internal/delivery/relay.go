@@ -284,6 +284,10 @@ func RecordIdleParkTx(ctx context.Context, tx pgx.Tx, r RunRef, phase string, pa
 // task back once nothing waits on a person.
 const reasonIdleHandover = "the agent went quiet: handed to you from the conductor"
 
+// reasonModelHandover is reasonIdleHandover for a Run parked because the
+// model provider kept refusing it (phases.parkForModel).
+const reasonModelHandover = "the model provider kept refusing the agent: handed to you from the conductor"
+
 // idleParked (SQL, a FROM clause) is each phase Run of a conducted task
 // dude parked as idle that nobody has taken up (no resume asked, the task
 // not waiting on a person), as q with task_id and created_at the park's
@@ -326,18 +330,27 @@ func HandOverIdleParkTx(ctx context.Context, tx pgx.Tx, org, taskID, runID strin
 		return false, err
 	}
 	var before string
-	if err := tx.QueryRow(ctx, `SELECT status::text FROM tasks WHERE id = $1`, taskID).Scan(&before); err != nil {
+	var model bool
+	// A park for the model provider's refusals (run.parked model) is
+	// handed over as that, not as an agent that went quiet.
+	if err := tx.QueryRow(ctx, `SELECT status::text, COALESCE((SELECT (e.payload->>'model')::boolean FROM events e
+		WHERE e.run_id = $2 AND e.event_type = 'run.parked' ORDER BY e.cursor DESC LIMIT 1), false)
+		FROM tasks WHERE id = $1`, taskID, runID).Scan(&before, &model); err != nil {
 		return false, err
 	}
+	reason := reasonIdleHandover
+	if model {
+		reason = reasonModelHandover
+	}
 	ref := RunRef{Org: org, ProjectID: projectID, TaskID: taskID, RunID: runID}
-	if _, err = ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyHandover, Reason: reasonIdleHandover}); err != nil {
+	if _, err = ToPersonTx(ctx, tx, ToPerson{Ref: ref, Why: WhyHandover, Reason: reason}); err != nil {
 		return false, err
 	}
 	// The status the resume puts back, as an idle park's own run.parked
 	// keeps it for a task no conductor decides (phases.whilePaused); its
 	// role is what the Run's chat names (the quiet implementer).
 	_, err = ledger.Append(ctx, tx, ref.Event(EvIdleHandedOver, ledger.ActorSystem,
-		map[string]any{"reason": "idle", "taskStatus": before, "handedOverFrom": HolderConductor, "role": role}))
+		map[string]any{"reason": "idle", "taskStatus": before, "handedOverFrom": HolderConductor, "role": role, "model": model}))
 	return err == nil, err
 }
 

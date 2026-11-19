@@ -3598,6 +3598,7 @@ func TestEscalationsOfferWhatCanBeDone(t *testing.T) {
 		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 1, "open": 0}}, "done stop"},
 		{delivery.Escalation{Reason: "pull_request_closed", Detail: map[string]any{"merged": 1, "closed": 0, "open": 1}}, "done wait stop"},
 		{delivery.Escalation{Reason: "pull_request_conflict"}, "wait stop"},
+		{delivery.Escalation{Reason: delivery.ReasonIntegrationFailed, Step: "prFix"}, "retry wait stop"},
 		{delivery.Escalation{Reason: "ci_stuck"}, "wait stop"},
 	} {
 		if got := strings.Join(c.e.Actions(), " "); got != c.want {

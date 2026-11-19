@@ -121,6 +121,8 @@ export function escalationWords(e: Escalation): EscalationWords {
       return failed("Fixer");
     case "test_failed":
       return failed("Tester");
+    case "simplify_failed":
+      return failed("Simplifier");
     case "test_failed_criteria":
     case "test_blocked": {
       const criteria = testCriteria(e);
@@ -192,6 +194,14 @@ export function escalationWords(e: Escalation): EscalationWords {
         sentence: `Pull request ${which} conflicts with its base. Resolve it on GitHub, or ask dude to resolve it, then wait on it again.`,
         runId,
       };
+    }
+    case "integration_failed": {
+      // The Run merging the base in failed: no conflict was found hard.
+      const which = num("number") ? `pull request ${typeof d.repo === "string" && d.repo ? `${d.repo} #${num("number")}` : `#${num("number")}`}`
+        : `the branch in ${typeof d.repo === "string" && d.repo ? d.repo : "the repository"}`;
+      const base: Words = typeof d.base === "string" && d.base ? [{ mono: d.base }] : ["its base"];
+      const parts: Words = ["The base merge Run failed", error === "." ? "" : error, ` while merging `, ...base, ` into ${which}. Nothing says the merge is hard: try again once its cause is gone, or wait on it.`];
+      return { short: "Base merge Run failed", sentence: plainWords(parts), parts, runId };
     }
     case "pull_request_moved": {
       const which = typeof d.repo === "string" && d.repo ? `${d.repo}${d.number ? ` #${num("number")}` : ""}` : `#${num("number")}`;
