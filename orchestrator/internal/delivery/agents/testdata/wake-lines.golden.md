@@ -38,6 +38,10 @@ Fixer run_fix's answers on the pull request were not posted: target#1's head 999
 
 Fixer run_fix's delivery ended with its answers held: the pull request was merged. Nothing it said was posted or resolved. Read its report (run_chat run_fix) if the comments still need an answer.
 
+## fixer-answers-withheld-in-flight
+
+Fixer run_fix's answers on the pull request were not posted: target#1's branch fix-1 is gone. Its fix target@abc1234 is not there; line-comment-1 may have been posted earlier, so it is not withheld (dude tells you what each ends as); nothing else it said was posted or resolved. Read its report (run_chat run_fix) and answer the comments yourself once a fix is on the pull request.
+
 ## fixer-answers-ended-in-flight
 
 Fixer run_fix's delivery ended with its answers held: the delivery was stopped. Withheld, never posted or resolved: issue-comment-2, resolving line-comment-1. Being posted as it ended, so not withheld: line-comment-1; dude tells you what each ends as. Read its report (run_chat run_fix) if the comments still need an answer.

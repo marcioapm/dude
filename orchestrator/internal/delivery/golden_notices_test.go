@@ -51,6 +51,8 @@ func TestGoldenWakeLines(t *testing.T) {
 			Withheld: "target#1's head 9999999 does not contain the published fix abc1234 (a force-push dropped it)", Cause: CauseDropped})},
 		{"fixer-answers-withheld-merged", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
 			Withheld: "the pull request was merged", Cause: CauseEnded})},
+		{"fixer-answers-withheld-in-flight", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
+			Withheld: "target#1's branch fix-1 is gone", Cause: CauseDropped, WithheldList: []string{"issue-comment-2"}, InFlight: []string{"line-comment-1"}})},
 		{"fixer-answers-ended-in-flight", answersLine(FixerAnswers{RunID: "run_fix", Commits: map[string]string{"target": "abc1234def"},
 			Withheld: "the delivery was stopped", Cause: CauseEnded, Ended: "the delivery was stopped",
 			WithheldList: []string{"issue-comment-2", "resolving line-comment-1"}, InFlight: []string{"line-comment-1"}})},

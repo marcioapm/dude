@@ -844,3 +844,109 @@ func TestRound5AWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
 		}
 	}
 }
+
+// The step's own pass finds the pull request closed while an answer's
+// claim has lapsed (its poster crashed after GitHub took the reply, before
+// recording it) or was released (GitHub failed the write with a 502, which
+// it may still have taken). That answer may be on GitHub, so the pass
+// never withholds it: it is reconciled, said in flight, and the
+// pr-reconciler's pass settles it from GitHub. The unclaimed ones are
+// withheld.
+func TestAClaimedAnswerIsReconciledNotWithheldByTheStepsPass(t *testing.T) {
+	type tc struct {
+		name string
+		// claim leaves answer 0 claimed, not recorded, and nothing after it
+		// claimed.
+		claim func(t *testing.T, a *answering, ids []string)
+		// want is what the reconciler settles answer 0 as.
+		want     string
+		onGitHub int
+	}
+	for _, c := range []tc{
+		{"lapsed claim, on GitHub", func(t *testing.T, a *answering, ids []string) {
+			crash := errors.New("the poster crashed")
+			a.store.AfterAnswerPost = func(id string) error {
+				if id == ids[0] {
+					return crash
+				}
+				return nil
+			}
+			if _, err := a.post(); !errors.Is(err, crash) {
+				t.Fatalf("the crashing post: %v", err)
+			}
+			a.store.AfterAnswerPost = nil
+			mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE task_id = $1 AND event_type = $2`,
+				a.task, delivery.EvAnswerClaimed)
+		}, "posted", 1},
+		{"released claim", func(t *testing.T, a *answering, ids []string) {
+			a.w.gh.Set(func(s *fakegithub.Server) {
+				s.Intercept = func(r *http.Request) int {
+					if r.Method == "POST" && strings.Contains(r.URL.Path, fmt.Sprintf("/comments/%d/replies", a.first)) {
+						return 502
+					}
+					return 0
+				}
+			})
+			if _, err := a.post(); err == nil || !forge.Transient(err) {
+				t.Fatalf("the write GitHub failed: %v", err)
+			}
+			a.w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
+		}, "withheld", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := newAnswering(t, newWorld(t))
+			ref := a.fixer("run_fixer")
+			a.answerAll(t, ref, "Fixed:")
+			a.published(ref, a.head(), "completed")
+			ids := a.answerIDs(ref.RunID)
+			c.claim(t, a, ids)
+			if n := len(a.posted("Fixed: " + a.firstID)); n != c.onGitHub {
+				t.Fatalf("the claimed reply is on GitHub %d times before the end, want %d", n, c.onGitHub)
+			}
+			a.w.gh.Close(1)
+			done, err := a.post()
+			if err != nil || len(done) != 1 || !strings.Contains(done[0].Withheld, "closed") {
+				t.Fatalf("the step's pass on the closed pull request: %+v %v", done, err)
+			}
+			if got := done[0].InFlight; len(got) != 1 || got[0] != a.firstID {
+				t.Errorf("in flight %v, want [%s]", got, a.firstID)
+			}
+			if got := a.outcome(t, ref.RunID, ids[0]); got != "" {
+				t.Errorf("the claimed answer was settled %q by the step's pass, want reconciled", got)
+			}
+			if n := a.w.count(`SELECT count(*) FROM answer_reconciliations WHERE answer_id = $1 AND outcome IS NULL
+				AND ended LIKE '%closed%' AND due_at = claimed_at + interval '4 minutes'`, ids[0]); n != 1 {
+				t.Errorf("%d open reconciliations of the claimed answer, want one", n)
+			}
+			for _, i := range []int{1, 2, 3, 4} {
+				if got := a.outcome(t, ref.RunID, ids[i]); got != "withheld" {
+					t.Errorf("unclaimed answer %d ended %q, want withheld", i, got)
+				}
+			}
+			// Its wake names it in flight, not withheld.
+			line := done[0].Line()
+			if !strings.Contains(line, "Being posted as it ended, so not withheld: "+a.firstID) {
+				t.Errorf("the wake %q does not say the claimed answer is in flight", line)
+			}
+			// Again: nothing more is settled, nothing claimed.
+			if again, err := a.post(); err != nil || len(again) != 0 {
+				t.Errorf("a pass again: %+v %v", again, err)
+			}
+			a.w.store.Now = func() time.Time { return time.Now().Add(time.Hour) }
+			if n, err := a.w.prs.Answers(context.Background()); err != nil || n != 1 {
+				t.Fatalf("the reconciler settled %d: %v", n, err)
+			}
+			if got := a.outcome(t, ref.RunID, ids[0]); got != c.want {
+				t.Errorf("the reconciler settled the claimed answer %q, want %q", got, c.want)
+			}
+			if n := len(a.posted("Fixed: " + a.firstID)); n != c.onGitHub {
+				t.Errorf("the claimed reply is on GitHub %d times, want %d: never reposted", n, c.onGitHub)
+			}
+			for _, i := range []int{1, 2, 3, 4} {
+				if got := a.outcome(t, ref.RunID, ids[i]); got != "withheld" {
+					t.Errorf("unclaimed answer %d ended %q, want withheld", i, got)
+				}
+			}
+		})
+	}
+}

@@ -193,23 +193,36 @@ func settledTx(ctx context.Context, tx pgx.Tx, runID, id string) (bool, error) {
 
 // failAnswerTx settles a held answer as failed (or withheld), once. A
 // withholding never settles an answer a poster may be writing to GitHub:
-// one with a fresh claim, or one in reconciliation.
-func failAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why string, withheld bool, now time.Time) error {
+// one with a fresh claim, or one in reconciliation. Nor one ever claimed:
+// its lapsed or released claim's write may have reached GitHub, so, as at
+// a delivery's end (settleHeldOnEndTx), it is put in answer_reconciliations
+// for why, and reconciled says so.
+func failAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why string, withheld bool, now time.Time) (reconciled bool, err error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
-		return err
+		return false, err
 	}
 	if done, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || done {
-		return err
+		return false, err
 	}
 	p := map[string]any{"answerId": h.ID, "kind": h.Kind, "error": why}
 	if withheld {
 		if busy, err := inFlightTx(ctx, tx, ref.RunID, h.ID, now); err != nil || busy {
-			return err
+			return false, err
+		}
+		var at time.Time
+		var released bool
+		switch err := tx.QueryRow(ctx, lastClaimSQL, ref.RunID, h.ID).Scan(&at, &released); {
+		case err == nil:
+			_, err = tx.Exec(ctx, `INSERT INTO answer_reconciliations (answer_id, organization_id, ended, claimed_at, due_at)
+				VALUES ($1, $2, $3, $4, $5)`, h.ID, ref.Org, clip(oneLine(why), 300), at, at.Add(answerReconcileAfter))
+			return err == nil, err
+		case !errors.Is(err, pgx.ErrNoRows):
+			return false, err
 		}
 		p["withheld"] = true
 	}
-	_, err := ledger.Append(ctx, tx, answerEvent(ref, EvAnswerFailed, h.ID, p))
-	return err
+	_, err = ledger.Append(ctx, tx, answerEvent(ref, EvAnswerFailed, h.ID, p))
+	return false, err
 }
 
 // inFlightTx says held answer id may be being written to GitHub: its latest
@@ -329,19 +342,27 @@ func recordUnverifiedTx(ctx context.Context, tx pgx.Tx, ref RunRef, why string) 
 	return err
 }
 
-// withhold settles held as withheld for why, and reports it.
+// withhold settles held as withheld for why, and reports it: an answer
+// ever claimed is reconciled instead (failAnswerTx), reported in flight,
+// not withheld.
 func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why, cause string) (FixerAnswers, error) {
 	done := FixerAnswers{RunID: f.ref.RunID, Commits: f.commits, Withheld: why, Cause: cause}
 	now := s.now()
-	return done, s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
+	err := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
+		done.ids, done.InFlight = nil, nil
 		for _, h := range held {
 			done.ids = append(done.ids, h.ID)
-			if err := failAnswerTx(ctx, tx, f.ref, h, why, true, now); err != nil {
+			reconciled, err := failAnswerTx(ctx, tx, f.ref, h, why, true, now)
+			if err != nil {
 				return err
+			}
+			if reconciled {
+				done.InFlight = append(done.InFlight, h.label())
 			}
 		}
 		return nil
 	})
+	return done, err
 }
 
 // contained is "" when every pull request the held answers are on is open
@@ -595,7 +616,7 @@ func recordPostedTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, slug s
 // reconciliation, if any.
 func (s *Store) failed(ctx context.Context, ref RunRef, h heldOf, why string, done *FixerAnswers) error {
 	if err := s.DB.InOrg(ctx, ref.Org, func(tx pgx.Tx) error {
-		if err := failAnswerTx(ctx, tx, ref, h, why, false, s.now()); err != nil {
+		if _, err := failAnswerTx(ctx, tx, ref, h, why, false, s.now()); err != nil {
 			return err
 		}
 		return settleReconciliationTx(ctx, tx, ref, h.ID, reconciledFailed, why)
