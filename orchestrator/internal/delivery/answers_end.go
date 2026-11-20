@@ -149,12 +149,6 @@ func appendFailedTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why, f
 	return err
 }
 
-// SettleHeldOnStopTx settles the task's held answers for a stopped
-// delivery (settleHeldOnEndTx); StopAllTx calls it.
-func SettleHeldOnStopTx(ctx context.Context, tx pgx.Tx, org, taskID string) error {
-	return settleHeldOnEndTx(ctx, tx, org, taskID, withheldStopped, nil)
-}
-
 // settleHeldOnEnd settles the task's held answers once none of its pull
 // requests is open (states).
 func (w *steps) settleHeldOnEnd(ctx context.Context, org, taskID string, states []PullRequestState) error {

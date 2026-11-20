@@ -59,18 +59,6 @@ var errAnswerBusy = errors.New("another poster is posting a fixer's answer")
 // reconciliation settles it, never a new claim.
 var errAnswerEnded = errors.New("the delivery ended: the answer is reconciled, not claimed")
 
-// Test hooks on Store, each given the answer's id. BeforeAnswerClaim runs
-// in the claim's transaction under the Chat lock, before the claim is
-// written: an error fails that transaction, as a database error would. BeforeAnswerWrite runs once
-// the claim is committed, before the GitHub write; AfterAnswerPost once
-// GitHub took it, before it is recorded: an error from either stands for
-// the poster crashing there.
-type (
-	BeforeAnswerClaim func(answerID string) error
-	BeforeAnswerWrite func(answerID string) error
-	AfterAnswerPost   func(answerID string) error
-)
-
 // crashed is a hook's crash: the poster gone, nothing after it done.
 type crashed struct{ err error }
 

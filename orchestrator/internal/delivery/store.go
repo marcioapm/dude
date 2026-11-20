@@ -103,10 +103,16 @@ type Store struct {
 	// waits before it is withdrawn; zero means the project's
 	// authorQuestionTimeoutMinutes, else 3 days. Tests shorten it.
 	AuthorQuestionTimeout time.Duration
-	// Test hooks of a fixer's held answers (answers_post.go).
-	BeforeAnswerClaim BeforeAnswerClaim
-	BeforeAnswerWrite BeforeAnswerWrite
-	AfterAnswerPost   AfterAnswerPost
+	// Test hooks of a fixer's held answers (answers_post.go), each given
+	// the answer's id. BeforeAnswerClaim runs in the claim's transaction
+	// under the Chat lock, before the claim is written: an error fails that
+	// transaction, as a database error would. BeforeAnswerWrite runs once
+	// the claim is committed, before the GitHub write; AfterAnswerPost once
+	// GitHub took it, before it is recorded: an error from either stands
+	// for the poster crashing there.
+	BeforeAnswerClaim func(answerID string) error
+	BeforeAnswerWrite func(answerID string) error
+	AfterAnswerPost   func(answerID string) error
 	// Now is the clock of a fixer's held answers: their claims, the verify
 	// bound and the end's reconciliation; nil is time.Now. Tests move it.
 	Now func() time.Time
