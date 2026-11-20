@@ -390,6 +390,46 @@ func TestACallReusingAnIdShowsItsOwnExit(t *testing.T) {
 	}
 }
 
+// A Claude Code Bash call run in the background returns at once, its
+// result "completed" whatever the command later does, and Claude records
+// no exit: the evidence shows it run in the background, its exit not
+// waited for, never as a plain completion, and its pass stays unbacked.
+// The same command in the foreground reads as before.
+func TestABackgroundedClaudeCallIsNotShownAsFinished(t *testing.T) {
+	w := newEvidenceWorld(t)
+	result := func(id, content string, shell map[string]any) map[string]any {
+		return map[string]any{"type": "claude.user", "data": map[string]any{"type": "user", "message": map[string]any{
+			"content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": content}}}, "tool_use_result": shell}}
+	}
+	w.feed(claudeToolUse("fg", "Bash", map[string]any{"command": "true"}),
+		result("fg", "", map[string]any{"stdout": "", "stderr": "", "interrupted": false}),
+		claudeToolUse("bg", "Bash", map[string]any{"command": "false", "run_in_background": true}),
+		result("bg", "Command running in background with ID: b1", map[string]any{"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "b1"}))
+	a := w.report("false")
+	e := a.Evidence
+	if e == nil || len(e.Calls) != 2 || e.Calls[0].Command != "false" || e.Calls[0].Exit != nil || e.Calls[1].Command != "true" ||
+		e.Calls[0].ExitWords() != "no exit recorded (run in the background, its exit not waited for)" || e.Calls[1].ExitWords() != "no exit recorded (completed)" {
+		t.Fatalf("evidence %+v", e)
+	}
+	line := w.checksWake()
+	id := w.run.ID
+	for _, want := range []string{
+		delivery.ExternalText(id, "false") + " → no exit recorded (run in the background, its exit not waited for).",
+		delivery.ExternalText(id, "true") + " → no exit recorded (completed).",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the wake lacks %s: %s", want, line)
+		}
+	}
+	if strings.Contains(line, delivery.ExternalText(id, "false")+" → no exit recorded (completed)") {
+		t.Fatalf("the backgrounded call reads as finished: %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass backed only by a backgrounded call passed")
+	}
+}
+
 // A tree dirty at the report is shown dirty.
 func TestADirtyTreeAtTheReportIsShownDirty(t *testing.T) {
 	w := newEvidenceWorld(t)

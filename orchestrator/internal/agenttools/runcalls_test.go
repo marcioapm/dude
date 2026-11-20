@@ -275,6 +275,31 @@ func TestRunCallsRefusesAnEarlierAttemptsWriter(t *testing.T) {
 	}
 }
 
+// A Bash call Claude Code ran in the background (input.run_in_background)
+// is listed as such, its exit not waited for; a foreground call's words
+// are as before.
+func TestRunCallsSaysABackgroundedCallWasNotWaitedFor(t *testing.T) {
+	w := newRunCallsWorld(t)
+	mustExec(t, w.owner, `INSERT INTO events (id, organization_id, event_type, occurred_at, run_id, task_id, actor_type, actor_id, source, payload) VALUES
+		('call_bg_c', $1, 'agent.tool.called', now() + interval '2 minutes', 'run_writer', $2, 'agent', 'run_writer', 'agent',
+			'{"callId": "call_bg", "input": {"command": "false", "run_in_background": true}}'),
+		('call_bg_d', $1, 'agent.tool.completed', now() + interval '2 minutes', 'run_writer', $2, 'agent', 'run_writer', 'agent',
+			'{"callId": "call_bg", "status": "completed", "output": {"head": "Command running in background with ID: b1"}}')`, w.org, w.item)
+	status, out := w.post(t, w.token, "run_calls", `{}`)
+	if status != 200 {
+		t.Fatalf("run_calls: %d %v", status, out)
+	}
+	list, _ := out["calls"].([]any)
+	if len(list) != 3 {
+		t.Fatalf("calls %v", list)
+	}
+	bg, fg := list[0].(map[string]any), list[1].(map[string]any)
+	if delivery.Unquoted(bg["command"].(string)) != "false" || bg["exit"] != "no exit recorded (run in the background, its exit not waited for)" ||
+		fg["exit"] != "exit 0" {
+		t.Fatalf("calls %v", list)
+	}
+}
+
 // A 50 KB command comes back clipped to delivery.EvidenceCommand characters.
 func TestRunCallsClipsALongCommand(t *testing.T) {
 	w := newRunCallsWorld(t)
