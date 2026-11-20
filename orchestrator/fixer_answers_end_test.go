@@ -45,22 +45,20 @@ func newBarrier(match func(r *http.Request, body string) bool) *barrier {
 func (b *barrier) open() { b.released.Do(func() { close(b.release) }) }
 
 func (b *barrier) RoundTrip(r *http.Request) (*http.Response, error) {
-	{
-		var body string
-		if r.Body != nil {
-			raw, _ := io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(raw))
-			body = string(raw)
-		}
-		if b.match(r, body) {
-			hit := false
-			b.once.Do(func() { hit = true })
-			if hit {
-				close(b.inside)
-				select {
-				case <-b.release:
-				case <-time.After(30 * time.Second):
-				}
+	var body string
+	if r.Body != nil {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		body = string(raw)
+	}
+	if b.match(r, body) {
+		hit := false
+		b.once.Do(func() { hit = true })
+		if hit {
+			close(b.inside)
+			select {
+			case <-b.release:
+			case <-time.After(30 * time.Second):
 			}
 		}
 	}
@@ -114,6 +112,24 @@ func (a *answering) told() string {
 	return a.w.str(`SELECT COALESCE(string_agg(t, ' | '), '') FROM (
 		SELECT payload->>'text' AS t FROM events WHERE task_id = $1 AND event_type = 'chat.notice'
 		UNION ALL SELECT line FROM conductor_wakes WHERE task_id = $1) x`, a.task)
+}
+
+// crashAfterPosting has a pass's poster crash once GitHub took held
+// answer id, before recording it (AfterAnswerPost): the answers before it
+// posted and recorded, its claim left standing.
+func (a *answering) crashAfterPosting(t *testing.T, id string) {
+	t.Helper()
+	crash := errors.New("the poster crashed")
+	a.store.AfterAnswerPost = func(got string) error {
+		if got == id {
+			return crash
+		}
+		return nil
+	}
+	defer func() { a.store.AfterAnswerPost = nil }()
+	if _, err := a.post(); !errors.Is(err, crash) {
+		t.Fatalf("the crashing post: %v", err)
+	}
 }
 
 // lastCursor is the task's latest event's cursor: taken at the end, what
@@ -275,23 +291,6 @@ func TestTheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
 // withheld, as ended before it was posted.
 // The search cut at its bound: uncertain, said once, never reposted.
 func TestTheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
-	// crashOn has the poster crash on answer i after GitHub took it,
-	// before its record.
-	crashOn := func(a *answering, ref delivery.RunRef, i int) {
-		t.Helper()
-		ids := a.answerIDs(ref.RunID)
-		crash := errors.New("the poster crashed")
-		a.store.AfterAnswerPost = func(id string) error {
-			if id == ids[i] {
-				return crash
-			}
-			return nil
-		}
-		if _, err := a.post(); !errors.Is(err, crash) {
-			t.Fatalf("the crashing post: %v", err)
-		}
-		a.store.AfterAnswerPost = nil
-	}
 	// The claim long past: the pass reads GitHub at once.
 	expire := func(a *answering, ref delivery.RunRef) {
 		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '1 hour' WHERE run_id = $1 AND event_type = $2`,
@@ -302,7 +301,7 @@ func TestTheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
 	t.Run("its comment found", func(t *testing.T) {
 		a, ref := endedWithHeld(t)
 		ids := a.answerIDs(ref.RunID)
-		crashOn(a, ref, 2)
+		a.crashAfterPosting(t, ids[2])
 		expire(a, ref)
 		stop(a)
 		for range 3 {
@@ -361,7 +360,7 @@ func TestTheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
 		for i := range 1001 {
 			a.w.gh.Comment(1, "ana", fmt.Sprintf("old discussion %d", i))
 		}
-		crashOn(a, ref, 2)
+		a.crashAfterPosting(t, ids[2])
 		expire(a, ref)
 		stop(a)
 		for range 3 {
@@ -441,17 +440,7 @@ func TestAReconciledResolutionsTransientReadIsRetriedUntilTheGiveUpBound(t *test
 	crashed := func(t *testing.T) (*answering, delivery.RunRef, string, time.Time, time.Time) {
 		a, ref := endedWithHeld(t)
 		ids := a.answerIDs(ref.RunID)
-		crash := errors.New("resolution poster crashed")
-		a.store.AfterAnswerPost = func(id string) error {
-			if id == ids[3] {
-				return crash
-			}
-			return nil
-		}
-		if _, err := a.post(); !errors.Is(err, crash) {
-			t.Fatalf("resolution crash: %v", err)
-		}
-		a.store.AfterAnswerPost = nil
+		a.crashAfterPosting(t, ids[3])
 		a.w.gh.Merge(1)
 		a.w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 502 })
 		a.w.until("the task done", func() bool {
@@ -609,32 +598,12 @@ func TestAResolutionIsReconciledFromItsThreadsState(t *testing.T) {
 		githubThread string
 	}{
 		{"resolved", func(a *answering, ref delivery.RunRef, ids []string) {
-			crashOn := errors.New("resolution poster crashed")
-			a.store.AfterAnswerPost = func(id string) error {
-				if id == ids[3] {
-					return crashOn
-				}
-				return nil
-			}
-			if _, err := a.post(); !errors.Is(err, crashOn) {
-				t.Fatalf("resolution crash: %v", err)
-			}
-			a.store.AfterAnswerPost = nil
+			a.crashAfterPosting(t, ids[3])
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 			expireReconciliationAnswer(t, a, ref)
 		}, "posted", true, false, "resolved"},
 		{"absent", func(a *answering, ref delivery.RunRef, ids []string) {
-			crash := errors.New("resolution poster crashed")
-			a.store.AfterAnswerPost = func(id string) error {
-				if id == ids[3] {
-					return crash
-				}
-				return nil
-			}
-			if _, err := a.post(); !errors.Is(err, crash) {
-				t.Fatalf("resolution crash: %v", err)
-			}
-			a.store.AfterAnswerPost = nil
+			a.crashAfterPosting(t, ids[3])
 			// The thread is gone from GitHub (its root comment deleted): the
 			// read finds no thread for it at all.
 			a.w.gh.DeleteLineComment(1, a.first)
@@ -642,34 +611,14 @@ func TestAResolutionIsReconciledFromItsThreadsState(t *testing.T) {
 			expireReconciliationAnswer(t, a, ref)
 		}, "withheld", false, false, "absent"},
 		{"unresolved", func(a *answering, ref delivery.RunRef, ids []string) {
-			crash := errors.New("resolution poster crashed")
-			a.store.AfterAnswerPost = func(id string) error {
-				if id == ids[3] {
-					return crash
-				}
-				return nil
-			}
-			if _, err := a.post(); !errors.Is(err, crash) {
-				t.Fatalf("resolution crash: %v", err)
-			}
-			a.store.AfterAnswerPost = nil
+			a.crashAfterPosting(t, ids[3])
 			// The thread is there, and a person unresolved it.
 			a.w.gh.Set(func(s *fakegithub.Server) { s.ResolvedThreads[s.ThreadID(a.first)] = false })
 			a.w.stop(a.w.ownedBy(a.task, "Ana"), a.task, map[string]any{"note": "enough"})
 			expireReconciliationAnswer(t, a, ref)
 		}, "withheld", false, false, "unresolved"},
 		{"unreadable", func(a *answering, ref delivery.RunRef, ids []string) {
-			crash := errors.New("resolution poster crashed")
-			a.store.AfterAnswerPost = func(id string) error {
-				if id == ids[3] {
-					return crash
-				}
-				return nil
-			}
-			if _, err := a.post(); !errors.Is(err, crash) {
-				t.Fatalf("resolution crash: %v", err)
-			}
-			a.store.AfterAnswerPost = nil
+			a.crashAfterPosting(t, ids[3])
 			a.w.gh.Set(func(s *fakegithub.Server) {
 				// Refused, not failing: asking again will not mend it, so
 				// it is uncertain at once (a transient read is retried:
@@ -873,17 +822,7 @@ func TestAClaimedAnswerIsReconciledNotWithheldByTheStepsPass(t *testing.T) {
 	}
 	for _, c := range []tc{
 		{"lapsed claim, on GitHub", func(t *testing.T, a *answering, ids []string) {
-			crash := errors.New("the poster crashed")
-			a.store.AfterAnswerPost = func(id string) error {
-				if id == ids[0] {
-					return crash
-				}
-				return nil
-			}
-			if _, err := a.post(); !errors.Is(err, crash) {
-				t.Fatalf("the crashing post: %v", err)
-			}
-			a.store.AfterAnswerPost = nil
+			a.crashAfterPosting(t, ids[0])
 			a.store.Now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 		}, "posted", 1},
 		{"released claim", func(t *testing.T, a *answering, ids []string) {
