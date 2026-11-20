@@ -694,6 +694,34 @@ with an id, remember pins or unpins that memory: give pin true or false, and not
 
 a title is required: remember saves a new memory, unless id names one to pin or unpin
 
+## refusals/tools/runcalls/commit
+
+commit is a commit's SHA, 7 to 40 hexadecimal characters; leave it out for the Run's HEAD
+
+## refusals/tools/runcalls/filter
+
+filter is at most %d characters: words of a command
+
+## refusals/tools/runcalls/no-such-commit
+
+the Run's checkouts have no commit %s
+
+## refusals/tools/runcalls/no-task
+
+run_calls reads a writer Run of your task: you have no task
+
+## refusals/tools/runcalls/no-writer
+
+your task's current attempt has no implementer, fixer or simplifier Run yet
+
+## refusals/tools/runcalls/not-writer
+
+%s is not an implementer, fixer or simplifier Run of your task's current attempt
+
+## refusals/tools/runcalls/unread
+
+dude cannot read that Run's commit: its container is not running, and no checks ask read it there
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

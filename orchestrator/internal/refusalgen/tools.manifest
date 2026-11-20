@@ -174,3 +174,10 @@ rReplyPerTurn                          refusals/tools/reply-in-thread/per-turn
 rReplyNotConnected                     refusals/tools/reply-in-thread/not-connected
 rReplyBusy                             refusals/tools/reply-in-thread/busy
 rReplyRefused                          refusals/tools/reply-in-thread/refused
+rRunCallsNoTask                        refusals/tools/runcalls/no-task
+rRunCallsCommit                        refusals/tools/runcalls/commit
+rRunCallsFilter                        refusals/tools/runcalls/filter
+rRunCallsNotWriter                     refusals/tools/runcalls/not-writer
+rRunCallsNoWriter                      refusals/tools/runcalls/no-writer
+rRunCallsNoSuchCommit                  refusals/tools/runcalls/no-such-commit
+rRunCallsUnread                        refusals/tools/runcalls/unread
