@@ -27,9 +27,14 @@ func ExternalTextClose(id string) string { return externalClose + id + externalE
 
 var markerBrackets = strings.NewReplacer("⟦", "[", "⟧", "]")
 
+// Defanged is s with the brackets the markers are made of taken out, as
+// ExternalText takes them out of what it quotes: text shown unquoted (or
+// only %q-quoted) that an agent wrote cannot write a marker of any id.
+func Defanged(s string) string { return markerBrackets.Replace(s) }
+
 // ExternalText is s quoted as external text under id.
 func ExternalText(id, s string) string {
-	return ExternalTextOpen(id) + markerBrackets.Replace(s) + ExternalTextClose(id)
+	return ExternalTextOpen(id) + Defanged(s) + ExternalTextClose(id)
 }
 
 var externalMarker = regexp.MustCompile(`⟦/?external [^⟧]*⟧`)
