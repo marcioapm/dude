@@ -1,7 +1,6 @@
 package phases
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -397,17 +396,33 @@ func TestDecideChecksRefusals(t *testing.T) {
 	}
 }
 
+// wakeEvidence is a checks ask's evidence of calls (command, exit; exit
+// nil for none recorded), newest first, at a clean commit.
+func wakeEvidence(calls ...[]any) *delivery.ChecksEvidence {
+	e := &delivery.ChecksEvidence{Read: true, Clean: true, Heads: []delivery.CheckoutHead{{Repo: "api", SHA: strings.Repeat("a", 40), Clean: true}}}
+	for _, c := range calls {
+		rc := delivery.RunCall{Command: c[0].(string), Ended: true}
+		if n, ok := c[1].(int); ok {
+			rc.Exit = &n
+		}
+		e.Calls = append(e.Calls, rc)
+	}
+	return e
+}
+
 // The scripted DefaultsModel conductor reads the real checks wake: its
-// decide_checks backs passes and rejects every failure or not-run check,
+// decide_checks backs a pass only on the newest call of it in the
+// evidence recording exit 0, and rejects every failure or not-run check,
 // one verdict per reported check, in order — never passing a failure.
 func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
 	a := delivery.ChecksAsked{Turn: 42, Check: []delivery.Check{
 		{Command: `make "it"`, Result: delivery.CheckPass}, {Command: "make test", Result: delivery.CheckFail},
 		{Command: "e2e", Result: delivery.CheckNotRun}, {Command: "make lint", Result: delivery.CheckPass},
-		{Command: "make vet", Result: delivery.CheckPass}}}
-	// dude recorded make "it" exiting 0, make lint exiting 1, and no call
-	// of make vet: only the first pass is backed.
-	line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, nil, []string{"exit 0", "", "", "exit 1", "none recorded"})
+		{Command: "make vet", Result: delivery.CheckPass}, {Command: "make fmt", Result: delivery.CheckPass}}}
+	// make "it" exited 0, make lint 1 after an older 0, make fmt with no
+	// exit recorded, and no call of make vet: only the first is backed.
+	a.Evidence = wakeEvidence([]any{`make "it"`, 0}, []any{"make lint", 1}, []any{"make fmt", nil}, []any{"make lint", 0})
+	line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, nil)
 	calls := fakeagent.ChecksDefaults("Since you last heard: " + line)
 	if len(calls) != 1 || calls[0][0] != "decide_checks" {
 		t.Fatalf("%q from %q", calls, line)
@@ -416,10 +431,11 @@ func TestTheDefaultsConductorReadsTheChecksWake(t *testing.T) {
 	if err := json.Unmarshal([]byte(calls[0][1]), &in); err != nil {
 		t.Fatal(err)
 	}
-	if in.RunID != "run_x" || in.Turn != 42 || len(in.Checks) != 5 || in.Checks[0].Command != `make "it"` ||
+	if in.RunID != "run_x" || in.Turn != 42 || len(in.Checks) != 6 || in.Checks[0].Command != `make "it"` ||
 		in.Checks[0].Verdict != delivery.VerdictBacked || in.Checks[1].Verdict != delivery.VerdictReject ||
 		in.Checks[2].Verdict != delivery.VerdictReject || in.Checks[3].Verdict != delivery.VerdictUnbacked ||
-		in.Checks[4].Verdict != delivery.VerdictUnbacked || in.Missing.Verdict != delivery.MissingNone {
+		in.Checks[4].Verdict != delivery.VerdictUnbacked || in.Checks[5].Verdict != delivery.VerdictUnbacked ||
+		in.Missing.Verdict != delivery.MissingNone {
 		t.Fatalf("%+v from %q", in, line)
 	}
 }
@@ -530,39 +546,6 @@ func TestAPendingAskShortcutYieldsToTheFallback(t *testing.T) {
 	}
 }
 
-// dude's reading of a reported pass's latest call is of that command, not
-// of any later call that merely contains it: a failed `verify` followed by
-// `echo verify` exiting 0 reads "exit 1". A call that only contains the
-// command (piped, ORed, grepped, a longer command) is not one of it; a
-// `cd X && ` before it is.
-func TestRecordedCallsReadTheReportedCommandNotOneContainingIt(t *testing.T) {
-	for _, c := range []struct {
-		name, reported string
-		calls          [][]any // command, exit
-		want           string
-	}{
-		{"a later echo of it", "verify", [][]any{{"verify", 1}, {"echo verify", 0}}, "exit 1"},
-		{"ORed with true", "make test", [][]any{{"make test || true", 0}}, "none recorded"},
-		{"grepped for", "make test", [][]any{{"make test", 2}, {`grep "make test" Makefile`, 0}}, "exit 2"},
-		{"a longer command", "go test ./...", [][]any{{"go test ./... -run X", 0}}, "none recorded"},
-		{"the command itself, last", "go test ./...", [][]any{{"go test ./... -run X", 1}, {"go  test\n./...", 0}}, "exit 0"},
-		{"in its directory", "make test", [][]any{{"cd api && make test", 0}}, "exit 0"},
-		{"in a directory, then more", "make test", [][]any{{"cd api && make test && echo ok", 0}}, "none recorded"},
-		{"reported with its cd", "cd api && make test", [][]any{{"cd api && make test", 0}}, "exit 0"},
-		{"reported with its cd, run in it", "cd api && make test", [][]any{{"cd  api &&\nmake test", 0}}, "exit 0"},
-		{"reported in another directory", "cd api && make test", [][]any{{"cd web && make test", 0}}, "none recorded"},
-		{"reported with its cd, run without", "cd api && make test", [][]any{{"make test", 0}}, "none recorded"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w := newHarnessWorld(t)
-			got := w.recordedAfter(c.calls, c.reported, delivery.CheckPass, nil)
-			if len(got) != 1 || got[0] != c.want {
-				t.Fatalf("read %q, want %q", got, c.want)
-			}
-		})
-	}
-}
-
 // The conductor saying a check is obviously missing holds the report as an
 // unbacked pass does: not passed, sent back naming what is missing, the
 // recorded missing-checks verdict unverified.
@@ -650,7 +633,7 @@ func TestTheChecksWakeLeadsWithBasesAndWaiverCursors(t *testing.T) {
 	a.Waivers[5] = &delivery.CarriedWaiver{Role: "implementer", Cursor: 4242}
 	a.Waivers[7] = &delivery.CarriedWaiver{Role: "fixer", Cursor: 4343}
 	bases := []taskBase{{Repo: "api", Branch: "main", SHA: "0123456789abcdef0123456789abcdef01234567"}}
-	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, bases, nil))
+	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, bases))
 	if len(line) <= 2000 {
 		t.Fatalf("the wake is %d characters: not long enough to be clipped", len(line))
 	}
@@ -674,7 +657,7 @@ func TestTheChecksWakeClipsWaivedCommands(t *testing.T) {
 			Result: delivery.CheckFail, Evidence: "FAIL"})
 		a.Waivers[i] = &delivery.CarriedWaiver{Role: "implementer", Cursor: int64(7000 + i)}
 	}
-	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, nil, nil))
+	line := []rune(checksWakeLine(phaseRun{ID: "run_x", Phase: "fix"}, a, nil))
 	head := string(line[:min(len(line), 2000)])
 	for i := range 8 {
 		if want := fmt.Sprintf("waiverCursor %d", 7000+i); !strings.Contains(head, want) {
@@ -683,29 +666,30 @@ func TestTheChecksWakeClipsWaivedCommands(t *testing.T) {
 	}
 }
 
-// The scripted conductor takes a failure as pre-existing only on dude's
-// recording of it failing at the base, never on the writer's evidence
-// saying so.
+// The scripted conductor takes a failure as pre-existing only on a call in
+// the evidence that checks the task's base out and fails there, never on
+// the writer's evidence saying so.
 func TestTheDefaultsConductorNeedsARecordedBaseCall(t *testing.T) {
-	a := delivery.ChecksAsked{Turn: 3, Check: []delivery.Check{{Command: "make test", Result: delivery.CheckFail,
-		Evidence: "TestClock " + fakeagent.ShownAtBase + " the starting commit"}}}
-	bases := []taskBase{{Repo: "target", Branch: "main", SHA: "0123456789abcdef0123456789abcdef01234567"}}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	bases := []taskBase{{Repo: "target", Branch: "main", SHA: sha}}
+	atBase := "git worktree add ../b " + sha + " && cd ../b && make test"
 	for _, c := range []struct {
-		name, call, want string
+		name string
+		call []any
+		want string
 	}{
-		{"no call at the base", "none recorded", delivery.VerdictReject},
-		{"passing at the base", "exit 0", delivery.VerdictReject},
-		{"failing at the base", "exit 2", delivery.VerdictPreexisting},
-		{"not run at the base", "exit 128", delivery.VerdictReject},
-		{"not found at the base", "exit 127", delivery.VerdictReject},
-		// dude's readings of a call naming the base whose failure is not
-		// the command's (recordedCalls): never pre-existing.
-		{"the worktree add failed", "did not run or was stopped: exit 128", delivery.VerdictReject},
-		{"an exit a step before it may have returned", "unclear: exit 1, which a step before it may have returned", delivery.VerdictReject},
-		{"a status, no exit", "failed", delivery.VerdictReject},
+		{"no call at the base", []any{"make test", 2}, delivery.VerdictReject},
+		{"passing at the base", []any{atBase, 0}, delivery.VerdictReject},
+		{"failing at the base", []any{atBase, 2}, delivery.VerdictPreexisting},
+		{"not run at the base", []any{atBase, 128}, delivery.VerdictReject},
+		{"not found at the base", []any{atBase, 127}, delivery.VerdictReject},
+		{"no exit recorded", []any{atBase, nil}, delivery.VerdictReject},
+		{"at another commit", []any{"git worktree add ../b fedcba9876543210 && cd ../b && make test", 2}, delivery.VerdictReject},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, bases, []string{c.call})
+			a := delivery.ChecksAsked{Turn: 3, Check: []delivery.Check{{Command: "make test", Result: delivery.CheckFail,
+				Evidence: "TestClock " + fakeagent.ShownAtBase + " the starting commit"}}, Evidence: wakeEvidence(c.call)}
+			line := checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, bases)
 			calls := fakeagent.ChecksDefaults(line)
 			var in delivery.DecideChecks
 			if len(calls) != 1 || json.Unmarshal([]byte(calls[0][1]), &in) != nil || len(in.Checks) != 1 {
@@ -716,105 +700,4 @@ func TestTheDefaultsConductorNeedsARecordedBaseCall(t *testing.T) {
 			}
 		})
 	}
-}
-
-// dude reads a failure's call at the base: a call naming a base's commit
-// whose last step is the command.
-func TestRecordedCallsReadAFailureAtTheBase(t *testing.T) {
-	sha := "0123456789abcdef0123456789abcdef01234567"
-	bases := []taskBase{{Repo: "target", Branch: "main", SHA: sha}}
-	for _, c := range []struct {
-		name     string
-		reported string // "" is "make test"
-		calls    [][]any
-		want     string
-	}{
-		{"at the base", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 2}, {"make test", 2}}, "exit 2"},
-		{"at the base by its short SHA", "", [][]any{{"git worktree add ../task-base " + sha[:12] + " && cd ../task-base && make test", 2}}, "exit 2"},
-		{"checked out in place", "", [][]any{{"git checkout " + sha + " && make test", 2}}, "exit 2"},
-		{"switched to, detached", "", [][]any{{"git switch --detach " + sha + " && make test", 2}}, "exit 2"},
-		{"passing at the base", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 0}}, "exit 0"},
-		{"at another commit", "", [][]any{{"git worktree add ../b fedcba9876543210 && cd ../b && make test", 2}}, "none recorded"},
-		{"only at the head", "", [][]any{{"make test", 2}}, "none recorded"},
-		{"another command at the base", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make lint", 2}}, "none recorded"},
-		// The worktree add failed: the command never ran.
-		{"the worktree add failed", "", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base && make test", 128}}, "did not run or was stopped: exit 128"},
-		// The SHA only named, the command run at the head.
-		{"a diff naming the base, run at the head", "", [][]any{{"git diff " + sha[:12] + " --stat && make test", 2}}, "none recorded"},
-		{"the worktree added, the command run outside it", "", [][]any{{"git worktree add ../b " + sha + " && make test", 2}}, "none recorded"},
-		{"exit 1 a cd returned", "", [][]any{{"git worktree add ../b " + sha + " && cd ../c && make test", 1, "Preparing worktree (detached HEAD 0123456)\nbash: line 1: cd: ../c: No such file or directory"}}, "none recorded"},
-		{"exit 1 a cd may have returned", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 1, "bash: line 1: cd: ../b: No such file or directory"}}, "unclear: exit 1, which a step before it may have returned"},
-		{"exit 1 with no output", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 1, ""}}, "unclear: exit 1, which a step before it may have returned"},
-		{"exit 1 of the command", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && make test", 1, "FAIL: TestClock (0.00s)\nexit status 1"}}, "exit 1"},
-		{"another step before it", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && npm ci && make test", 2}}, "unclear: exit 2, which a step before it may have returned"},
-		// A reported directory is the one under the base's worktree.
-		{"reported in its directory", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base/api && make test", 2}}, "exit 2"},
-		{"reported in its directory, entered in two steps", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base && cd api && make test", 2}}, "exit 2"},
-		{"reported in its directory, run in another", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base/web && make test", 2}}, "none recorded"},
-		{"reported in its directory, run at the root", "cd api && make test", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base && make test", 2}}, "none recorded"},
-		{"reported with no directory, run in one", "", [][]any{{"git worktree add ../task-base " + sha + " && cd ../task-base/api && make test", 2}}, "exit 2"},
-		// dash (/bin/sh on the runtime image) exits 2 on a failed cd; bash 1.
-		{"exit 2 dash's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 2, "sh: 1: cd: can't cd to api"}}, "unclear: exit 2, which a step before it may have returned"},
-		{"exit 1 bash's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 1, "bash: line 1: cd: api: No such file or directory"}}, "unclear: exit 1, which a step before it may have returned"},
-		// zsh (Codex's login shell where it is the user's) exits 1.
-		{"exit 1 zsh's cd returned", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 1, "zsh:cd:1: no such file or directory: api"}}, "unclear: exit 1, which a step before it may have returned"},
-		{"exit 2 with no output", "", [][]any{{"git checkout " + sha + " && make test", 2, ""}}, "unclear: exit 2, which a step before it may have returned"},
-		{"exit 2 of make", "cd api && make test", [][]any{{"git checkout " + sha + " && cd api && make test", 2, "--- FAIL: TestClock (0.00s)\n    clock_test.go:12: got 3, want 2\nFAIL\nexit status 1\nmake: *** [Makefile:4: test] Error 1"}}, "exit 2"},
-		// cd - goes back where the shell was, not down.
-		{"cd - after entering the worktree", "", [][]any{{"git worktree add ../b " + sha + " && cd ../b && cd - && make test", 2}}, "none recorded"},
-		{"cd -x after a checkout in place", "", [][]any{{"git checkout " + sha + " && cd -P && make test", 2}}, "none recorded"},
-		// error: is a step's failure as git's shapes or as the first line;
-		// a test framework's later in the output is the command's.
-		{"a test's error: line", "", [][]any{{"git checkout " + sha + " && make test", 1, "running 1 test\ntest clock ... FAILED\nerror: expected 2, got 3\nFAIL"}}, "exit 1"},
-		{"git's pathspec error", "", [][]any{{"git checkout " + sha + " && make test", 1, "Note: switching to '0123456'.\nerror: pathspec 'x' did not match any file(s) known to git"}}, "unclear: exit 1, which a step before it may have returned"},
-		{"git's local changes error", "", [][]any{{"git checkout " + sha + " && make test", 1, "error: Your local changes to the following files would be overwritten by checkout:\n\tMakefile"}}, "unclear: exit 1, which a step before it may have returned"},
-		// A checkout mid-merge, its stdout recorded before its stderr.
-		{"git's unresolved index error", "", [][]any{{"git checkout " + sha + " && make test", 1, "Makefile: needs merge\nerror: you need to resolve your current index first"}}, "unclear: exit 1, which a step before it may have returned"},
-		{"an error: line first", "", [][]any{{"git checkout " + sha + " && make test", 1, "\nerror: could not detach HEAD\n"}}, "unclear: exit 1, which a step before it may have returned"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			w := newHarnessWorld(t)
-			got := w.recordedAfter(c.calls, cmp.Or(c.reported, "make test"), delivery.CheckFail, bases)
-			if len(got) != 1 || got[0] != c.want {
-				t.Fatalf("read %q, want %q", got, c.want)
-			}
-			// The scripted conductor, woken with that reading, takes the
-			// failure as pre-existing only on a failing exit of the command.
-			a := delivery.ChecksAsked{Turn: 3, Check: []delivery.Check{{Command: cmp.Or(c.reported, "make test"), Result: delivery.CheckFail, Evidence: "fails the same at the base"}}}
-			var in delivery.DecideChecks
-			calls := fakeagent.ChecksDefaults(checksWakeLine(phaseRun{ID: "run_x", Phase: "implement"}, a, bases, got))
-			if len(calls) != 1 || json.Unmarshal([]byte(calls[0][1]), &in) != nil || len(in.Checks) != 1 {
-				t.Fatalf("%q", calls)
-			}
-			want := delivery.VerdictReject
-			if strings.HasPrefix(c.want, "exit ") && c.want != "exit 0" {
-				want = delivery.VerdictPreexisting
-			}
-			if in.Checks[0].Verdict != want {
-				t.Fatalf("the scripted conductor decided %s on %q, want %s", in.Checks[0].Verdict, got, want)
-			}
-		})
-	}
-}
-
-// recordedAfter records calls (command, exit[, output]; output "out" when
-// omitted) as the Run's shell calls and is recordedCalls of one reported
-// check, command with result.
-func (w *harnessWorld) recordedAfter(calls [][]any, command, result string, bases []taskBase) []string {
-	w.t.Helper()
-	for i, call := range calls {
-		output := "out"
-		if len(call) > 2 {
-			output = call[2].(string)
-		}
-		bashCall(w, fmt.Sprintf("call_%d", i), call[0].(string), output, call[1].(int))
-	}
-	var got []string
-	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) (err error) {
-		got, err = recordedCalls(context.Background(), tx, w.run.ID, []delivery.Check{{Command: command, Result: result}}, bases)
-		return err
-	}); err != nil {
-		w.t.Fatal(err)
-	}
-	return got
 }

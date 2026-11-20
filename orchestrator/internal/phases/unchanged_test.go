@@ -471,14 +471,15 @@ func TestParseUnchangedAcceptsOnlyAWholeCleanAccount(t *testing.T) {
 		exit      int
 		want      bool
 	}{
-		{"both clean", "clean api " + a + "\nclean web " + b + "\n", 0, true},
-		{"one missing", "clean api " + a + "\n", 0, false},
-		{"one twice", "clean api " + a + "\nclean api " + a + "\n", 0, false},
-		{"one changed", "clean api " + a + "\nchanged web " + b + "\n", 0, false},
-		{"one failed", "clean api " + a + "\nfail web\n", 4, false},
-		{"another head", "clean api " + a + "\nclean web " + a + "\n", 0, false},
-		{"a stranger", "clean api " + a + "\nclean web " + b + "\nclean docs " + a + "\n", 0, false},
-		{"clean but a failed exit", "clean api " + a + "\nclean web " + b + "\n", 1, false},
+		{"both clean", "now 9\nrepo api " + a + " 5 clean\nrepo web " + b + " 5 clean\n", 0, true},
+		{"no clock", "repo api " + a + " 5 clean\nrepo web " + b + " 5 clean\n", 0, false},
+		{"one missing", "now 9\nrepo api " + a + " 5 clean\n", 0, false},
+		{"one twice", "now 9\nrepo api " + a + " 5 clean\nrepo api " + a + " 5 clean\n", 0, false},
+		{"one changed", "now 9\nrepo api " + a + " 5 clean\nrepo web " + b + " 5 dirty\n", 0, false},
+		{"one failed", "now 9\nrepo api " + a + " 5 clean\nfail web\n", 4, false},
+		{"another head", "now 9\nrepo api " + a + " 5 clean\nrepo web " + a + " 5 clean\n", 0, false},
+		{"a stranger", "now 9\nrepo api " + a + " 5 clean\nrepo web " + b + " 5 clean\nrepo docs " + a + " 5 clean\n", 0, false},
+		{"clean but a failed exit", "now 9\nrepo api " + a + " 5 clean\nrepo web " + b + " 5 clean\n", 1, false},
 		{"nothing", "", 0, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

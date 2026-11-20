@@ -4,57 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// unchangedScript says, per repository, whether its checkout is exactly
-// where it started: HEAD at the given commit, nothing staged, unstaged or
-// untracked (ignored files aside, which nothing commits or pushes), and no
-// merge, rebase, cherry-pick, revert or sequencer under way. Arguments:
-// name, checkout, starting commit, per repository. Each prints one line,
-// "clean <name> <head>" or "changed <name> <head>"; a checkout that is
-// missing or that git cannot read prints "fail <name>" and the script exits
-// 4. Read-only POSIX sh: git status refreshes the index's stat cache at most.
-const unchangedScript = `set -u
-status=0
-while [ $# -ge 3 ]; do
-  name=$1 dir=$2 base=$3; shift 3
-  if [ ! -d "$dir" ]; then echo "fail $name"; status=4; continue; fi
-  if ! head=$(git -C "$dir" rev-parse -q --verify 'HEAD^{commit}'); then echo "fail $name"; status=4; continue; fi
-  if [ "$head" != "$base" ]; then echo "changed $name $head"; continue; fi
-  if ! st=$(git -C "$dir" status --porcelain=v1 --untracked-files=all --ignore-submodules=none); then echo "fail $name"; status=4; continue; fi
-  op=
-  for ref in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD; do
-    git -C "$dir" rev-parse -q --verify "$ref" > /dev/null 2>&1 && op=$ref
-  done
-  for d in rebase-merge rebase-apply sequencer/todo; do
-    if ! p=$(git -C "$dir" rev-parse --git-path "$d"); then op=unknown; continue; fi
-    case $p in /*) ;; *) p=$dir/$p ;; esac
-    [ -e "$p" ] && op=$d
-  done
-  if [ -z "$st" ] && [ -z "$op" ]; then
-    echo "clean $name $head"
-  else
-    echo "changed $name $head"
-  fi
-done
-exit $status`
-
 // unchangedBeforePush inspects, now, every repository the Run may push
 // (runs.lux_pushes) against where its checkout started (runs.base_shas: lux's
-// git.checkout, or a continued round's sync). unchanged only when every one
-// of them answered clean at its starting commit; any repository without a
-// recorded base, an exec lux refuses or that exits non-zero, or output that
-// does not account for each repository exactly once leaves it false, and the
-// report is judged as any other. heads: each repository's HEAD as read.
-func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map[string]string, unchanged bool, err error) {
+// git.checkout, or a continued round's sync), in one exec
+// (delivery.CheckoutScript). unchanged only when every one of them answered
+// clean at its starting commit; any repository without a recorded base, an
+// exec lux refuses or that exits non-zero, or output that does not account
+// for each repository exactly once leaves it false, and the report is
+// judged as any other. heads: each repository's HEAD as read. read: the
+// whole account, for the evidence the conductor is shown (nil when the
+// checkouts could not be read).
+func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map[string]string, unchanged bool, read *delivery.CheckoutRead, err error) {
 	if r.LuxRunID == "" {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	var pushes []string
 	var bases map[string]string
@@ -65,52 +35,49 @@ func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map
 		}
 		return json.Unmarshal(raw, &bases)
 	}); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
 	if len(pushes) == 0 {
-		return nil, false, nil
-	}
-	cmd := []string{"sh", "-c", unchangedScript, "dude-unchanged"}
-	for _, name := range slices.Sorted(slices.Values(pushes)) {
-		if !isSHA(bases[name]) {
-			return nil, false, nil
-		}
-		cmd = append(cmd, name, RepoPath(name), bases[name])
+		return nil, false, nil, nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	res, err := s.Lux.Exec(cctx, r.LuxRunID, cmd)
+	start := time.Now()
+	if s.Now != nil {
+		start = s.Now()
+	}
+	res, err := s.Lux.Exec(cctx, r.LuxRunID, delivery.CheckoutCommand("", pushes))
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, false, ctx.Err()
+			return nil, false, nil, ctx.Err()
 		}
 		s.Log.Info("could not inspect a Run's checkouts for changes; its checks are judged", "run", r.ID, "error", err)
-		return nil, false, nil
+		return nil, false, nil, nil
+	}
+	if c, ok := delivery.ParseCheckouts(string(res.Stdout), res.ExitCode, pushes); ok && len(c.Missing) == 0 {
+		read = &delivery.CheckoutRead{Checkouts: c, ReadStart: start}
 	}
 	heads, unchanged = parseUnchanged(string(res.Stdout), res.ExitCode, pushes, bases)
 	if !unchanged && res.ExitCode != 0 {
 		s.Log.Info("inspecting a Run's checkouts failed; its checks are judged", "run", r.ID,
 			"error", fmt.Sprintf("exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr))))
 	}
-	return heads, unchanged, nil
+	return heads, unchanged, read, nil
 }
 
-// parseUnchanged reads unchangedScript's output: true only for exit 0 and
+// parseUnchanged reads CheckoutScript's output: true only for exit 0 and
 // exactly one clean line per repository of pushes, each at its base.
 func parseUnchanged(out string, exit int, pushes []string, bases map[string]string) (map[string]string, bool) {
-	if exit != 0 {
+	c, ok := delivery.ParseCheckouts(out, exit, pushes)
+	if !ok || len(c.Missing) > 0 || len(c.Heads) != len(pushes) {
 		return nil, false
 	}
 	heads := map[string]string{}
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		f := strings.Fields(line)
-		if len(f) != 3 || f[0] != "clean" || !slices.Contains(pushes, f[1]) || heads[f[1]] != "" || f[2] != bases[f[1]] {
+	for _, h := range c.Heads {
+		if !h.Clean || !isSHA(bases[h.Repo]) || h.SHA != bases[h.Repo] {
 			return nil, false
 		}
-		heads[f[1]] = f[2]
-	}
-	if len(heads) != len(pushes) {
-		return nil, false
+		heads[h.Repo] = h.SHA
 	}
 	return heads, true
 }

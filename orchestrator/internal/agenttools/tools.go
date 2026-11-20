@@ -36,6 +36,7 @@ var tools = []tool{
 	define("ask_conductor", askConductor),
 	define("answer_question", answerQuestion),
 	define("decide_checks", decideChecks),
+	around(define("run_calls", checkRunCalls), readRunCommit, listRunCalls),
 	define("emit_event", emitEvent).limit(eventsPerRun),
 	define("list_repositories", listRepositories),
 	define("request_repository", requestRepository).limit(requestsPerRun),

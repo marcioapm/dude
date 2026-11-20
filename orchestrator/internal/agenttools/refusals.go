@@ -178,4 +178,11 @@ const (
 	rReplyNotConnected                     = "the chat this session came from is no longer connected to dude: nothing was posted; answer in this session"
 	rReplyBusy                             = "the chat did not take the reply (%s): nothing was posted; try again in a minute"
 	rReplyRefused                          = "the chat refused the reply: %s. Nothing was posted; answer in this session"
+	rRunCallsNoTask                        = "run_calls reads a writer Run of your task: you have no task"
+	rRunCallsCommit                        = "commit is a commit's SHA, 7 to 40 hexadecimal characters; leave it out for the Run's HEAD"
+	rRunCallsFilter                        = "filter is at most %d characters: words of a command"
+	rRunCallsNotWriter                     = "%s is not an implementer, fixer or simplifier Run of your task's current attempt"
+	rRunCallsNoWriter                      = "your task's current attempt has no implementer, fixer or simplifier Run yet"
+	rRunCallsNoSuchCommit                  = "the Run's checkouts have no commit %s"
+	rRunCallsUnread                        = "dude cannot read that Run's commit: its container is not running, and no checks ask read it there"
 )

@@ -143,7 +143,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if previous != nil && (!previous.Unchanged || previous.Epoch == epoch) {
 		return previous.Verified, false, nil
 	}
-	heads, unchanged, err := s.unchangedBeforePush(ctx, r)
+	heads, unchanged, read, err := s.unchangedBeforePush(ctx, r)
 	if err != nil {
 		return false, true, err
 	}
@@ -151,7 +151,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 	if unchanged {
 		d = checksDecision{Verified: true, Unchanged: true, Epoch: epoch, Heads: heads, Verdicts: []checksVerdict{},
 			Message: checksUnchanged.Render(nil)}
-	} else if d, err = s.judgeChecks(ctx, r); err != nil {
+	} else if d, err = s.judgeChecks(ctx, r, read); err != nil {
 		return false, true, err
 	} else if d.pending {
 		// Held for the conductor's verdict (askConductor): nothing is
@@ -210,7 +210,9 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 // judgeChecks decides the Run's latest report: a conducted delivery's
 // conductor decides it (askConductor); with no conductor, only a person
 // passes a non-pass (noConductor). The judgement tier is never asked.
-func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, error) {
+// read is the Run's checkouts as this turn's inspection read them (nil:
+// not read), whose latest commit bounds the calls the conductor is shown.
+func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun, read *delivery.CheckoutRead) (checksDecision, error) {
 	d, checks, done, err := s.parsedChecks(ctx, r)
 	if err != nil || done {
 		return d, err
@@ -224,7 +226,7 @@ func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun) (checksDecision, e
 		// reported failure, and passes go with the skip notice.
 		return noConductor(d, checksNoConductor, checksSkip), nil
 	}
-	return s.askConductor(ctx, r, d, checks)
+	return s.askConductor(ctx, r, d, checks, read)
 }
 
 // parsedChecks reads the Run's report: done when it is unparseable or too
