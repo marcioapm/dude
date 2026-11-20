@@ -200,7 +200,9 @@ func (w wrapper) chatMessage(typ, actorType, actorID, name string, p map[string]
 		m.From, m.Text = "conductor", w.own(text)
 		return m
 	case typ == delivery.EvChatMessage && actorType == ledger.ActorAgent:
-		// The Run's own reply on GitHub (reply_on_pull_request, by "fixer").
+		// The Run's own reply on GitHub, by "fixer": a fixer's held answer
+		// dude posted once its fix was published (delivery.PostFixerAnswers),
+		// or, in older events, one a fixer posted itself.
 		m.From, m.Text = "agent", w.own(text)
 		return m
 	}

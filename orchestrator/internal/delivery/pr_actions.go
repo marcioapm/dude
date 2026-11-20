@@ -61,13 +61,17 @@ type PRActionCheck struct {
 	checks       []forge.Check
 	// rerun_failed_checks: the event claiming the head.
 	claim string
-	// The line comments a fixer's batch names: the only threads it may
-	// resolve. nil for the conductor, which may resolve any of the PR's.
-	batch []int64
+	// A fixer's resolution, held (EvAnswerHeld, its event id): nothing is
+	// done on GitHub (CheckPRActionTx).
+	heldID string
+	// The held resolution dude did for a fixer (PostFixerAnswers): its
+	// EvAnswerHeld id, named in its record.
+	answerID string
 }
 
 // prActors are who may take which action: the conductor all, a fixer
-// answering pull request feedback only resolve_thread, in its own batch.
+// answering pull request feedback only resolve_thread, on a thread of its
+// own batch, held until its fix is published.
 func prActionAllowed(role, phase, action string) bool {
 	switch {
 	case role == RoleConductor && phase == "":
@@ -111,16 +115,24 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 			return c, refuseText(rYouAreNoLongerThisTask4)
 		}
 	} else {
+		// A fixer: scoped to its batch's line comments, from dude's own
+		// records, before any GitHub read; then held (holdAnswerTx).
 		if caller.ended() {
 			return c, refusef(rYourRunActsOnNothing, caller.status)
 		}
+		var batch []string
 		for _, id := range caller.batch {
-			if n := forge.LineCommentID(id); n != 0 {
-				c.batch = append(c.batch, n)
+			if forge.LineCommentID(id) != 0 {
+				batch = append(batch, id)
 			}
 		}
-		if len(c.batch) == 0 {
+		if len(batch) == 0 {
 			return c, refuseText(rYouResolveOnlyReviewThreadsIn)
+		}
+		// A thread is named by its comment's feedback id: a GitHub node id
+		// (PRRT_…) cannot be told to be the batch's without asking GitHub.
+		if !slices.Contains(batch, strings.TrimSpace(in.Thread)) {
+			return c, refusef(rNotThreadInYourFeedbackYou, strings.TrimSpace(in.Thread))
 		}
 	}
 	owner, repo, number, err := parsePR(in.PR)
@@ -175,6 +187,14 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		if c.thread == "" {
 			return c, refuseText(rNameThreadItsIdPrrtOr)
 		}
+		if caller.phase == PhaseFix {
+			// Its fix is not on the pull request while it runs: held, and
+			// resolved by dude once it is (PostFixerAnswers).
+			c.heldID, err = holdAnswerTx(ctx, tx, ref, heldAnswer{Kind: answerResolve, Repo: repo, Number: number, PRID: c.prID, Thread: c.thread})
+			if err != nil {
+				return c, err
+			}
+		}
 	case ActionMarkReady:
 		if state != forge.StateDraft {
 			return c, refusef(rNotDraft, repo, number)
@@ -228,6 +248,10 @@ func CheckPRActionTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 }
 
 func (c PRActionCheck) PullRequestID() string { return c.prID }
+
+// Held says the action is a fixer's resolution, held (EvAnswerHeld): it is
+// not done on GitHub.
+func (c PRActionCheck) Held() bool { return c.heldID != "" }
 
 // conductorNote is the conductor's text as its section holds it, or a
 // Refusal: not empty, at most pullRequestNoteMax bytes, and no HTML
@@ -289,6 +313,9 @@ type PRActionDone struct {
 // GitHub refused outright, whose claim the refusal's event releases.
 func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActionDone, error) {
 	var done PRActionDone
+	if c.Held() {
+		return done, nil
+	}
 	switch c.action {
 	case ActionRequestReview:
 		// Collaborators only: GitHub refuses a review request of anyone
@@ -323,9 +350,6 @@ func DoPRAction(ctx context.Context, gh *forge.GitHub, c PRActionCheck) (PRActio
 		}
 		if t == nil || !strings.EqualFold(t.Repo, c.slug) || t.Number != c.number {
 			return done, refusef(rNotReviewThread, c.thread, c.repo, c.number)
-		}
-		if c.batch != nil && !slices.ContainsFunc(t.CommentIDs, func(id int64) bool { return slices.Contains(c.batch, id) }) {
-			return done, refusef(rNotThreadInYourFeedbackYou, c.thread)
 		}
 		if !t.Resolved {
 			if err := gh.ResolveReviewThread(ctx, c.slug, t.ID); err != nil {
@@ -391,9 +415,17 @@ func ghRefusal(err error) error {
 	return err
 }
 
-// RecordPRActionTx records what was done, by the Run that asked.
+// RecordPRActionTx records what was done, by the Run that asked. A fixer's
+// held resolution was recorded when checked: it answers that it is held.
 func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRActionDone) (map[string]any, error) {
+	if c.Held() {
+		return map[string]any{"action": c.action, "repo": c.repo, "number": c.number, "thread": c.thread,
+			"held": AnswerHeldResolve, "answerId": c.heldID}, nil
+	}
 	payload := map[string]any{"action": c.action, "repo": c.repo, "number": c.number, "head": c.head}
+	if c.answerID != "" {
+		payload["answerId"], payload["by"] = c.answerID, RoleFixer
+	}
 	switch c.action {
 	case ActionRequestReview:
 		payload["logins"], payload["refused"] = done.Asked, db.NonNil(done.Refused)
@@ -415,6 +447,6 @@ func RecordPRActionTx(ctx context.Context, tx pgx.Tx, c PRActionCheck, done PRAc
 	}
 	_, err := ledger.Append(ctx, tx, ledger.Event{Type: EvPullRequestAction, OrganizationID: c.ref.Org, ProjectID: c.ref.ProjectID,
 		TaskID: c.ref.TaskID, RunID: c.ref.RunID, ActorType: ledger.ActorAgent, ActorID: c.ref.RunID,
-		Source: ledger.SourceOrchestrator, CorrelationID: c.ref.TaskID, Payload: payload})
+		Source: ledger.SourceOrchestrator, CorrelationID: c.ref.TaskID, CausationID: c.answerID, Payload: payload})
 	return payload, err
 }

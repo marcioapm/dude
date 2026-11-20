@@ -2810,6 +2810,13 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 	if pending := settle(st, sc); len(pending) > 0 {
 		return park("awaitPRFix", st, pending), nil
 	}
+	// The fixer has ended: what it answered on the pull request is posted
+	// now if its fix is there, and withheld if not. Before anything
+	// else of this step, so that a pull request that ended, or a fixer that
+	// failed after publishing, still has its answers settled.
+	if err := w.fixerAnswers(ctx, sc, st); err != nil {
+		return workflow.Result{}, err
+	}
 	// No pull request left open for the fix to reach, signalled or not: it
 	// is dropped, and nothing is opened for it (endedBeforeOpening).
 	if res, ended, err := w.endedBeforeOpening(ctx, sc, st); ended || err != nil {
@@ -2883,8 +2890,9 @@ func (w *steps) awaitPRFix(ctx context.Context, sc workflow.StepContext) (workfl
 			}
 		}
 	}
-	// Nothing changed: nothing to check, nothing to move.
-	return w.movedOnPR(ctx, sc, st, out.Heads, false)
+	// Nothing changed: nothing to check, nothing to move. The fixer's
+	// answers were posted at this step's start: not again.
+	return w.movedOnPR(ctx, sc, st, out.Heads, false, true)
 }
 
 // ReasonPullRequestMoved: a pull request's branch moved while a fix for
@@ -2911,8 +2919,16 @@ const forgeWaitMin = 5 * time.Second
 // verification brought up to the commit they show, and back to waiting.
 // promoted says the heads reached the pull requests checked (a direct
 // fix's narrow loop done), so their bodies are refreshed in a step of its
-// own.
-func (w *steps) movedOnPR(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string, promoted bool) (workflow.Result, error) {
+// own. answered says the step posted the fixers' held answers already
+// (awaitPRFix, first thing): they are not looked for twice in one step.
+func (w *steps) movedOnPR(ctx context.Context, sc workflow.StepContext, st *State, heads map[string]string, promoted, answered bool) (workflow.Result, error) {
+	// A fixer's answers not posted yet (a retry, or a fix whose loop just
+	// ended): settled as awaitPRFix does.
+	if !answered {
+		if err := w.fixerAnswers(ctx, sc, st); err != nil {
+			return workflow.Result{}, err
+		}
+	}
 	if st.Integration == nil {
 		// An integration's comments are the fix's after it (openPullRequest).
 		st.PRFeedback = nil
@@ -2985,7 +3001,7 @@ func (w *steps) prFixDone(ctx context.Context, sc workflow.StepContext) (workflo
 	st.FixRange, st.SimplifyBase = nil, nil
 	// The bodies' review and verification are brought up to these heads
 	// as a promotion's are (refreshPromoted, retried), then prFixLanded.
-	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0)
+	return w.movedOnPR(ctx, sc, st, heads, len(heads) > 0, false)
 }
 
 // prFixLanded goes on from a pull request fix that reached the pull
@@ -3127,6 +3143,11 @@ func (w *steps) pullRequestEnded(ctx context.Context, sc workflow.StepContext, s
 		}); err != nil {
 			return workflow.Result{}, true, err
 		}
+	}
+	// None open: no later step posts the fixers' held answers, so they
+	// are withheld now, each for its own pull request's end.
+	if err := w.settleHeldOnEnd(ctx, sc.OrganizationID, st.TaskID, states); err != nil {
+		return workflow.Result{}, true, err
 	}
 	c := countStates(states)
 	if st.Source.ReviewOnly() && c.open == 0 && len(states) > 0 {
