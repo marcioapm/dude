@@ -184,13 +184,14 @@ func clipTo(s string, n int) string {
 }
 
 // checksWakeLine is the conductor's wake: the Run, its turn, the task's
-// bases and the waivers a failure may carry (first: the line is clipped,
-// and a later check's question loses only its evidence), then one question
-// per reported check, then whether one is missing, then the evidence every
-// pass is decided by (a.Evidence): the Run's commits at the report, whether
-// its tree was clean, and its calls at the latest commit, newest first.
-// The calls come last, so a clipped wake loses the oldest call first;
-// run_calls lists them all.
+// bases and the waivers a failure may carry, then the evidence's headline
+// (a.Evidence: the Run's commits at the report, whether its tree was
+// clean, and how many calls did not fit or that none was recorded), then
+// one question per reported check, then whether one is missing, then the
+// Run's calls at the latest commit, newest first. What comes first
+// survives the line's clip: a later check's question loses only its
+// evidence, and the calls come last, so a wake too long loses the oldest
+// call first; run_calls lists them all.
 //
 // Everything the writer, its tools or its subagents wrote is shown
 // defanged (commands, %q-quoted) or quoted as external text (evidence, a
