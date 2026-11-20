@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +125,56 @@ func TestACallBeforeTheLatestCommitIsNotShown(t *testing.T) {
 	w.decideAsTheDefaults(w.cond)
 	if pass, _ := w.gate(); pass {
 		t.Fatal("a pass backed only by a call before the commit passed")
+	}
+}
+
+// commitStamped commits a change to api with its committer time at at, as
+// a host whose clock differs from dude's stamps it.
+func (w *evidenceWorld) commitStamped(at time.Time) {
+	w.t.Helper()
+	w.write("api", "moved.txt", "moved\n")
+	w.git(w.dir("api"), "add", "-A")
+	c := exec.Command("git", "-C", w.dir("api"), "-c", "user.name=a", "-c", "user.email=a@x", "commit", "-q", "-m", "moved")
+	c.Env = append(os.Environ(), "GIT_COMMITTER_DATE="+at.Format(time.RFC3339))
+	if out, err := c.CombinedOutput(); err != nil {
+		w.t.Fatalf("git commit: %v: %s", err, out)
+	}
+}
+
+// A Run moved between lux hosts committed on the old host, whose clock
+// was five minutes ahead of the host it is read on: its committer time is
+// five minutes later than the commit on dude's clock. A pass run a minute
+// after the commit (on dude's clock) is still shown, and backed.
+func TestAMovedRunsCommitOnAnotherClockHidesNoCallAfterIt(t *testing.T) {
+	w := newEvidenceWorld(t)
+	now := time.Now()
+	w.commitStamped(now.Add(5 * time.Minute))
+	w.call(now.Add(time.Minute), "m1", "", "make check", exit(0), "ok")
+	a := w.report("make check")
+	if e := a.Evidence; e == nil || !e.Read || len(e.Calls) != 1 || e.Calls[0].Command != "make check" {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	if line := w.checksWake(); !strings.Contains(line, "make check⟦/external") || strings.Contains(line, "No shell call was recorded") {
+		t.Fatalf("wake %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); !pass {
+		t.Fatalf("a pass after a moved Run's commit did not pass: %+v", recordedJudgement(w.harnessWorld))
+	}
+}
+
+// The host-skew margin is bounded: a call ten minutes before the commit
+// is still not shown.
+func TestACallTenMinutesBeforeTheCommitIsStillHidden(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(time.Now().Add(-10*time.Minute), "early", "", "make check", exit(0), "ok")
+	a := w.report("make check")
+	if a.Evidence == nil || !a.Evidence.Read || len(a.Evidence.Calls) != 0 {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass backed only by a call ten minutes before the commit passed")
 	}
 }
 

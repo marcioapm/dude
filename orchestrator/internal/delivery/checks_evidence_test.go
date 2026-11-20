@@ -24,11 +24,22 @@ func TestTheCommitTimeIsMovedOntoTheOrchestratorsClock(t *testing.T) {
 			containerNow := readStart.Add(-c.skew).Unix()
 			committed := containerNow - 600 // ten minutes before the read, on the container's clock
 			got := Checkouts{Now: containerNow, Heads: []CheckoutHead{{Repo: "api", SHA: strings.Repeat("a", 40), Committed: committed}}}.Since(readStart)
-			want := readStart.Add(-10 * time.Minute)
+			want := readStart.Add(-10*time.Minute - hostSkewMargin)
 			if got.After(want) || got.Before(want.Add(-time.Second)) {
 				t.Fatalf("since %v, want within a second before %v", got, want)
 			}
 		})
+	}
+}
+
+// The bound keeps the host-skew margin: a commit five minutes "ahead" of
+// a call, by another host's clock, still bounds below that call.
+func TestTheBoundKeepsTheHostSkewMargin(t *testing.T) {
+	readStart := time.Unix(1_800_000_000, 0)
+	committed := readStart.Unix() + 4*60 // stamped four minutes in dude's future
+	got := Checkouts{Now: readStart.Unix(), Heads: []CheckoutHead{{Repo: "api", SHA: strings.Repeat("a", 40), Committed: committed}}}.Since(readStart)
+	if !got.Before(readStart) {
+		t.Fatalf("since %v, not before %v", got, readStart)
 	}
 }
 

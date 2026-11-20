@@ -30,6 +30,9 @@ import (
 // (dude catching up on a Run's output) is recorded later than it ran, so
 // the rule errs towards showing a call made just before the commit, which
 // the conductor sees with the rest; it never hides a call made after it.
+// A commit made on another host (a Run moved between lux hosts) carries
+// that host's clock, which the read cannot measure: the bound is moved
+// earlier by a fixed margin for it (hostSkewMargin).
 //
 // Known gap: a call made while the tree was dirty, whose changes were then
 // reverted to the committed tree, counts as at the commit. The conductor is
@@ -177,8 +180,9 @@ func (c Checkouts) Clean() bool {
 // so the skew is at least readStart - (Now + 1 s), and that least skew is
 // used: every uncertainty (the exec's latency, the clocks' seconds, the
 // commit time's whole second) moves the bound earlier, showing a call made
-// just before the commit rather than hiding one made after it. Zero when
-// no commit was read.
+// just before the commit rather than hiding one made after it. The bound
+// is then moved earlier by hostSkewMargin, always. Zero when no commit was
+// read.
 func (c Checkouts) Since(readStart time.Time) time.Time {
 	var latest int64
 	for _, h := range c.Heads {
@@ -188,8 +192,20 @@ func (c Checkouts) Since(readStart time.Time) time.Time {
 		return time.Time{}
 	}
 	skew := readStart.Sub(time.Unix(c.Now+1, 0))
-	return time.Unix(latest, 0).Add(skew).UTC()
+	return time.Unix(latest, 0).Add(skew - hostSkewMargin).UTC()
 }
+
+// hostSkewMargin is how far Since moves the bound earlier for clocks the
+// read cannot measure. The skew is measured at the read, on the host the
+// Run's container is on then; a Run moved between lux hosts made its
+// commit on another host, whose clock may differ from this one's, so its
+// committer time may be ahead of the measured skew and the bound would
+// land after the commit, hiding calls made at it. Applied always (a move
+// is not looked up): it shows the conductor calls made up to this long
+// before the commit too, which it judges with the commit and tree state
+// shown; it never hides one made after the commit while the hosts' clocks
+// differ by less than this.
+const hostSkewMargin = 5 * time.Minute
 
 // Headline names the commits read, "api a1b2c3d4e5f6, web …".
 func (c Checkouts) Headline() string {
