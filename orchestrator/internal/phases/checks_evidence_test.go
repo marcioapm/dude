@@ -224,6 +224,37 @@ func TestAWaiversCommandIsDefanged(t *testing.T) {
 	}
 }
 
+// Reported checks whose commands alone would fill the wake's line, and one
+// call at the commit: each question's command is clipped, so the call is
+// shown; and were every call dropped, the wake would say how many and
+// never that none was recorded.
+func TestQuestionsThatFillTheWakeNeverSayNoCallWasRecorded(t *testing.T) {
+	r := phaseRun{ID: "run_org_t1795147753509762628", Phase: "implement"}
+	a := delivery.ChecksAsked{Turn: 5, Evidence: wakeEvidence([]any{"make check", 0})}
+	a.Evidence.Calls[0].Tail = "ok greeting"
+	for i := range 30 {
+		a.Check = append(a.Check, delivery.Check{Command: fmt.Sprintf("make check-%d %s", i, strings.Repeat("x", 1000)), Result: delivery.CheckPass, Evidence: "ok"})
+	}
+	line := checksWakeLine(r, a, nil)
+	if n := len([]rune(line)); n > delivery.ChecksLineChars {
+		t.Fatalf("the wake is %d characters, over %d", n, delivery.ChecksLineChars)
+	}
+	if strings.Contains(line, "No shell call was recorded") || !strings.Contains(line, "[1] "+delivery.ExternalText(r.ID, "make check")+" → exit 0") {
+		t.Fatalf("wake %s", line)
+	}
+	// Questions longer still (their evidence is clipped, but a wake with
+	// enough of them fills its line): the one call is dropped, and the wake
+	// says so.
+	a.Check = a.Check[:0]
+	for i := range 200 {
+		a.Check = append(a.Check, delivery.Check{Command: fmt.Sprintf("make check-%d %s", i, strings.Repeat("x", 200)), Result: delivery.CheckPass, Evidence: "ok"})
+	}
+	line = checksWakeLine(r, a, nil)
+	if strings.Contains(line, "No shell call was recorded") || !strings.Contains(line, "did not fit here, 1 of them: run_calls lists them.") {
+		t.Fatalf("wake %s", line)
+	}
+}
+
 // A subagent's call at the commit is shown, saying which subagent made it.
 func TestAChildSessionsCallIsShown(t *testing.T) {
 	w := newEvidenceWorld(t)

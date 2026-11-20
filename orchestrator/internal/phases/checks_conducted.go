@@ -212,12 +212,13 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string
 		// The agent's evidence is its own words: quoted as external text,
 		// cut so every check's question fits the wake. Its command is its
 		// own words too, shown %q-quoted: defanged, so it cannot write a
-		// marker and forge a call line below.
-		qs[i] = question{delivery.Defanged(oneLine(c.Command)), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), a.Waivers[i] != nil}
+		// marker and forge a call line below; and clipped as a call's is,
+		// so the questions cannot take the wake's whole line from the calls.
+		qs[i] = question{delivery.Defanged(clipTo(oneLine(c.Command), checksWakeCommandMax)), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), a.Waivers[i] != nil}
 		if w := a.Waivers[i]; w != nil {
 			// Clipped, as evidence is: the waivers come first, and a long
 			// command must not push a later waiver's cursor out of the
-			// clipped line. Check N names the check in full below.
+			// clipped line. Check N names the check below.
 			ws = append(ws, waiver{i + 1, delivery.Defanged(clipTo(oneLine(c.Command), checksWakeEvidenceMax)), w.Role, w.Cursor})
 		}
 	}

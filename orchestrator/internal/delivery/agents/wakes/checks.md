@@ -13,6 +13,7 @@ Your {{.Phase}} Run {{.RunID}} ended turn {{.Turn}} with a checks report; nothin
 {{- range .Calls}} [{{.N}}] {{.Command}} → {{.Exit}}{{with .Child}}, by subagent {{.}}{{end}}{{with .Tail}}, output ends {{.}}{{end}}.
 {{- end}}
 {{- with .Dropped}} {{.}} older calls did not fit here: run_calls lists them.{{end}}
+{{- else if .Dropped}} Its shell calls started after that commit was made did not fit here, {{.Dropped}} of them{{if .More}} (of the latest {{.Max}}){{end}}: run_calls lists them.
 {{- else}} No shell call was recorded after that commit was made, by the Run or its subagents: a pass is backed only by a call at the latest commit.
 {{- end}}
 {{- else}} Evidence: dude could not read the Run's checkouts, so no call is shown; read the Run's calls with run_calls.
