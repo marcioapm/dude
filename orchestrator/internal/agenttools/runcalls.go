@@ -44,11 +44,11 @@ type runCallsAsk struct {
 }
 
 // runCallsRead is what the exec read: the checkouts at the commit, and
-// when it was sent; OK: the read accounted for every repository; Down:
-// the container could not be asked.
+// when it was sent; OK: the read accounted for every repository (false
+// too when the container could not be asked).
 type runCallsRead struct {
 	delivery.CheckoutRead
-	OK, Down bool
+	OK bool
 }
 
 type runCallOut struct {
@@ -127,7 +127,7 @@ func checkRunCalls(ctx context.Context, tx pgx.Tx, c Caller, in runCallsIn) (run
 
 func readRunCommit(ctx context.Context, c Caller, ask runCallsAsk) (runCallsRead, error) {
 	if ask.LuxRunID == "" || c.env.lux == nil {
-		return runCallsRead{Down: true}, nil
+		return runCallsRead{}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -135,7 +135,7 @@ func readRunCommit(ctx context.Context, c Caller, ask runCallsAsk) (runCallsRead
 	res, err := c.env.lux.Exec(ctx, ask.LuxRunID, delivery.CheckoutCommand(ask.Commit, ask.Repos))
 	if err != nil {
 		if _, ok := lux.AsError(err); ok || ctx.Err() != nil {
-			return runCallsRead{Down: true}, nil
+			return runCallsRead{}, nil
 		}
 		return read, err
 	}
@@ -146,26 +146,21 @@ func readRunCommit(ctx context.Context, c Caller, ask runCallsAsk) (runCallsRead
 func listRunCalls(ctx context.Context, tx pgx.Tx, _ Caller, ask runCallsAsk, read runCallsRead) (runCallsOut, error) {
 	out := runCallsOut{Run: ask.RunID}
 	var since time.Time
+	var clean bool
 	switch {
-	case read.OK && len(read.Checkouts.Heads) > 0:
-		out.Commits, out.From = read.Checkouts.Heads, runCallsText("from-checkout", nil)
-		since = read.Checkouts.Since(read.ReadStart)
-		if ask.Commit == "" {
-			clean := read.Checkouts.Clean()
-			out.TreeClean = &clean
-		}
+	case read.OK && len(read.Heads) > 0:
+		out.Commits, out.From, since, clean = read.Heads, runCallsText("from-checkout", nil), read.Since(read.ReadStart), read.Clean()
 	case read.OK:
 		return out, refuse(rRunCallsNoSuchCommit, ask.Commit)
 	case ask.Asked != nil && (ask.Commit == "" || slices.ContainsFunc(ask.Asked.Heads, func(h delivery.CheckoutHead) bool {
 		return strings.HasPrefix(h.SHA, ask.Commit)
 	})):
-		out.Commits, out.From, since = ask.Asked.Heads, runCallsText("from-ask", ask.AskedTurn), ask.Asked.Since
-		if ask.Commit == "" {
-			clean := ask.Asked.Clean
-			out.TreeClean = &clean
-		}
+		out.Commits, out.From, since, clean = ask.Asked.Heads, runCallsText("from-ask", ask.AskedTurn), ask.Asked.Since, ask.Asked.Clean
 	default:
 		return out, refuseText(rRunCallsUnread)
+	}
+	if ask.Commit == "" {
+		out.TreeClean = &clean
 	}
 	calls, more, err := delivery.RunCallsTx(ctx, tx, ask.RunID, since, ask.Filter, delivery.EvidenceCalls, delivery.EvidenceTail)
 	if err != nil {

@@ -210,15 +210,6 @@ func (c Checkouts) Since(readStart time.Time) time.Time {
 // differ by less than this.
 const hostSkewMargin = 5 * time.Minute
 
-// Headline names the commits read, "api a1b2c3d4e5f6, web …".
-func (c Checkouts) Headline() string {
-	out := make([]string, len(c.Heads))
-	for i, h := range c.Heads {
-		out[i] = h.Repo + " " + h.SHA[:12]
-	}
-	return strings.Join(out, ", ")
-}
-
 // EvidenceCalls caps the calls a checks ask shows: one per check a report
 // may list (the gate's checksCountMax), newest first. A writer's final
 // checks are its last calls; past the cap are older ones, which run_calls
@@ -246,6 +237,15 @@ type ChecksEvidence struct {
 	Calls []RunCall `json:"calls,omitempty"`
 	// More: calls past EvidenceCalls were left out.
 	More bool `json:"more,omitempty"`
+}
+
+// Headline names the commits read, "api a1b2c3d4e5f6, web …".
+func (e ChecksEvidence) Headline() string {
+	out := make([]string, len(e.Heads))
+	for i, h := range e.Heads {
+		out[i] = h.Repo + " " + h.SHA[:12]
+	}
+	return strings.Join(out, ", ")
 }
 
 // EvidenceTx reads the calls at the commits read for runID's checks ask.

@@ -7,7 +7,7 @@ Your {{.Phase}} Run {{.RunID}} ended turn {{.Turn}} with a checks report; nothin
 {{- else}} is it deferred to a later phase{{if $.TestPhase}} (this delivery runs a test phase){{else}} (this delivery runs no test phase){{end}} (deferred), or else reject?
 {{- end}}
 {{- end}} Then missing: is a check covering this change obviously missing (none or missing)?
-{{- if .Evidence}}
+{{- with .Evidence}}
 {{- if .Read}} Evidence: the Run's latest commit is {{.Heads}}, tree {{if .Clean}}clean{{else}}dirty{{end}} at report.
 {{- if .Calls}} Its shell calls started after that commit was made, newest first{{if .More}} (the latest {{.Max}}; older ones by run_calls){{end}}; you decide which call, if any, ran each reported pass, however its command is written (a directory, an environment, a pipe, a subagent):
 {{- range .Calls}} [{{.N}}] {{.Command}} → {{.Exit}}{{with .Child}}, by subagent {{.}}{{end}}{{with .Tail}}, output ends {{.}}{{end}}.

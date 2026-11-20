@@ -191,6 +191,11 @@ func clipTo(s string, n int) string {
 // its tree was clean, and its calls at the latest commit, newest first.
 // The calls come last, so a clipped wake loses the oldest call first;
 // run_calls lists them all.
+//
+// Everything the writer, its tools or its subagents wrote is shown
+// defanged (commands, %q-quoted) or quoted as external text (evidence, a
+// call's command and output), so none of it can write a marker and forge
+// a call line.
 func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string {
 	type question struct {
 		Command, Result, Evidence string
@@ -206,58 +211,51 @@ func checksWakeLine(r phaseRun, a delivery.ChecksAsked, bases []taskBase) string
 		Command, Exit, Child string
 		Tail                 string
 	}
+	type evidence struct {
+		Read, Clean, More bool
+		Heads             string
+		Calls             []call
+		Max, Dropped      int
+	}
 	qs := make([]question, len(a.Check))
 	var ws []waiver
 	for i, c := range a.Check {
-		// The agent's evidence is its own words: quoted as external text,
-		// cut so every check's question fits the wake. Its command is its
-		// own words too, shown %q-quoted: defanged, so it cannot write a
-		// marker and forge a call line below; and clipped as a call's is,
-		// so the questions cannot take the wake's whole line from the calls.
+		// Each check's command and evidence are clipped, so every question
+		// fits and the questions cannot take the wake's line from the calls.
 		qs[i] = question{delivery.Defanged(clipTo(oneLine(c.Command), checksWakeCommandMax)), c.Result, delivery.ExternalText(r.ID, clipTo(oneLine(c.Evidence), checksWakeEvidenceMax)), a.Waivers[i] != nil}
 		if w := a.Waivers[i]; w != nil {
-			// Clipped, as evidence is: the waivers come first, and a long
+			// Clipped as evidence is: the waivers come first, and a long
 			// command must not push a later waiver's cursor out of the
 			// clipped line. Check N names the check below.
 			ws = append(ws, waiver{i + 1, delivery.Defanged(clipTo(oneLine(c.Command), checksWakeEvidenceMax)), w.Role, w.Cursor})
 		}
 	}
-	var heads string
-	var clean, read, more bool
-	var calls []call
-	if e := a.Evidence; e != nil && e.Read {
-		read, clean, more = true, e.Clean, e.More
-		heads = delivery.Checkouts{Heads: e.Heads}.Headline()
+	var ev *evidence
+	if e := a.Evidence; e != nil {
+		ev = &evidence{Read: e.Read, Clean: e.Clean, More: e.More, Heads: e.Headline(), Max: delivery.EvidenceCalls}
 		for i, c := range e.Calls {
-			// A call's command and output are the agent's and its tools':
-			// quoted as external text.
 			out := call{N: i + 1, Command: delivery.ExternalText(r.ID, clipTo(oneLine(c.Command), checksWakeCommandMax)), Exit: c.ExitWords(), Child: c.Child}
 			if c.Tail != "" {
 				out.Tail = delivery.ExternalText(r.ID, c.Tail)
 			}
-			calls = append(calls, out)
+			ev.Calls = append(ev.Calls, out)
 		}
 	}
-	type wake struct {
+	data := struct {
 		Phase, RunID, Bases string
 		Turn                int64
 		Waivers             []waiver
 		Checks              []question
 		TestPhase           bool
-		Evidence            bool
-		Read, Clean, More   bool
-		Heads               string
-		Calls               []call
-		Max, Dropped        int
-	}
-	data := wake{r.Phase, r.ID, joinBases(bases), a.Turn, ws, qs, a.TestPhase, a.Evidence != nil, read, clean, more, heads, calls, delivery.EvidenceCalls, 0}
+		Evidence            *evidence
+	}{r.Phase, r.ID, joinBases(bases), a.Turn, ws, qs, a.TestPhase, ev}
 	// The calls are bounded twice: by count (EvidenceCalls, read so), and
 	// by the wake's line: the oldest go first until it fits, and the wake
 	// says how many went, so a clipped line never cuts one mid-way.
 	line := checksWake.Render(data)
-	for len([]rune(line)) > delivery.ChecksLineChars && len(data.Calls) > 0 {
-		data.Calls = data.Calls[:len(data.Calls)-1]
-		data.Dropped++
+	for ev != nil && len(ev.Calls) > 0 && len([]rune(line)) > delivery.ChecksLineChars {
+		ev.Calls = ev.Calls[:len(ev.Calls)-1]
+		ev.Dropped++
 		line = checksWake.Render(data)
 	}
 	return line

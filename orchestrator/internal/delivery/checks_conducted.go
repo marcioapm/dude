@@ -75,7 +75,7 @@ type ChecksAsked struct {
 	Bases     []ChecksBase `json:"bases,omitempty"`
 	TestPhase bool         `json:"testPhase,omitempty"`
 	// Evidence: the Run's calls at its latest commit, which the conductor
-	// backs a pass by (nil for an ask from before it, or a second ask).
+	// backs a pass by (nil on a second ask, and in a payload without it).
 	Evidence *ChecksEvidence `json:"evidence,omitempty"`
 	// Discharge marks the second ask about a turn's deferred checks, once
 	// the pull request is open (AskDeferredTx): each check's Result is
