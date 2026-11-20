@@ -592,8 +592,10 @@ func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
 // A resolution whose poster crashed after GitHub took it, settled from the
 // thread's state. A resolved thread is posted exactly once; an absent or
 // unresolved thread is withheld; an unreadable thread is uncertain and is
-// announced once. The later syncs are deliberate: the row's outcome must
-// fence duplicate notices and wakes.
+// announced once. The later syncs check that a settled row is not picked
+// up again (the pass selects only open rows); the UPDATE's own fence
+// against a late settlement is TestAReconciliationIsSettledOnce
+// (internal/delivery).
 func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 	tests := []struct {
 		name      string

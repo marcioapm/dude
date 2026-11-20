@@ -498,3 +498,54 @@ func TestAFixersAnswersFollowItsPublication(t *testing.T) {
 
 // sleepBriefly is a slow GitHub's pause.
 func sleepBriefly() { time.Sleep(10 * time.Millisecond) }
+
+// A published commit GitHub does not have (force-pushed away and
+// collected): its compare answers 404, which is evidence the head does not
+// contain the fix, so the answers are withheld at once, saying so, and
+// nothing is posted or resolved; not left held a day as unverifiable.
+func TestAFixersAnswersOnACommitGitHubLacksAreWithheldAtOnce(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, "0123456789abcdef0123456789abcdef01234567", "completed")
+	done, err := a.post()
+	if err != nil || len(done) != 1 || !strings.Contains(done[0].Withheld, "does not contain the published fix") || done[0].Unverified != "" {
+		t.Fatalf("on a commit GitHub lacks: %+v %v", done, err)
+	}
+	a.countPosted(t, "Fixed:", 0)
+	if f, s := a.resolved(); f || s {
+		t.Errorf("resolved %v %v", f, s)
+	}
+	if n := a.w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'withheld' = 'true'
+		AND payload->>'error' LIKE '%does not contain the published fix%'`, ref.RunID, delivery.EvAnswerFailed); n != 5 {
+		t.Errorf("%d answers withheld, want 5", n)
+	}
+}
+
+// A published fixer back at work (its Run resumed, or publish committed
+// before the Run is marked ended) posts and resolves nothing: its later
+// answers may need a fix not yet on the pull request. Ended again, it
+// posts.
+func TestAPublishedFixerStillRunningPostsNothing(t *testing.T) {
+	a := newAnswering(t, newWorld(t))
+	ref := a.fixer("run_fixer")
+	a.answerAll(t, ref, "Fixed:")
+	a.published(ref, a.head(), "completed")
+	mustExec(t, a.w.owner, `UPDATE runs SET status = 'running', ended_at = NULL WHERE id = $1`, ref.RunID)
+	if done, err := a.post(); err != nil || len(done) != 0 {
+		t.Fatalf("posting while the fixer runs again: %+v %v", done, err)
+	}
+	a.countPosted(t, "Fixed:", 0)
+	if f, s := a.resolved(); f || s {
+		t.Errorf("resolved %v %v while the fixer runs", f, s)
+	}
+	if n := a.w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type IN ($2, $3)`, ref.RunID,
+		delivery.EvAnswerClaimed, delivery.EvAnswerFailed); n != 0 {
+		t.Errorf("%d answers claimed or settled while the fixer runs", n)
+	}
+	a.end(ref, "completed")
+	if done, err := a.post(); err != nil || len(done) != 1 || len(done[0].Posted) != 3 || len(done[0].Resolved) != 2 {
+		t.Fatalf("posting once it ended: %+v %v", done, err)
+	}
+	a.countPosted(t, "Fixed:", 1)
+}
