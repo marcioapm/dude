@@ -13,6 +13,7 @@
 package fakelux
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -174,8 +175,10 @@ type execPlay struct {
 }
 
 type Run struct {
-	ID          string
-	Spec        json.RawMessage
+	ID   string
+	Spec json.RawMessage
+	// What dude's tool server answered its scripted calls (ToolAnswers).
+	toolAnswers []string
 	State       string
 	StateReason string
 	stage       string
@@ -672,6 +675,10 @@ type Server struct {
 	// ManualChecks leaves checks wakes to the test's explicit decide_checks
 	// calls (or a deliberately unanswered deadline test).
 	ManualChecks bool
+	// fixerChecks, when set (SetFixerChecks), is the checks model
+	// (fakeagent.ChecksTurn) every fix Run decided from then on plays,
+	// whatever its own model. Guarded by mu.
+	fixerChecks string
 	// NoNestedHost: no host in the pool offers nested containers, so a Run
 	// asking for them waits, submitted, saying so in its stateReason, as
 	// lux's scheduler does (internal/server/hostfit.go).
@@ -1167,9 +1174,15 @@ func (s *Server) scripted(spec map[string]any) Behaviour {
 	for _, name := range step.Lookups {
 		lookups = append(lookups, Lookup{Name: name, Allowed: network.Allows(name)})
 	}
+	checksModel := str("dude.model")
+	if s.fixerChecks != "" && str("dude.phase") == "fix" && !step.Hang {
+		if commands, report, ok := fakeagent.ChecksTurn(s.fixerChecks, 0); ok {
+			checksModel, step.Commands, step.Checks = s.fixerChecks, commands, report
+		}
+	}
 	// Every phase plans and looks around first, as an agent does.
 	return Behaviour{Subagent: step.Subagent, Lookups: lookups, Reply: step.Reply, Checks: step.Checks, Commands: step.Commands,
-		ChecksModel: str("dude.model"), Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
+		ChecksModel: checksModel, Thought: step.Thought, Commit: files, Message: step.Message, Hang: step.Hang, Ask: step.Ask, Machine: step.Machine,
 		Publish: published, Descriptions: descriptions, Tools: tools, ToolOutput: toolOutput, KeepToolsOpen: step.LongCommand, CallTools: step.Tools, Peer: step.Peer, Edits: step.Edits, PublishNow: step.PublishNow,
 		FinishEdits: step.FinishEdits, Conductor: str("dude.phase") == fakeagent.Conductor || str("dude.phase") == fakeagent.Brainstorm, OpenCalls: open,
 		Verify: verify, NeverWake: str("dude.model") == fakeagent.HangModel, Defaults: str("dude.model") == fakeagent.DefaultsModel,
@@ -1241,6 +1254,16 @@ func (s *Server) Records(id string) []map[string]any {
 		out[i] = rec.Event
 	}
 	return out
+}
+
+// SetFixerChecks has every fix Run decided from now on play the checks
+// model's turns (fakeagent.ChecksTurn) whatever its own model:
+// ChecksFixedModel reports a failing check passing, and backs it once
+// sent back, so a fixer's first turn never publishes.
+func (s *Server) SetFixerChecks(model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fixerChecks = model
 }
 
 // CallsOf is what was asked of a Run, in order: "exec", "stop", "cancel".
@@ -2503,7 +2526,21 @@ func (s *Server) toolRequest(run *Run, tool, args string) (status int, body []by
 		status = res.StatusCode
 		body, _ = io.ReadAll(res.Body)
 	})
+	if status != 0 {
+		run.toolAnswers = append(run.toolAnswers, fmt.Sprintf("%s %d %s", tool, status, bytes.TrimSpace(body)))
+	}
 	return status, body, err
+}
+
+// ToolAnswers is what dude's tool server answered the Run's scripted
+// calls, in order: "<tool> <status> <body>", the body a refusal's reason.
+func (s *Server) ToolAnswers(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		return slices.Clone(run.toolAnswers)
+	}
+	return nil
 }
 
 // withDude gives fn a way to call dude's tools as the Run's container
@@ -3123,6 +3160,14 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		}
 		s.pushNow(run, spec, branch, in.RequestID)
 	})
+}
+
+// SetHoldPushes sets HoldPushes under the fake's lock: a test changing it
+// while a push goroutine reads it.
+func (s *Server) SetHoldPushes(hold bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.HoldPushes = hold
 }
 
 // ReleasePushes makes the pushes HoldPushes held, now, each reported with

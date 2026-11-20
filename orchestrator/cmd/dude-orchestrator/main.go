@@ -254,7 +254,8 @@ func run(log *slog.Logger) error {
 		DefaultImageContainers: agent.NestedContainers, Layer: agent.Layer, Registry: registryLogin, ReapAfter: set.PreviewReapAfter}
 	defer previews.Stop()
 	pullRequests := &prs.Syncer{DB: database, Forges: forges, Signal: signalWorkflow, Log: log,
-		FactoryLogins: set.FactoryLogins, BranchMoved: serverService.BranchEvent}
+		FactoryLogins: set.FactoryLogins, BranchMoved: serverService.BranchEvent,
+		Answers: func(ctx context.Context) (int, error) { return store.ReconcileEndedAnswers(ctx, forges) }}
 	store.SyncPullRequest = pullRequests.Sync
 	automationRunner := &automations.Runner{DB: database, Lux: luxClient, Forges: forges, Agent: agent,
 		Registry: registryLogin, Log: log}

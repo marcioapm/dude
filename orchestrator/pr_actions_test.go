@@ -436,8 +436,11 @@ func TestSimultaneousRerunsAskGitHubOnce(t *testing.T) {
 	})
 }
 
-// A scripted fixer makes the calls its feedback names: through the tool
-// server, it resolves its own batch's thread and none other.
+// A scripted fixer makes the calls its feedback names, through the tool
+// server: resolving its own batch's thread and another's. The other is
+// refused as not its own; its own is captured (#485), on its Run, and
+// resolved on GitHub only once its fix is published there. The foreign
+// thread never is.
 func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
@@ -447,18 +450,46 @@ func TestAScriptedFixerResolvesItsThreadThroughTheToolServer(t *testing.T) {
 	own := w.gh.LineComment(1, "ana", "FACTORY.md", "Please explain.")
 	w.gh.EditComment(1, own, fmt.Sprintf("Please explain.\ntool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}\n"+
 		"tool: resolve_thread {\"pr\":\"1\",\"thread\":\"line-comment-%d\"}", own, earlier))
-	w.until("the thread resolved", func() bool {
+	var fixer string
+	w.until("the fixer's calls made", func() bool {
+		w.sync()
+		fixer = w.str(`SELECT COALESCE((SELECT id FROM runs WHERE task_id = $1 AND phase = 'fix' AND pr_feedback::text LIKE '%Please explain%'
+			ORDER BY created_at DESC LIMIT 1), '')`, task)
+		return fixer != "" && w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
+			AND strpos(payload->>'text', 'dude resolve_thread answered') > 0`, fixer) > 0
+	})
+	// Both calls reached the tool server: the foreign one refused (422),
+	// its own captured with its thread.
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'agent.message'
+		AND strpos(payload->>'text', 'dude resolve_thread answered 422') > 0`, fixer); n != 1 {
+		t.Errorf("the foreign resolution refused %d times, want once", n)
+	}
+	// Refused for the right reason: the thread is not in its feedback.
+	reason := fmt.Sprintf("line-comment-%d is not a thread in your feedback", earlier)
+	if answers := w.lux.ToolAnswers(w.str(`SELECT lux_run_id FROM runs WHERE id = $1`, fixer)); !slices.ContainsFunc(answers, func(a string) bool {
+		return strings.HasPrefix(a, "resolve_thread 422 ") && strings.Contains(a, reason)
+	}) {
+		t.Errorf("the foreign resolution was not refused as %q: %q", reason, answers)
+	}
+	if got := w.ids(`SELECT payload->>'thread' FROM events WHERE run_id = $1 AND event_type = $2 AND payload->>'kind' = 'resolve_thread'`,
+		fixer, delivery.EvAnswerHeld); !slices.Equal(got, []string{fmt.Sprintf("line-comment-%d", own)}) {
+		t.Errorf("captured %v, want its own thread", got)
+	}
+	w.until("the fixer's fix published and its thread resolved", func() bool {
 		w.sync()
 		var done bool
 		w.gh.Set(func(s *fakegithub.Server) { done = s.ResolvedThreads[s.ThreadID(own)] })
 		return done
 	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = $2`, fixer, delivery.EvGitCommitCreated); n == 0 {
+		t.Error("its thread was resolved with no fix of its published")
+	}
+	w.syncs(3)
 	w.gh.Set(func(s *fakegithub.Server) {
 		if s.ResolvedThreads[s.ThreadID(earlier)] {
-			t.Error("resolved a thread outside the fixer's batch")
+			t.Errorf("resolved a thread outside the fixer's batch: %v", s.ResolvedThreads)
 		}
 	})
-	_ = task
 }
 
 // Another task's pull request, or one of no task, is not the conductor's to
@@ -533,8 +564,12 @@ func TestRefusedReviewRequestsSpendTheBudget(t *testing.T) {
 	}
 }
 
-// A fixer answering pull request feedback resolves the threads in its
-// own batch, and only those; it may not ask for reviews.
+// A fixer answering pull request feedback is held to its own batch:
+// another thread or comment is refused as not its own, and asking for
+// reviews is not its to do. Its own thread and comment, named while it
+// runs, are captured, not posted (#485): each answers held, is recorded on
+// its Run with what to post, and nothing reaches GitHub, not even a read,
+// however many syncs pass.
 func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	w := newWorld(t)
 	task := w.reviewing()
@@ -548,67 +583,86 @@ func TestAFixerResolvesOnlyTheThreadsItWasSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	act := func(in delivery.PRAction) error {
+	act := func(in delivery.PRAction) (map[string]any, error) {
 		var c delivery.PRActionCheck
 		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 			c, err = delivery.CheckPRActionTx(context.Background(), tx, ref, gh, in)
 			return err
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		done, err := delivery.DoPRAction(context.Background(), gh, c)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
-			_, err := delivery.RecordPRActionTx(context.Background(), tx, c, done)
+		var out map[string]any
+		return out, w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			out, err = delivery.RecordPRActionTx(context.Background(), tx, c, done)
 			return err
 		})
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", theirs)}); err == nil ||
+	w.sync()
+	requests := len(w.gh.Requests())
+	if _, err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", theirs)}); err == nil ||
 		!strings.Contains(err.Error(), "not a thread in your feedback") {
 		t.Errorf("resolving another thread: %v", err)
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionRequestReview, PR: "1", Logins: []string{"ana"}}); err == nil ||
+	if _, err := act(delivery.PRAction{Action: delivery.ActionRequestReview, PR: "1", Logins: []string{"ana"}}); err == nil ||
 		!strings.Contains(err.Error(), "not yours to do") {
 		t.Errorf("a fixer asking for reviews: %v", err)
 	}
-	if err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", mine)}); err != nil {
-		t.Fatalf("resolving its own thread: %v", err)
-	}
-	w.gh.Set(func(s *fakegithub.Server) {
-		if !s.ResolvedThreads[s.ThreadID(mine)] || s.ResolvedThreads[s.ThreadID(theirs)] {
-			t.Errorf("resolved %v", s.ResolvedThreads)
-		}
-	})
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = 'run_fixer' AND event_type = 'pull_request.action'
-		AND payload->>'action' = 'resolve_thread'`); n != 1 {
-		t.Errorf("%d resolutions recorded", n)
+	out, err := act(delivery.PRAction{Action: delivery.ActionResolveThread, PR: "1", Thread: fmt.Sprintf("line-comment-%d", mine)})
+	if err != nil || out["held"] != delivery.AnswerHeldResolve {
+		t.Errorf("resolving its own thread before its fix is published: %v %v", out, err)
 	}
 
-	// It answers its own batch's comment in the thread, and no other.
-	reply := func(to int64) error {
+	// Its replies: another comment is not its own; its own is held.
+	lines := len(w.gh.Pull(1).LineComments)
+	reply := func(to int64) (delivery.Replied, error) {
 		var p delivery.ReplyPost
 		if err := w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
 			p, err = delivery.CheckReplyTx(context.Background(), tx, ref, gh,
 				delivery.Reply{PR: "1", Text: "Done: it says why now.", InReplyTo: fmt.Sprintf("line-comment-%d", to)})
 			return err
 		}); err != nil {
-			return err
+			return delivery.Replied{}, err
 		}
-		_, err := delivery.PostReply(context.Background(), gh, p)
-		return err
+		posted, err := delivery.PostReply(context.Background(), gh, p)
+		if err != nil {
+			return delivery.Replied{}, err
+		}
+		var r delivery.Replied
+		return r, w.app.InOrg(context.Background(), w.org, func(tx pgx.Tx) (err error) {
+			r, err = delivery.RecordReplyTx(context.Background(), tx, p, posted)
+			return err
+		})
 	}
-	w.sync()
-	if err := reply(theirs); err == nil || !strings.Contains(err.Error(), "one of the comments in your feedback") {
+	if _, err := reply(theirs); err == nil || !strings.Contains(err.Error(), "one of the comments in your feedback") {
 		t.Errorf("replying outside its batch: %v", err)
 	}
-	if err := reply(mine); err != nil {
-		t.Fatalf("replying in its batch: %v", err)
+	if r, err := reply(mine); err != nil || r.Held != delivery.AnswerHeldReply || r.URL != "" {
+		t.Errorf("replying in its batch before its fix is published: %+v %v", r, err)
 	}
-	lines := w.gh.Pull(1).LineComments
-	if last := lines[len(lines)-1]; last.InReplyTo != mine || !strings.HasPrefix(last.Body, "Done: it says why now.") {
-		t.Errorf("the reply: %+v", last)
+	if got := w.gh.Requests()[requests:]; len(got) != 0 {
+		t.Errorf("GitHub was asked %v while the fixer's calls were checked", got)
+	}
+	// Each captured, in order, with what dude posts later.
+	if got := w.ids(`SELECT payload->>'kind' || ' ' || COALESCE(payload->>'inReplyTo', payload->>'thread') || ' ' || COALESCE(payload->>'text', '')
+		FROM events WHERE run_id = 'run_fixer' AND event_type = $1 ORDER BY cursor`, delivery.EvAnswerHeld); strings.Join(got, "|") !=
+		fmt.Sprintf("resolve_thread line-comment-%d |reply line-comment-%d Done: it says why now.", mine, mine) {
+		t.Errorf("captured %q", got)
+	}
+	w.syncs(3)
+	if n := len(w.gh.Pull(1).LineComments); n != lines {
+		t.Errorf("%d line comments, want the %d before the fixer's calls", n, lines)
+	}
+	w.gh.Set(func(s *fakegithub.Server) {
+		if len(s.ResolvedThreads) != 0 {
+			t.Errorf("resolved %v", s.ResolvedThreads)
+		}
+	})
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = 'run_fixer' AND (event_type = 'pull_request.action' OR event_type = 'chat.message')`); n != 0 {
+		t.Errorf("%d replies or actions recorded for the fixer", n)
 	}
 }
 

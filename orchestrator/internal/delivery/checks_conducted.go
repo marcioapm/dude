@@ -33,7 +33,7 @@ const WakeChecks = "checks"
 
 // ChecksLineChars bounds a checks wake's line: the report's summary, one
 // question per check, and the Run's calls at its latest commit (migration
-// 269).
+// 271).
 const ChecksLineChars = 16000
 
 // The conductor's verdicts on a checks report (decide_checks).

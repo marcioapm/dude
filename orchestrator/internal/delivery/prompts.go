@@ -293,7 +293,8 @@ var testerContract = render(mustTemplate("contracts/tester"), nil)
 var testerTools = render(mustTemplate("contracts/tester-tools"), nil)
 
 // fixerGitHubNote tells a fixer of pull request feedback how it answers
-// on GitHub: through dude, on the comments it was given only.
+// on GitHub: on the comments it was given only, held by dude and posted
+// once its fix is on the pull request (answers.go).
 var fixerGitHubNote = render(mustTemplate("contracts/fixer-github"), nil)
 
 // PromptRoleForPhase is whose prompt and settings each phase runs with: an

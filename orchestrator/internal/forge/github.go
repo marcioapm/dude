@@ -1793,27 +1793,24 @@ func (g *GitHub) BranchSHA(ctx context.Context, slug, branch string) (string, er
 	err := g.do(ctx, "GET", "/repos/"+slug+"/git/ref/heads/"+url.PathEscape(branch), nil, &ref)
 	var e *Error
 	if asError(err, &e) && e.NotFound() {
+		// GitHub also masks inaccessible repositories with 404. Empty
+		// means positively missing only after the repository is visible.
+		var repo struct {
+			ID int64 `json:"id"`
+		}
+		if err := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); err != nil {
+			return "", err
+		}
 		return "", nil
 	}
 	return ref.Object.SHA, err
 }
 
-// BranchGone is true only when GitHub definitely has no such branch: the
-// ref reads 404 and the repository itself reads. A repository GitHub does
-// not show (404 for want of access too), or any other failure, is an error,
-// never "gone".
+// BranchGone uses BranchSHA's repository visibility check: only a missing
+// ref in a visible repository is gone. A masked 404 remains an error.
 func (g *GitHub) BranchGone(ctx context.Context, slug, branch string) (bool, error) {
 	sha, err := g.BranchSHA(ctx, slug, branch)
-	if err != nil || sha != "" {
-		return false, err
-	}
-	var repo struct {
-		ID int64 `json:"id"`
-	}
-	if err := g.do(ctx, "GET", "/repos/"+slug, nil, &repo); err != nil {
-		return false, err
-	}
-	return true, nil
+	return sha == "" && err == nil, err
 }
 
 // DeleteBranch removes a branch; one already gone is not an error.

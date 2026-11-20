@@ -81,6 +81,14 @@ func (s *Server) Requests() []string {
 	return slices.Clone(s.requests)
 }
 
+// Writes is the replies, conversation comments and thread resolutions
+// GitHub took, in order (Server.writes).
+func (s *Server) Writes() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.writes)
+}
+
 func (s *Server) logRequest(r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

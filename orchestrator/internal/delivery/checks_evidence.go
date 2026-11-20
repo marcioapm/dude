@@ -289,7 +289,7 @@ func (c RunCall) ExitWords() string {
 }
 
 // Shell calls, as RunCallsTx reads them: the tool events of
-// events_run_tool_calls_idx (migration 268), whose WHERE is written here
+// events_run_tool_calls_idx (migration 270), whose WHERE is written here
 // with literals so the planner proves the index's.
 const runToolEvents = `event_type IN ('agent.tool.called', 'agent.tool.completed', 'agent.child.tool.called', 'agent.child.tool.completed')`
 

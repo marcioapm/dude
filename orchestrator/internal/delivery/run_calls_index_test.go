@@ -9,7 +9,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
 )
 
-// RunCallsQuery reads only events_run_tool_calls_idx (migration 268), for
+// RunCallsQuery reads only events_run_tool_calls_idx (migration 270), for
 // both its calls and their completions, under the generic plan
 // production's pool settles on: on a busy Run with 50k events of other
 // kinds and 5k tool calls before the commit, in an organisation whose
