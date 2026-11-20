@@ -298,8 +298,17 @@ const runToolEvents = `event_type IN ('agent.tool.called', 'agent.tool.completed
 // call's start, command, child, and its completion's exit code, status and
 // output. Each command is read clipped to EvidenceCommand (2000)
 // characters; the filter matches the whole. Both sides are bounded by the
-// Run and the time: the calls by their start, their completions by the
-// oldest start among them (a call ends after it starts).
+// Run and the time: the calls by their start, each one's completion by
+// its own start (a call ends after it starts).
+//
+// A call's completion is its own: the first completion after it (by
+// cursor) of the same kind (the Run's own, or the same child's) with its
+// callId. Ids are not unique within a Run (a harness may reuse one after a
+// session replacement; a child's calls are kept per id only while open),
+// so pairing by id alone would show a later call with an earlier one's
+// exit. The tool events carry no session epoch, so the cursor alone orders
+// them; a completion is recorded at or after its call's time, so the time
+// bounds the index's range too.
 const RunCallsQuery = `WITH c AS (
 	SELECT cursor, occurred_at, event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child,
 		left(payload->'input'->>'command', 2000) AS command
@@ -308,21 +317,19 @@ const RunCallsQuery = `WITH c AS (
 		AND occurred_at > $2 AND payload->'input' ? 'command'
 		AND strpos(lower(payload->'input'->>'command'), lower($4)) > 0
 	ORDER BY occurred_at DESC, cursor DESC LIMIT $3
-), d AS (
-	SELECT DISTINCT ON (event_type, payload->>'callId', COALESCE(payload->>'childId', ''))
-		event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child, payload
-	FROM events
-	WHERE run_id = $1 AND ` + runToolEvents + ` AND event_type IN ('agent.tool.completed', 'agent.child.tool.completed')
-		AND occurred_at >= (SELECT min(occurred_at) FROM c)
-		AND payload->>'callId' IN (SELECT call_id FROM c)
-	ORDER BY event_type, payload->>'callId', COALESCE(payload->>'childId', ''), cursor
 )
 SELECT c.occurred_at, c.command, c.child, d.payload IS NOT NULL, d.payload->'exitCode', COALESCE(d.payload->>'status', ''),
 	concat_ws(E'\n', COALESCE(d.payload->'output'->>'tail', d.payload->'output'->>'head'),
 		COALESCE(d.payload->'stdout'->>'tail', d.payload->'stdout'->>'head'),
 		COALESCE(d.payload->'stderr'->>'tail', d.payload->'stderr'->>'head'))
-FROM c LEFT JOIN d ON d.call_id = c.call_id AND d.child = c.child
-	AND d.event_type = CASE c.event_type WHEN 'agent.tool.called' THEN 'agent.tool.completed' ELSE 'agent.child.tool.completed' END
+FROM c LEFT JOIN LATERAL (
+	SELECT e.payload FROM events e
+	WHERE e.run_id = $1 AND e.` + runToolEvents + `
+		AND e.event_type = CASE c.event_type WHEN 'agent.tool.called' THEN 'agent.tool.completed' ELSE 'agent.child.tool.completed' END
+		AND e.occurred_at >= c.occurred_at AND e.cursor > c.cursor
+		AND e.payload->>'callId' = c.call_id AND COALESCE(e.payload->>'childId', '') = c.child
+	ORDER BY e.cursor LIMIT 1
+) d ON true
 ORDER BY c.occurred_at DESC, c.cursor DESC`
 
 // RunCallsTx is runID's shell calls started after since, newest first: at

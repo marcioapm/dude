@@ -359,6 +359,37 @@ func TestACallWithNoExitSaysNoExitRecorded(t *testing.T) {
 	}
 }
 
+// A Run that records two calls under one id shows each with its own
+// completion: the first after it, never the other's. A subagent's calls
+// are recorded per id only while open (childState.Calls), so a subagent
+// reusing an id records both; the Run's own are kept apart the same way.
+// A failing check run second under a lint's id is not shown with the
+// lint's exit 0, and its pass is unbacked.
+func TestACallReusingAnIdShowsItsOwnExit(t *testing.T) {
+	for _, child := range []string{"", "chd_explore"} {
+		t.Run("child="+child, func(t *testing.T) {
+			w := newEvidenceWorld(t)
+			base := after()
+			w.call(base, "dup", child, "make lint", exit(0), "lint ok")
+			w.call(base.Add(time.Second), "dup", child, "make check", exit(1), "FAIL greeting")
+			a := w.report("make check")
+			e := a.Evidence
+			if e == nil || len(e.Calls) != 2 || e.Calls[0].Command != "make check" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 1 ||
+				e.Calls[0].Tail != "FAIL greeting" || e.Calls[1].Command != "make lint" || e.Calls[1].Exit == nil || *e.Calls[1].Exit != 0 ||
+				e.Calls[1].Tail != "lint ok" {
+				t.Fatalf("evidence %+v", e)
+			}
+			if line := w.checksWake(); !strings.Contains(line, "make check⟦/external "+w.run.ID+"⟧ → exit 1") {
+				t.Fatalf("wake %s", line)
+			}
+			w.decideAsTheDefaults(w.cond)
+			if pass, _ := w.gate(); pass {
+				t.Fatal("a failing check passed on another call's exit")
+			}
+		})
+	}
+}
+
 // A tree dirty at the report is shown dirty.
 func TestADirtyTreeAtTheReportIsShownDirty(t *testing.T) {
 	w := newEvidenceWorld(t)
