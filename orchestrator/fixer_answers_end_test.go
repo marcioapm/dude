@@ -843,6 +843,15 @@ func TestAWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
 			t.Errorf("answer %d ended %q, want withheld", i, got)
 		}
 	}
+	// Left to its poster, not reconciled: the pass opened no reconciliation
+	// of it, and nobody was told one settled.
+	if n := a.w.count(`SELECT count(*) FROM answer_reconciliations WHERE answer_id = $1`, ids[0]); n != 0 {
+		t.Errorf("%d reconciliations of the answer in flight, want none", n)
+	}
+	if n := a.w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'chat.notice' AND payload->>'about' = 'answer_reconciled'
+		AND payload->>'answerId' = $2`, a.task, ids[0]); n != 0 {
+		t.Errorf("%d answer_reconciled notices of the answer in flight, want none", n)
+	}
 }
 
 // The step's own pass finds the pull request closed while an answer's
