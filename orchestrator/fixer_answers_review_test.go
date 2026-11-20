@@ -21,9 +21,9 @@ import (
 
 // A 404 on the branch's ref while the repository also reads 404 is
 // GitHub masking access, not a gone branch: the answers stay held.
-func TestRound3MaskedBranch404StaysHeld(t *testing.T) {
+func TestAMaskedBranch404KeepsAFixersAnswersHeld(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
-	ref := a.fixer("run_probe")
+	ref := a.fixer("run_fixer")
 	a.answerAll(t, ref, "Fixed:")
 	a.published(ref, a.head(), "completed")
 	a.w.gh.Set(func(s *fakegithub.Server) {
@@ -45,18 +45,18 @@ func TestRound3MaskedBranch404StaysHeld(t *testing.T) {
 // A poster crashing between GitHub taking a reply and its record, with
 // more comments on the pull request than the marker search reads: an
 // incomplete search must retain the answer honestly, including past the bound.
-func TestRound3RecoveryBeyondTenPagesDoesNotDuplicate(t *testing.T) {
+func TestARecoveryWhoseMarkerSearchIsCutNeverRepostsTheAnswer(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
-	ref := a.fixer("run_reviewer")
+	ref := a.fixer("run_fixer")
 	for i := range 1001 {
 		a.w.gh.Comment(1, "ana", fmt.Sprintf("old discussion %d", i))
 	}
-	text := "Reviewer unique recovered answer"
+	text := "Fixed: the recovered answer."
 	if _, err := a.reply(ref, a.is, text); err != nil {
 		t.Fatal(err)
 	}
 	a.published(ref, a.head(), "completed")
-	crash := errors.New("reviewer simulated lost ledger record")
+	crash := errors.New("the poster crashed before recording it")
 	a.store.AfterAnswerPost = func(string) error { return crash }
 	if _, err := a.post(); !errors.Is(err, crash) {
 		t.Fatalf("first post: %v", err)
@@ -80,10 +80,10 @@ func TestRound3RecoveryBeyondTenPagesDoesNotDuplicate(t *testing.T) {
 	}
 }
 
-// A fixer that published to
-// another repository only, none of it on the pull request its answers are
-// on, has them withheld there: "its fix did not change target".
-func TestReviewerAnswersWhereTheFixerPublishedNothing(t *testing.T) {
+// A fixer that published to another repository only, none of it on the
+// pull request its answers are on, has them withheld there: "its fix did
+// not change target".
+func TestAFixersAnswersAreWithheldWhereItPublishedNothing(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
 	a.answerAll(t, ref, "Fixed:")
@@ -164,13 +164,12 @@ func (a *answering) stepGoesOn(t *testing.T, ref delivery.RunRef, what string) {
 	t.Logf("%s: recorded %q", what, why)
 }
 
-// GitHub refusing
-// the containment compare outright (a 403: a token that may no longer
-// read compares) is neither transient nor proof the fix is absent. The
-// step goes on (no failure for a retry to count towards dead-lettering),
-// the answers stay held, its reason recorded; once GitHub answers, they
-// post.
-func TestReviewerAComparisonRefusalDoesNotFailTheStep(t *testing.T) {
+// GitHub refusing the containment compare outright (a 403: a token that
+// may no longer read compares) is neither transient nor proof the fix is
+// absent. The step goes on (no failure for a retry to count towards
+// dead-lettering), the answers stay held, its reason recorded; once GitHub
+// answers, they post.
+func TestAComparisonRefusalKeepsAFixersAnswersHeldAndTheStepGoingOn(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
 	a.answerAll(t, ref, "Fixed:")
@@ -414,7 +413,7 @@ func TestAFixersHeldAnswersAreSettledWhenTheDeliveryEnds(t *testing.T) {
 }
 
 // A fixer with many answers (160: past where a key naming each id
-// overflowed the wake's unique index, about 100) still wakes its
+// would overflow the wake's unique index, about 100) still wakes its
 // conductor, once, on a key of fixed size.
 func TestAFixerWithManyAnswersWakesItsConductorOnce(t *testing.T) {
 	w := conducting(t)
@@ -451,13 +450,13 @@ func TestAFixerWithManyAnswersWakesItsConductorOnce(t *testing.T) {
 	}
 }
 
-// Two posters truly racing on a held
-// reply's claim. Store.BeforeAnswerClaim holds the first poster after it
-// read the answer unsettled and unclaimed, until the second has read it
-// too (or two seconds pass): under the task's Chat lock the second cannot
-// read until the first commits its claim, so the wait runs out and it
-// finds the claim; without the lock both read "no claim", both claim, and
-// both post. Each answer is on GitHub once.
+// Two posters truly racing on a held reply's claim.
+// Store.BeforeAnswerClaim holds the first poster after it read the answer
+// unsettled and unclaimed, until the second has read it too (or two
+// seconds pass): under the task's Chat lock the second cannot read until
+// the first commits its claim, so the wait runs out and it finds the
+// claim; without the lock both read "no claim", both claim, and both post.
+// Each answer is on GitHub once.
 func TestAFixersRacingPostersPostEachAnswerOnce(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
@@ -505,10 +504,10 @@ func TestAFixersRacingPostersPostEachAnswerOnce(t *testing.T) {
 	a.countPosted(t, "Fixed:", 1)
 }
 
-// The head is read from the pull
-// request's branch, not its own read, which trails a push by seconds. A
-// fix force-pushed away while the pull request's read still shows it
-// (fakegithub's LaggingHead) has its answers withheld.
+// The head is read from the pull request's branch, not its own read, which
+// trails a push by seconds. A fix force-pushed away while the pull
+// request's read still shows it (fakegithub's LaggingHead) has its answers
+// withheld.
 func TestAFixersAnswersAreWithheldWhenOnlyAStalePullRequestReadShowsTheFix(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
@@ -528,9 +527,8 @@ func TestAFixersAnswersAreWithheldWhenOnlyAStalePullRequestReadShowsTheFix(t *te
 	}
 }
 
-// A fixer's replies land before its
-// threads are resolved — "say so in it first" — as GitHub took them
-// (fakegithub's write log).
+// A fixer's replies land before its threads are resolved — "say so in it
+// first" — as GitHub took them (fakegithub's write log).
 func TestAFixersRepliesLandBeforeItsThreadsAreResolved(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
@@ -587,10 +585,10 @@ func TestAFixersAnswerOutlivingItsClaimIsRecordedOnce(t *testing.T) {
 	}
 }
 
-// A recovering poster finds an earlier post of an answer
-// by its marker only in a comment by dude's own login. Someone else's
-// comment carrying the answer's marker and dude's reply marker (anyone can
-// type them) is not taken for dude's post: the real answer is posted.
+// A recovering poster finds an earlier post of an answer by its marker
+// only in a comment by dude's own login. Someone else's comment carrying
+// the answer's marker and dude's reply marker (anyone can type them) is
+// not taken for dude's post: the real answer is posted.
 func TestAFixersAnswerIsNotTakenForSomeoneElsesMarkedComment(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")

@@ -390,7 +390,7 @@ var ErrSearchIncomplete = errors.New("answer marker search was truncated")
 // dude's (Own) and carries the marker on a line of its own counts: a
 // person quoting it, or typing it, does not. It reads at most
 // findAnswerPages pages of 100: it runs only for a poster recovering a
-// claim (delivery.postHeldReply). A full final page without an own-author
+// claim (delivery.Store.postHeld). A full final page without an own-author
 // marker yields ErrSearchIncomplete, not conclusive absence.
 func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answerID string, line bool) (Posted, error) {
 	path, prefix := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), "issue-comment-"

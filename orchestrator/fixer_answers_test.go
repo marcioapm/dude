@@ -20,11 +20,11 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// dude posts a pull request fixer's answers itself,
-// once the fix is verified on the pull request. These tests drive the
-// capture through delivery's own checks and the posting through
-// Store.PostFixerAnswers, the step's work, on a fixer Run they write; the
-// root tests in reply_publication_test.go drive whole deliveries.
+// dude posts a pull request fixer's answers itself, once the fix is
+// verified on the pull request. These tests drive the capture through
+// delivery's own checks and the posting through Store.PostFixerAnswers,
+// the step's work, on a fixer Run they write; the root tests in
+// reply_publication_test.go drive whole deliveries.
 
 // answering is a pull request waiting on people, with a person's line
 // comments and conversation comment on it, recorded by a sync.
@@ -180,13 +180,13 @@ func (a *answering) countPosted(t *testing.T, prefix string, n int) {
 	}
 }
 
-// Every item of
-// a three-item fixer batch (two line comments and an issue comment) is
-// captured, not just the first or the line comments, and nothing reaches
-// GitHub before publication; the conductor's reply and resolution, while
-// that fixer is live, post at once. After publication all three are posted
-// exactly once, in the order made, and both line threads are resolved.
-func TestReviewerEveryFixerReplyHeldConductorImmediateDuringFix(t *testing.T) {
+// Every item of a three-item fixer batch (two line comments and an issue
+// comment) is captured, not just the first or the line comments, and
+// nothing reaches GitHub before publication; the conductor's reply and
+// resolution, while that fixer is live, post at once. After publication
+// all three are posted exactly once, in the order made, and both line
+// threads are resolved.
+func TestEveryFixerAnswerIsHeldWhileTheConductorsPostAtOnce(t *testing.T) {
 	w := conducting(t)
 	a := newAnswering(t, w)
 	if status, out := w.chat(a.task, "Look after the pull request for me."); status >= 300 {

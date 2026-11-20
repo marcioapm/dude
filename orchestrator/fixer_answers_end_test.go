@@ -133,7 +133,7 @@ func (a *answering) claimsAfter(cursor int) int {
 // thread's resolution. The in-flight answer ends posted (it is on GitHub,
 // and true); every answer nobody held is withheld; none is recorded
 // withheld and then posted; a later pass claims nothing after the end.
-func TestRound5TheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
+func TestTheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
 	ends := []struct {
 		name string
 		end  func(a *answering)
@@ -274,7 +274,7 @@ func TestRound5TheEndNeverWithholdsAnAnswerBeingPosted(t *testing.T) {
 // comment found: posted. Claimed but never on GitHub (its write failed):
 // withheld, as ended before it was posted.
 // The search cut at its bound: uncertain, said once, never reposted.
-func TestRound5TheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
+func TestTheReconcilerSettlesAnAnswerItsPosterLeft(t *testing.T) {
 	// crashOn has the poster crash on answer i after GitHub took it,
 	// before its record.
 	crashOn := func(a *answering, ref delivery.RunRef, i int) {
@@ -395,7 +395,7 @@ func expireReconciliationAnswer(t *testing.T, a *answering, ref delivery.RunRef)
 // claim+2*lease the row is eligible. Every time is the reconciler's injected
 // clock, read off the claim itself; nothing is moved in SQL, and the test
 // does not sleep or depend on wall-clock passage.
-func TestRound7ReconciliationLeaseMargin(t *testing.T) {
+func TestAReconciliationIsNotDueBeforeTwiceTheClaimLease(t *testing.T) {
 	a, ref := endedWithHeld(t)
 	ids := a.answerIDs(ref.RunID)
 	b := newBarrier(func(r *http.Request, _ string) bool {
@@ -428,12 +428,12 @@ func TestRound7ReconciliationLeaseMargin(t *testing.T) {
 	<-errs
 }
 
-// A resolution whose poster crashed after GitHub took it,
-// the delivery ended (merged), and GitHub's thread read failing for a moment (a
-// 502). The pass asks again, on the reconciler's own clock, until the
-// give-up bound, and settles it uncertain only past that. Every time here
-// is the injected clock's; nothing is moved in SQL.
-func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
+// A resolution whose poster crashed after GitHub took it, the delivery
+// ended (merged), and GitHub's thread read failing for a moment (a 502).
+// The pass asks again, on the reconciler's own clock, until the give-up
+// bound, and settles it uncertain only past that. Every time here is the
+// injected clock's; nothing is moved in SQL.
+func TestAReconciledResolutionsTransientReadIsRetriedUntilTheGiveUpBound(t *testing.T) {
 	// crashed has the resolution's poster crash after GitHub took it, the
 	// pull request merge (the conductor stays live, so its wake can be
 	// counted), and GitHub's thread read fail with a 502. It returns the
@@ -596,7 +596,7 @@ func TestRound16ATransientResolutionReadIsRetried(t *testing.T) {
 // up again (the pass selects only open rows); the UPDATE's own fence
 // against a late settlement is TestAReconciliationIsSettledOnce
 // (internal/delivery).
-func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
+func TestAResolutionIsReconciledFromItsThreadsState(t *testing.T) {
 	tests := []struct {
 		name      string
 		setup     func(*answering, delivery.RunRef, []string)
@@ -673,7 +673,7 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 			a.w.gh.Set(func(s *fakegithub.Server) {
 				// Refused, not failing: asking again will not mend it, so
 				// it is uncertain at once (a transient read is retried:
-				// TestRound16ATransientResolutionReadIsRetried).
+				// TestAReconciledResolutionsTransientReadIsRetriedUntilTheGiveUpBound).
 				s.ThreadsStatus = 403
 				s.ResolvedThreads[s.ThreadID(a.first)] = false
 			})
@@ -744,7 +744,7 @@ func TestRound7ResolutionReconciliationOutcomes(t *testing.T) {
 // lapsed; a second, stale, poster listed the answers before the end and
 // reaches its claims after it. Without the row it would take the lapsed
 // claim over and, finding no comment yet, post it again.
-func TestRound5AStalePosterClaimsNothingAfterTheEnd(t *testing.T) {
+func TestAStalePosterClaimsNoAnswerAfterTheEnd(t *testing.T) {
 	a, ref := endedWithHeld(t)
 	ids := a.answerIDs(ref.RunID)
 	first := newBarrier(func(r *http.Request, _ string) bool {
@@ -801,10 +801,9 @@ func TestRound5AStalePosterClaimsNothingAfterTheEnd(t *testing.T) {
 // Another poster's pass finds the fix gone from the pull request (a
 // force-push) while the first poster is inside its write of the first
 // reply: the pass withholds what nobody holds, never the answer being
-// written, which its poster then records posted. Before, the pass withheld
-// it too, and the poster, finding it settled, recorded nothing: GitHub
-// had a reply dude's records said was withheld.
-func TestRound5AWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
+// written, which its poster then records posted: GitHub never has a reply
+// dude's records say was withheld.
+func TestAWithholdingPassNeverOvertakesAPosterInFlight(t *testing.T) {
 	a := newAnswering(t, newWorld(t))
 	ref := a.fixer("run_fixer")
 	a.answerAll(t, ref, "Fixed:")

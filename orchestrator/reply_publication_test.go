@@ -11,11 +11,10 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakegithub"
 )
 
-// A pull request fixer's "fixed" reply and thread
-// resolution must not reach GitHub while its fix is unpublished. Its calls
-// are captured; dude posts them itself once the published fix is on the
-// pull request, whoever decides the delivery, and wakes a conductor with
-// what it posted.
+// A pull request fixer's "fixed" reply and thread resolution must not
+// reach GitHub while its fix is unpublished. Its calls are captured; dude
+// posts them itself once the published fix is on the pull request, whoever
+// decides the delivery, and wakes a conductor with what it posted.
 
 const fixerReplyText = "Fixed: it explains now."
 
@@ -196,7 +195,7 @@ func TestAnAbandonedFixerHasNoDelayedReplies(t *testing.T) {
 }
 
 // The conductor's own reply, while no fixer is involved, is posted at once
-// (with a fixer live: TestReviewerEveryFixerReplyHeldConductorImmediateDuringFix).
+// (with a fixer live: TestEveryFixerAnswerIsHeldWhileTheConductorsPostAtOnce).
 func TestTheConductorsReplyIsNotHeld(t *testing.T) {
 	w := conducting(t)
 	task := w.reviewing()
