@@ -274,3 +274,12 @@ func TestRunCallsRefusesAnEarlierAttemptsWriter(t *testing.T) {
 		t.Fatalf("an earlier attempt's writer: %d %v", status, out)
 	}
 }
+
+// A 50 KB command comes back clipped to delivery.EvidenceCommand characters.
+func TestRunCallsClipsALongCommand(t *testing.T) {
+	w := newRunCallsWorld(t)
+	w.call(t, "call_long", "2 minutes", "cat <<'EOF'\n"+strings.Repeat("x", 50_000)+"\nEOF", "")
+	if got, _, _ := w.calls(t, `{}`); len(got) != 3 || len([]rune(got[0])) > delivery.EvidenceCommand || !strings.HasPrefix(got[0], "cat <<'EOF'") {
+		t.Fatalf("%d calls, the first %d characters", len(got), len([]rune(got[0])))
+	}
+}

@@ -220,10 +220,13 @@ func (c Checkouts) Headline() string {
 // may list (the gate's checksCountMax), newest first. A writer's final
 // checks are its last calls; past the cap are older ones, which run_calls
 // lists by a filter. EvidenceTail bounds each call's output tail: enough
-// for a test runner's summary line or an error, not a log.
+// for a test runner's summary line or an error, not a log. EvidenceCommand
+// bounds each call's command as read: a heredoc of a script is not carried
+// whole into every ask's payload and run_calls' answer.
 const (
-	EvidenceCalls = 30
-	EvidenceTail  = 160
+	EvidenceCalls   = 30
+	EvidenceTail    = 160
+	EvidenceCommand = 2000
 )
 
 // ChecksEvidence is what a checks ask shows the conductor of the Run's
@@ -291,12 +294,13 @@ const runToolEvents = `event_type IN ('agent.tool.called', 'agent.tool.completed
 // RunCallsQuery reads a Run's shell calls started after $2, newest first,
 // at most $3 of them, those whose command holds $4 (any with ""): each
 // call's start, command, child, and its completion's exit code, status and
-// output. Both sides are bounded by the Run and the time: the calls by
-// their start, their completions by the oldest start among them (a call
-// ends after it starts).
+// output. Each command is read clipped to EvidenceCommand (2000)
+// characters; the filter matches the whole. Both sides are bounded by the
+// Run and the time: the calls by their start, their completions by the
+// oldest start among them (a call ends after it starts).
 const RunCallsQuery = `WITH c AS (
 	SELECT cursor, occurred_at, event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child,
-		payload->'input'->>'command' AS command
+		left(payload->'input'->>'command', 2000) AS command
 	FROM events
 	WHERE run_id = $1 AND ` + runToolEvents + ` AND event_type IN ('agent.tool.called', 'agent.child.tool.called')
 		AND occurred_at > $2 AND payload->'input' ? 'command'
