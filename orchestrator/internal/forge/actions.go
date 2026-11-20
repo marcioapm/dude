@@ -83,6 +83,24 @@ func (g *GitHub) ClosedThreadComments(ctx context.Context, slug string, number i
 	return out, nil
 }
 
+// ReviewThreads is every review thread of pull request number, at most 20
+// pages of 100, each with its comments' REST ids: for a caller resolving
+// several, read once (ThreadOf finds one in them).
+func (g *GitHub) ReviewThreads(ctx context.Context, slug string, number int) ([]*ReviewThread, error) {
+	return g.reviewThreads(ctx, slug, number)
+}
+
+// ThreadOf is the thread of threads a line comment (by its REST id) is in;
+// nil when none is.
+func ThreadOf(threads []*ReviewThread, comment int64) *ReviewThread {
+	for _, t := range threads {
+		if slices.Contains(t.CommentIDs, comment) {
+			return t
+		}
+	}
+	return nil
+}
+
 // ThreadOfComment is the review thread of pull request number that a line
 // comment (by its REST id) is in; nil when none is.
 func (g *GitHub) ThreadOfComment(ctx context.Context, slug string, number int, comment int64) (*ReviewThread, error) {

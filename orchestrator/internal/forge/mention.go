@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -371,3 +372,60 @@ func (g *GitHub) ReplyToLineComment(ctx context.Context, slug string, number int
 	}
 	return Posted{ID: fmt.Sprintf("line-comment-%d", out.ID), URL: out.HTMLURL}, nil
 }
+
+// AnswerMarker is the hidden line dude puts above ReplyMarker in an answer
+// it posts for a fixer (delivery.PostFixerAnswers), naming the answer: a
+// post whose answer or record was lost is found again by it (FindAnswer),
+// rather than posted twice.
+func AnswerMarker(answerID string) string { return "<!-- dude:answer " + answerID + " -->" }
+
+// ErrSearchIncomplete means the bounded search cannot establish absence.
+// Callers must retain the uncertain answer rather than blindly repost it.
+var ErrSearchIncomplete = errors.New("answer marker search was truncated")
+
+// FindAnswer is dude's comment on pull request number marked with
+// AnswerMarker(answerID): a reply in a review thread when line, else a
+// conversation comment; a zero Posted when there is none. Only a comment
+// by dude's own login (Login, as OwnVerdict asks of a verdict) that is
+// dude's (Own) and carries the marker on a line of its own counts: a
+// person quoting it, or typing it, does not. It reads at most
+// findAnswerPages pages of 100: it runs only for a poster recovering a
+// claim (delivery.postHeldReply). A full final page without an own-author
+// marker yields ErrSearchIncomplete, not conclusive absence.
+func (g *GitHub) FindAnswer(ctx context.Context, slug string, number int, answerID string, line bool) (Posted, error) {
+	path, prefix := fmt.Sprintf("/repos/%s/issues/%d/comments", slug, number), "issue-comment-"
+	if line {
+		path, prefix = fmt.Sprintf("/repos/%s/pulls/%d/comments", slug, number), "line-comment-"
+	}
+	self, err := g.Login(ctx)
+	if err != nil {
+		return Posted{}, err
+	}
+	comments, err := pagesUpTo[ghComment](ctx, g, path, findAnswerPages)
+	if err != nil {
+		return Posted{}, err
+	}
+	marker := AnswerMarker(answerID)
+	for _, c := range comments {
+		if !strings.EqualFold(login(c.User), self) || !Own(Feedback{Body: c.Body}) {
+			continue
+		}
+		for _, l := range strings.Split(strings.ReplaceAll(c.Body, "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(l) == marker {
+				p := Posted{ID: fmt.Sprintf("%s%d", prefix, c.ID), URL: c.HTMLURL}
+				if !line {
+					p.CommentID = c.ID
+				}
+				return p, nil
+			}
+		}
+	}
+	if len(comments) == findAnswerPages*100 {
+		return Posted{}, ErrSearchIncomplete
+	}
+	return Posted{}, nil
+}
+
+// findAnswerPages bounds FindAnswer's listing: 1,000 comments, each page
+// within forge's request timeout, ten well inside a claim's two minutes.
+const findAnswerPages = 10
