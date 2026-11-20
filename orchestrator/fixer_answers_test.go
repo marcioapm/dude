@@ -290,8 +290,7 @@ func TestAFixersAnswersPostExactlyOnce(t *testing.T) {
 		a.w.gh.Set(func(s *fakegithub.Server) { s.Intercept = nil })
 		// The poster that found another's claim left it: what is left is
 		// posted by a later step, past the claim's lease.
-		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
-			ref.RunID, delivery.EvAnswerClaimed)
+		a.store.Now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 		if _, err := a.post(); err != nil {
 			t.Fatal(err)
 		}
@@ -316,8 +315,7 @@ func TestAFixersAnswersPostExactlyOnce(t *testing.T) {
 		if _, err := a.post(); err == nil {
 			t.Error("a fresh claim was taken over")
 		}
-		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
-			ref.RunID, delivery.EvAnswerClaimed)
+		a.store.Now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 		if _, err := a.post(); err != nil {
 			t.Fatal(err)
 		}

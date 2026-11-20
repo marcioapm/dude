@@ -63,10 +63,8 @@ func TestARecoveryWhoseMarkerSearchIsCutNeverRepostsTheAnswer(t *testing.T) {
 	}
 	a.store.AfterAnswerPost = nil
 	for _, age := range []time.Duration{0, 25 * time.Hour} {
-		if age != 0 {
-			a.store.Now = func() time.Time { return time.Now().Add(age) }
-		}
-		mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`, ref.RunID, delivery.EvAnswerClaimed)
+		// The crashed poster's claim, past its lease.
+		a.store.Now = func() time.Time { return time.Now().Add(age + 10*time.Minute) }
 		done, err := a.post()
 		if err != nil || len(done) != 1 || done[0].Unverified == "" || done[0].Withheld != "" {
 			t.Fatalf("recovery age %s: %+v %v; want uncertain, not withheld", age, done, err)
@@ -496,8 +494,7 @@ func TestAFixersRacingPostersPostEachAnswerOnce(t *testing.T) {
 		}
 	}
 	// What the poster that found a claim left is posted past its lease.
-	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
-		ref.RunID, delivery.EvAnswerClaimed)
+	a.store.Now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 	if err := a.step(); err != nil {
 		t.Fatal(err)
 	}
@@ -568,9 +565,7 @@ func TestAFixersAnswerOutlivingItsClaimIsRecordedOnce(t *testing.T) {
 	go func() { _, err := a.post(); errs <- err }()
 	<-stalled
 	// The stalled poster's claim, past its lease: another takes it over.
-	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
-		ref.RunID, delivery.EvAnswerClaimed)
-	other := &delivery.Store{DB: a.w.app}
+	other := &delivery.Store{DB: a.w.app, Now: func() time.Time { return time.Now().Add(10 * time.Minute) }}
 	if _, err := other.PostFixerAnswers(context.Background(), a.w.org, a.task, a.gh); err != nil {
 		t.Fatalf("the poster taking over: %v", err)
 	}

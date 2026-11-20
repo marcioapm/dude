@@ -758,15 +758,14 @@ func TestAStalePosterClaimsNoAnswerAfterTheEnd(t *testing.T) {
 		errs <- err
 	}()
 	<-first.inside
-	mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE run_id = $1 AND event_type = $2`,
-		ref.RunID, delivery.EvAnswerClaimed)
 	// The stale poster, held reading the pull request: it has listed the
 	// answers, and claims none yet.
 	stale := newBarrier(func(r *http.Request, _ string) bool {
 		return r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/1")
 	})
 	defer stale.open()
-	p2 := &delivery.Store{DB: a.w.app}
+	// Its clock past the first poster's claim's lease.
+	p2 := &delivery.Store{DB: a.w.app, Now: func() time.Time { return time.Now().Add(10 * time.Minute) }}
 	go func() {
 		_, err := p2.PostFixerAnswers(context.Background(), a.w.org, a.task, a.through(t, stale))
 		errs <- err
@@ -876,8 +875,7 @@ func TestAClaimedAnswerIsReconciledNotWithheldByTheStepsPass(t *testing.T) {
 				t.Fatalf("the crashing post: %v", err)
 			}
 			a.store.AfterAnswerPost = nil
-			mustExec(t, a.w.owner, `UPDATE events SET occurred_at = now() - interval '10 minutes' WHERE task_id = $1 AND event_type = $2`,
-				a.task, delivery.EvAnswerClaimed)
+			a.store.Now = func() time.Time { return time.Now().Add(10 * time.Minute) }
 		}, "posted", 1},
 		{"released claim", func(t *testing.T, a *answering, ids []string) {
 			a.w.gh.Set(func(s *fakegithub.Server) {
