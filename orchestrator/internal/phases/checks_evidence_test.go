@@ -1,0 +1,233 @@
+package phases
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/fakeagent"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+)
+
+// evidenceWorld is a conducted writer Run whose checkout "api" is a real
+// git repository, its work committed now (on the real clock, as a
+// container's commit is).
+type evidenceWorld struct {
+	*unchangedWorld
+	cond string
+}
+
+func newEvidenceWorld(t *testing.T) *evidenceWorld {
+	t.Helper()
+	w := &evidenceWorld{unchangedWorld: newUnchangedWorld(t, "api")}
+	w.cond = conducted(w.harnessWorld)
+	w.write("api", "work.txt", "work\n")
+	w.git(w.dir("api"), "add", "-A")
+	w.git(w.dir("api"), "commit", "-q", "-m", "work")
+	return w
+}
+
+// call records a shell call the Run made at at: its own (child "") or a
+// subagent's, with exit (nil: none recorded) and output.
+func (w *evidenceWorld) call(at time.Time, id, child, command string, exit *int, output string) {
+	w.t.Helper()
+	w.s.Now = func() time.Time { return at }
+	defer func() { w.s.Now = nil }()
+	called, completed := evToolCalled, evToolCompleted
+	start := map[string]any{"tool": "bash", "callId": id, "input": map[string]any{"command": command}}
+	done := map[string]any{"tool": "bash", "callId": id, "status": "completed", "output": map[string]any{"head": output}}
+	if exit != nil {
+		done["exitCode"] = *exit
+	}
+	if child != "" {
+		called, completed = evChildToolCalled, evChildToolCompleted
+		for _, p := range []map[string]any{start, done} {
+			p["childId"], p["parentCallId"] = child, "call_task"
+		}
+	}
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+		if err := w.s.event(context.Background(), tx, w.run, called, ledger.ActorAgent, start); err != nil {
+			return err
+		}
+		return w.s.event(context.Background(), tx, w.run, completed, ledger.ActorAgent, done)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func exit(n int) *int { return &n }
+
+// report ends the Run's turn with a report of passes of commands, and
+// runs the gate once: the ask.
+func (w *evidenceWorld) report(commands ...string) *delivery.ChecksAsked {
+	w.t.Helper()
+	text := "```yaml\nchecks:\n"
+	for _, c := range commands {
+		text += fmt.Sprintf("  - command: %q\n    result: pass\n    evidence: ok\n", c)
+	}
+	checksReply(w.harnessWorld, text+"```")
+	w.endTurn()
+	if pass, asked := w.gate(); pass || asked != 1 {
+		w.t.Fatalf("pass %v, asked %d", pass, asked)
+	}
+	return w.asked()
+}
+
+// After the commit: a call started after the latest commit was made.
+var after = func() time.Time { return time.Now().Add(10 * time.Second) }
+
+// A call at the latest commit backs a pass the judge accepts: the ask
+// shows it, with its exit and output, and a judge reading the evidence
+// (the scripted conductor) backs the pass, so the gate passes.
+func TestACallAtTheLatestCommitBacksThePassTheJudgeAccepts(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(after(), "c1", "", "FOO=1 make check 2>&1 | tail -3", exit(0), "ok  greeting 0.01s")
+	w.call(after(), "c2", "", "make check", exit(0), "ok  greeting 0.01s")
+	a := w.report("make check")
+	e := a.Evidence
+	head := strings.TrimSpace(w.git(w.dir("api"), "rev-parse", "HEAD"))
+	if e == nil || !e.Read || len(e.Heads) != 1 || e.Heads[0].SHA != head || !e.Clean || len(e.Calls) != 2 ||
+		e.Calls[0].Command != "make check" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 0 || e.Calls[0].Tail != "ok greeting 0.01s" {
+		t.Fatalf("evidence %+v", e)
+	}
+	line := w.checksWake()
+	for _, want := range []string{"latest commit is api " + head[:12], "tree clean at report", "make check⟦/external", "→ exit 0", "FOO=1 make check 2>&1 | tail -3"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the wake lacks %q: %s", want, line)
+		}
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); !pass {
+		t.Fatalf("a pass the judge backed did not pass: %+v", recordedJudgement(w.harnessWorld))
+	}
+}
+
+// A call made before the latest commit is not shown: its pass is
+// unbacked.
+func TestACallBeforeTheLatestCommitIsNotShown(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(time.Now().Add(-time.Hour), "old", "", "make check", exit(0), "ok")
+	a := w.report("make check")
+	if a.Evidence == nil || !a.Evidence.Read || len(a.Evidence.Calls) != 0 {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	if line := w.checksWake(); strings.Contains(line, "make check⟦/external") || !strings.Contains(line, "No shell call was recorded after that commit") {
+		t.Fatalf("wake %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass backed only by a call before the commit passed")
+	}
+}
+
+// A subagent's call at the commit is shown, saying which subagent made it.
+func TestAChildSessionsCallIsShown(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(after(), "k1", "chd_explore", "make check", exit(0), "ok")
+	a := w.report("make check")
+	if e := a.Evidence; len(e.Calls) != 1 || e.Calls[0].Child != "chd_explore" {
+		t.Fatalf("evidence %+v", e)
+	}
+	if line := w.checksWake(); !strings.Contains(line, "by subagent chd_explore") {
+		t.Fatalf("wake %s", line)
+	}
+}
+
+// A call whose harness recorded no exit code (Claude Code's) says so.
+func TestACallWithNoExitSaysNoExitRecorded(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(after(), "n1", "", "make check", nil, "ok")
+	a := w.report("make check")
+	if e := a.Evidence; len(e.Calls) != 1 || e.Calls[0].Exit != nil || !e.Calls[0].Ended {
+		t.Fatalf("evidence %+v", e)
+	}
+	if line := w.checksWake(); !strings.Contains(line, "→ no exit recorded (completed)") {
+		t.Fatalf("wake %s", line)
+	}
+}
+
+// A tree dirty at the report is shown dirty.
+func TestADirtyTreeAtTheReportIsShownDirty(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(after(), "d1", "", "make check", exit(0), "ok")
+	w.write("api", "later.txt", "not committed\n")
+	a := w.report("make check")
+	if a.Evidence.Clean {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	if line := w.checksWake(); !strings.Contains(line, "tree dirty at report") {
+		t.Fatalf("wake %s", line)
+	}
+}
+
+// The ask shows at most EvidenceCalls calls, the newest, newest first,
+// and says there are more.
+func TestTheEvidenceRespectsItsCap(t *testing.T) {
+	w := newEvidenceWorld(t)
+	base := after()
+	n := delivery.EvidenceCalls + 5
+	for i := range n {
+		w.call(base.Add(time.Duration(i)*time.Second), fmt.Sprintf("x%d", i), "", fmt.Sprintf("go test ./pkg%d/...", i), exit(0), "ok")
+	}
+	a := w.report("make check")
+	e := a.Evidence
+	if len(e.Calls) != delivery.EvidenceCalls || !e.More || e.Calls[0].Command != fmt.Sprintf("go test ./pkg%d/...", n-1) ||
+		e.Calls[len(e.Calls)-1].Command != fmt.Sprintf("go test ./pkg%d/...", n-delivery.EvidenceCalls) {
+		t.Fatalf("%d calls, more %v, first %q", len(e.Calls), e.More, e.Calls[0].Command)
+	}
+	line := w.checksWake()
+	if !strings.Contains(line, fmt.Sprintf("the latest %d; older ones by run_calls", delivery.EvidenceCalls)) ||
+		!strings.Contains(line, fmt.Sprintf("[%d] ", delivery.EvidenceCalls)) || strings.Contains(line, fmt.Sprintf("[%d] ", delivery.EvidenceCalls+1)) {
+		t.Fatalf("wake %s", line)
+	}
+}
+
+// Calls whose commands and output fill the wake: the wake keeps whole
+// calls, newest first, within its line, and says how many older ones did
+// not fit.
+func TestAWakeOfLongCallsFitsItsLine(t *testing.T) {
+	a := delivery.ChecksAsked{Turn: 5, Check: []delivery.Check{{Command: "make check", Result: delivery.CheckPass, Evidence: "ok"}}}
+	a.Evidence = wakeEvidence()
+	for i := range delivery.EvidenceCalls {
+		a.Evidence.Calls = append(a.Evidence.Calls, delivery.RunCall{Command: fmt.Sprintf("go test ./pkg%d/... %s", i, strings.Repeat("-run X ", 60)),
+			Exit: exit(0), Ended: true, Tail: strings.Repeat("ok line ", 20)})
+	}
+	for i := range 30 {
+		a.Check = append(a.Check, delivery.Check{Command: fmt.Sprintf("go test ./pkg%d/... %s", i, strings.Repeat("-run Y ", 20)), Result: delivery.CheckPass,
+			Evidence: strings.Repeat("all fine ", 20)})
+	}
+	line := checksWakeLine(phaseRun{ID: "run_org_t1795147753509762628", Phase: "implement"}, a, nil)
+	if n := len([]rune(line)); n > delivery.ChecksLineChars {
+		t.Fatalf("the wake is %d characters, over %d", n, delivery.ChecksLineChars)
+	}
+	if !strings.Contains(line, "[1] ") || !strings.Contains(line, "older calls did not fit here: run_calls lists them") || !strings.HasSuffix(line, "run_calls lists them.") {
+		t.Fatalf("wake %s", line)
+	}
+}
+
+// The scripted conductor backs nothing with no evidence read: with the
+// checkouts unreadable, no call is shown and the wake says to read them.
+func TestUnreadCheckoutsShowNoCalls(t *testing.T) {
+	w := newEvidenceWorld(t)
+	w.call(after(), "u1", "", "make check", exit(0), "ok")
+	w.lux.fail = fmt.Errorf("lux is down")
+	a := w.report("make check")
+	if a.Evidence == nil || a.Evidence.Read || len(a.Evidence.Calls) != 0 {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	line := w.checksWake()
+	if !strings.Contains(line, "could not read the Run's checkouts") {
+		t.Fatalf("wake %s", line)
+	}
+	calls := fakeagent.ChecksDefaults(line)
+	var in delivery.DecideChecks
+	if len(calls) != 1 || json.Unmarshal([]byte(calls[0][1]), &in) != nil || in.Checks[0].Verdict != delivery.VerdictUnbacked {
+		t.Fatalf("%q", calls)
+	}
+}

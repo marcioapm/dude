@@ -32,7 +32,7 @@ func TestChecksMissingOrUnparseableReportsRejectWithoutAsking(t *testing.T) {
 			conducted(w)
 			checksReply(w, text)
 			endTurn(w)
-			got, err := w.s.judgeChecks(context.Background(), w.run)
+			got, err := w.s.judgeChecks(context.Background(), w.run, nil)
 			if err != nil || got.Verified || got.pending || w.countEvents(delivery.EvRunChecksAsked) != 0 {
 				t.Fatalf("%+v %v asked %d", got, err, w.countEvents(delivery.EvRunChecksAsked))
 			}

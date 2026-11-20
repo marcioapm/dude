@@ -31,9 +31,13 @@ const (
 // keyed checks:<run>:<turn>.
 const WakeChecks = "checks"
 
-// checksLineChars bounds a checks wake's line: the report's summary and
-// one question per check (migration 250).
-const checksLineChars = 2000
+// checksLineChars bounds a checks wake's line: the report's summary, one
+// question per check, and the Run's calls at its latest commit (migration
+// 269).
+const checksLineChars = 16000
+
+// ChecksLineChars is checksLineChars, for the wake's writer to fit to.
+const ChecksLineChars = checksLineChars
 
 // The conductor's verdicts on a checks report (decide_checks).
 const (
@@ -73,6 +77,9 @@ type ChecksAsked struct {
 	// "repo: branch at sha".
 	Bases     []ChecksBase `json:"bases,omitempty"`
 	TestPhase bool         `json:"testPhase,omitempty"`
+	// Evidence: the Run's calls at its latest commit, which the conductor
+	// backs a pass by (nil for an ask from before it, or a second ask).
+	Evidence *ChecksEvidence `json:"evidence,omitempty"`
 	// Discharge marks the second ask about a turn's deferred checks, once
 	// the pull request is open (AskDeferredTx): each check's Result is
 	// CheckDeferred, its Evidence the conductor's reason for deferring it.

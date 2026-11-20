@@ -9,7 +9,7 @@ import (
 )
 
 func TestScriptedConductorAnswersChecksUnlessExplicit(t *testing.T) {
-	wake := `decide_checks (runId run_1, turn 2) "make test" reported pass (evidence ran): is the pass backed (dude recorded its latest call of it: exit 0)?`
+	wake := `decide_checks (runId run_1, turn 2) "make test" reported pass (evidence ran): is the pass backed (backed or unbacked)? Evidence: the Run's latest commit is api aaaaaaaaaaaa, tree clean at report. Its shell calls started after that commit was made, newest first: [1] ⟦external run_1⟧make test⟦/external run_1⟧ → exit 0.`
 	for _, model := range []string{"fake/scripted", fakeagent.DefaultsModel} {
 		script := fakeagent.ConductorScriptFor("## The task\n\nT-1\n\n## Owner's message\n\n"+wake, model)
 		if strings.Count(script, "http dude POST /tools/decide_checks ") != 1 || !strings.Contains(script, `"verdict":"backed"`) {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -61,6 +63,23 @@ func startedFrom(w *harnessWorld) *taskHistory {
 	mustOwner(w.t, w, `UPDATE runs SET base_refs = jsonb_build_object('target', $2::text), base_shas = jsonb_build_object('target', $2::text) WHERE id = $1`,
 		w.run.ID, h.Earlier)
 	return h
+}
+
+// readsCheckout gives the harness's Run a container whose checkout of
+// repo, which it may push, is dir: the gate reads its commit and tree
+// there, which bound the calls the conductor is shown.
+func readsCheckout(w *harnessWorld, repo, dir string) {
+	w.t.Helper()
+	root := w.t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repos"), 0o755); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(root, "repos", repo)); err != nil {
+		w.t.Fatal(err)
+	}
+	w.s.Lux = &workspaceLux{root: root}
+	w.run.LuxRunID, w.run.LuxState = "lrun_1", "running"
+	mustOwner(w.t, w, `UPDATE runs SET lux_pushes = ARRAY[$2::text] WHERE id = $1`, w.run.ID, repo)
 }
 
 // compares counts the fake GitHub's compare requests from here on, each
@@ -196,6 +215,11 @@ func TestAFailureShownOnlyAtTheRunsStartIsTheTasksOwn(t *testing.T) {
 			w.run.Phase = "fix"
 			h := startedFrom(w)
 			cond := conducted(w)
+			// The fixer's checkout, changed: its calls are after its commit.
+			readsCheckout(w, "target", h.acc.work)
+			if err := os.WriteFile(filepath.Join(h.acc.work, "fix.txt"), []byte("fix\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			bashCall(w, "base", "git worktree add ../base "+tc.at(h)+" && cd ../base && npx tsc --noEmit", tscFailure, 2)
 			bashCall(w, "head", "npx tsc --noEmit", tscFailure, 2)
 			checksReply(w, failingTsc)
