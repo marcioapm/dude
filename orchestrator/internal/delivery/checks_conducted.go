@@ -31,13 +31,10 @@ const (
 // keyed checks:<run>:<turn>.
 const WakeChecks = "checks"
 
-// checksLineChars bounds a checks wake's line: the report's summary, one
+// ChecksLineChars bounds a checks wake's line: the report's summary, one
 // question per check, and the Run's calls at its latest commit (migration
 // 269).
-const checksLineChars = 16000
-
-// ChecksLineChars is checksLineChars, for the wake's writer to fit to.
-const ChecksLineChars = checksLineChars
+const ChecksLineChars = 16000
 
 // The conductor's verdicts on a checks report (decide_checks).
 const (

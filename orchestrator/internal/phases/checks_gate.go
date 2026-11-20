@@ -212,7 +212,7 @@ func (s *Syncer) checksBeforePush(ctx context.Context, r phaseRun) (pass, acted 
 // passes a non-pass (noConductor). The judgement tier is never asked.
 // read is the Run's checkouts as this turn's inspection read them (nil:
 // not read), whose latest commit bounds the calls the conductor is shown.
-func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun, read *checkoutRead) (checksDecision, error) {
+func (s *Syncer) judgeChecks(ctx context.Context, r phaseRun, read *delivery.CheckoutRead) (checksDecision, error) {
 	d, checks, done, err := s.parsedChecks(ctx, r)
 	if err != nil || done {
 		return d, err

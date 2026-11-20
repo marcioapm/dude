@@ -12,16 +12,6 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
-// checkoutRead is what the gate read of a Run's checkouts at its checks:
-// CheckoutScript's account (each repository's HEAD, its committer time and
-// whether the tree is clean, and the container's clock), and the
-// orchestrator's clock as the exec was sent, which places the commit on
-// the clock the Run's calls are recorded on (delivery.Checkouts.Since).
-type checkoutRead struct {
-	delivery.Checkouts
-	ReadStart time.Time
-}
-
 // unchangedBeforePush inspects, now, every repository the Run may push
 // (runs.lux_pushes) against where its checkout started (runs.base_shas: lux's
 // git.checkout, or a continued round's sync), in one exec
@@ -32,7 +22,7 @@ type checkoutRead struct {
 // judged as any other. heads: each repository's HEAD as read. read: the
 // whole account, for the evidence the conductor is shown (nil when the
 // checkouts could not be read).
-func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map[string]string, unchanged bool, read *checkoutRead, err error) {
+func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map[string]string, unchanged bool, read *delivery.CheckoutRead, err error) {
 	if r.LuxRunID == "" {
 		return nil, false, nil, nil
 	}
@@ -50,14 +40,13 @@ func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map
 	if len(pushes) == 0 {
 		return nil, false, nil, nil
 	}
-	repos := map[string]string{}
-	for _, name := range pushes {
-		repos[name] = RepoPath(name)
-	}
 	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	start := s.clock()
-	res, err := s.Lux.Exec(cctx, r.LuxRunID, delivery.CheckoutCommand("", repos))
+	start := time.Now()
+	if s.Now != nil {
+		start = s.Now()
+	}
+	res, err := s.Lux.Exec(cctx, r.LuxRunID, delivery.CheckoutCommand("", pushes))
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, false, nil, ctx.Err()
@@ -66,7 +55,7 @@ func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map
 		return nil, false, nil, nil
 	}
 	if c, ok := delivery.ParseCheckouts(string(res.Stdout), res.ExitCode, pushes); ok && len(c.Missing) == 0 {
-		read = &checkoutRead{Checkouts: c, ReadStart: start}
+		read = &delivery.CheckoutRead{Checkouts: c, ReadStart: start}
 	}
 	heads, unchanged = parseUnchanged(string(res.Stdout), res.ExitCode, pushes, bases)
 	if !unchanged && res.ExitCode != 0 {
@@ -74,14 +63,6 @@ func (s *Syncer) unchangedBeforePush(ctx context.Context, r phaseRun) (heads map
 			"error", fmt.Sprintf("exit %d: %s", res.ExitCode, strings.TrimSpace(string(res.Stderr))))
 	}
 	return heads, unchanged, read, nil
-}
-
-// clock is the orchestrator's clock, as its events' occurred_at has it.
-func (s *Syncer) clock() time.Time {
-	if s.Now != nil {
-		return s.Now()
-	}
-	return time.Now()
 }
 
 // parseUnchanged reads CheckoutScript's output: true only for exit 0 and

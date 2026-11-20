@@ -33,9 +33,10 @@ type runCallsIn struct {
 // checkouts to read there.
 type runCallsAsk struct {
 	RunID, LuxRunID string
-	Repos           map[string]string
-	Commit          string
-	Filter          string
+	// Repos: the repositories the Run may push, read in its container.
+	Repos  []string
+	Commit string
+	Filter string
 	// Asked: the latest checks ask's evidence, for a container that is
 	// not running.
 	Asked     *delivery.ChecksEvidence
@@ -43,11 +44,11 @@ type runCallsAsk struct {
 }
 
 // runCallsRead is what the exec read: the checkouts at the commit, and
-// when it was sent; Down: the container could not be asked.
+// when it was sent; OK: the read accounted for every repository; Down:
+// the container could not be asked.
 type runCallsRead struct {
-	Checkouts delivery.Checkouts
-	ReadStart time.Time
-	OK, Down  bool
+	delivery.CheckoutRead
+	OK, Down bool
 }
 
 type runCallOut struct {
@@ -106,10 +107,7 @@ func checkRunCalls(ctx context.Context, tx pgx.Tx, c Caller, in runCallsIn) (run
 		return ask, err
 	}
 	if luxState == "running" && len(pushes) > 0 {
-		ask.LuxRunID, ask.Repos = luxRun, map[string]string{}
-		for _, name := range pushes {
-			ask.Repos[name] = delivery.RepoPath(name)
-		}
+		ask.LuxRunID, ask.Repos = luxRun, pushes
 	}
 	// The latest checks ask's reading, for a container not running now.
 	var raw []byte
@@ -133,7 +131,7 @@ func readRunCommit(ctx context.Context, c Caller, ask runCallsAsk) (runCallsRead
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	read := runCallsRead{ReadStart: time.Now()}
+	read := runCallsRead{CheckoutRead: delivery.CheckoutRead{ReadStart: time.Now()}}
 	res, err := c.env.lux.Exec(ctx, ask.LuxRunID, delivery.CheckoutCommand(ask.Commit, ask.Repos))
 	if err != nil {
 		if _, ok := lux.AsError(err); ok || ctx.Err() != nil {
@@ -141,11 +139,7 @@ func readRunCommit(ctx context.Context, c Caller, ask runCallsAsk) (runCallsRead
 		}
 		return read, err
 	}
-	names := make([]string, 0, len(ask.Repos))
-	for name := range ask.Repos {
-		names = append(names, name)
-	}
-	read.Checkouts, read.OK = delivery.ParseCheckouts(string(res.Stdout), res.ExitCode, names)
+	read.Checkouts, read.OK = delivery.ParseCheckouts(string(res.Stdout), res.ExitCode, slices.Compact(slices.Sorted(slices.Values(ask.Repos))))
 	return read, nil
 }
 

@@ -1452,7 +1452,7 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 		limit = roundLineChars
 	case WakeChecks:
 		// A checks report's summary and one question per check.
-		limit = checksLineChars
+		limit = ChecksLineChars
 	case WakeRecovered:
 		// A refusal's reason and, for a copy gone, the person's warning.
 		limit = recoveredLineChars

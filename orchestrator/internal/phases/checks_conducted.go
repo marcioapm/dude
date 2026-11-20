@@ -59,7 +59,7 @@ func noConductor(d checksDecision, reason, skip delivery.Text) checksDecision {
 // its commits as read at this turn (read, nil when they could not be read)
 // and the shell calls it and its subagents started after the latest of
 // them was made. dude does not decide whether a call proves a check.
-func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision, checks []delivery.Check, read *checkoutRead) (checksDecision, error) {
+func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision, checks []delivery.Check, read *delivery.CheckoutRead) (checksDecision, error) {
 	var asked *delivery.ChecksAsked
 	var verdict *delivery.ConductedChecks
 	var overdue, unavailable bool
@@ -122,7 +122,7 @@ func (s *Syncer) askConductor(ctx context.Context, r phaseRun, d checksDecision,
 		}
 		a.Evidence = &delivery.ChecksEvidence{}
 		if read != nil {
-			if a.Evidence, err = delivery.EvidenceTx(ctx, tx, r.ID, read.Checkouts, read.ReadStart); err != nil {
+			if a.Evidence, err = delivery.EvidenceTx(ctx, tx, r.ID, *read); err != nil {
 				return err
 			}
 		}

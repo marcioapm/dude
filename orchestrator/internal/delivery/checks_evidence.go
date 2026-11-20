@@ -77,20 +77,15 @@ while [ $# -ge 2 ]; do
 done
 exit $status`
 
-// CheckoutCommand is the exec that runs CheckoutScript over repos (name →
-// checkout), sorted by name, at rev ("" for HEAD).
-func CheckoutCommand(rev string, repos map[string]string) []string {
+// CheckoutCommand is the exec that runs CheckoutScript at rev ("" for
+// HEAD) over the checkouts of repos (RepoPath), each once, sorted by name.
+func CheckoutCommand(rev string, repos []string) []string {
 	if rev == "" {
 		rev = "-"
 	}
 	cmd := []string{"sh", "-c", CheckoutScript, "dude-checkout", rev}
-	names := make([]string, 0, len(repos))
-	for name := range repos {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		cmd = append(cmd, name, repos[name])
+	for _, name := range slices.Compact(slices.Sorted(slices.Values(repos))) {
+		cmd = append(cmd, name, RepoPath(name))
 	}
 	return cmd
 }
@@ -112,6 +107,14 @@ type Checkouts struct {
 	Heads []CheckoutHead `json:"heads"`
 	// Missing: the repositories without the asked revision.
 	Missing []string `json:"missing,omitempty"`
+}
+
+// CheckoutRead is what an exec of CheckoutScript read, and the
+// orchestrator's clock as it was sent, which places the commits on the
+// clock the Run's calls are recorded on (Checkouts.Since).
+type CheckoutRead struct {
+	Checkouts
+	ReadStart time.Time
 }
 
 // ParseCheckouts reads CheckoutScript's output for repos: ok only with exit
@@ -245,10 +248,9 @@ type ChecksEvidence struct {
 	More bool `json:"more,omitempty"`
 }
 
-// EvidenceTx reads the calls at the commits c (read at readStart) for
-// runID's checks ask.
-func EvidenceTx(ctx context.Context, tx pgx.Tx, runID string, c Checkouts, readStart time.Time) (*ChecksEvidence, error) {
-	e := &ChecksEvidence{Read: true, Heads: c.Heads, Clean: c.Clean(), Since: c.Since(readStart)}
+// EvidenceTx reads the calls at the commits read for runID's checks ask.
+func EvidenceTx(ctx context.Context, tx pgx.Tx, runID string, read CheckoutRead) (*ChecksEvidence, error) {
+	e := &ChecksEvidence{Read: true, Heads: read.Heads, Clean: read.Clean(), Since: read.Since(read.ReadStart)}
 	var err error
 	e.Calls, e.More, err = RunCallsTx(ctx, tx, runID, e.Since, "", EvidenceCalls, EvidenceTail)
 	return e, err
