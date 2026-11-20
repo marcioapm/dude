@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -427,6 +428,32 @@ func TestABackgroundedClaudeCallIsNotShownAsFinished(t *testing.T) {
 	w.decideAsTheDefaults(w.cond)
 	if pass, _ := w.gate(); pass {
 		t.Fatal("a pass backed only by a backgrounded call passed")
+	}
+}
+
+// A Codex command is shown as the script that ran, not Codex's own
+// summary of it: for a search Codex's commandActions rewrite
+// `rg -n TODO src || true` as `rg -n TODO src`, which did not run (and
+// would have failed with nothing found). The evidence shows the item's
+// command with its login shell's wrapper unwrapped.
+func TestACodexCallShowsTheScriptThatRan(t *testing.T) {
+	w := newEvidenceWorld(t)
+	item := map[string]any{"type": "commandExecution", "id": "x1", "command": "/bin/bash -lc 'rg -n TODO src || true'",
+		"commandActions": []any{map[string]any{"type": "search", "command": "rg -n TODO src", "query": "TODO", "path": "src"}}, "status": "inProgress"}
+	done := maps.Clone(item)
+	done["status"], done["exitCode"], done["aggregatedOutput"] = "completed", 0, ""
+	w.feed(map[string]any{"type": "codex.item/started", "data": map[string]any{"item": item}},
+		map[string]any{"type": "codex.item/completed", "data": map[string]any{"item": done}})
+	a := w.report("rg -n TODO src")
+	if e := a.Evidence; e == nil || len(e.Calls) != 1 || e.Calls[0].Command != "rg -n TODO src || true" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 0 {
+		t.Fatalf("evidence %+v", e)
+	}
+	if line := w.checksWake(); !strings.Contains(line, delivery.ExternalText(w.run.ID, "rg -n TODO src || true")+" → exit 0") {
+		t.Fatalf("wake %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass of a command that did not run passed on Codex's summary of another")
 	}
 }
 

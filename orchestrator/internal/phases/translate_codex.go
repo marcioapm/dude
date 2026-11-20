@@ -102,11 +102,10 @@ type codexItem struct {
 	Summary []string `json:"summary"`
 	Content []string `json:"content"`
 	// commandExecution
-	Command          string                     `json:"command"`
-	CommandActions   []struct{ Command string } `json:"commandActions"`
-	AggregatedOutput *string                    `json:"aggregatedOutput"`
-	ExitCode         *int                       `json:"exitCode"`
-	Status           string                     `json:"status"`
+	Command          string  `json:"command"`
+	AggregatedOutput *string `json:"aggregatedOutput"`
+	ExitCode         *int    `json:"exitCode"`
+	Status           string  `json:"status"`
 	// fileChange
 	Changes []struct {
 		Path string `json:"path"`
@@ -236,21 +235,72 @@ func codexArgs(it codexItem) any {
 	return args
 }
 
-// codexCommand is the command a person typed it as: Codex runs each in a
-// login shell (/bin/zsh -lc '…') and reports what it parsed out of it.
+// codexCommand is the script a command item ran: Codex runs each in a
+// login shell (/bin/zsh -lc '…'), and its command is that shell's argv
+// joined and quoted, so the script is the one word after -lc, unquoted.
+// Codex's commandActions are not used: for a read, search or list they are
+// its own rewrite of the script (`rg -n TODO src || true` reads as
+// `rg -n TODO src`), which did not run. A command not in that shape is
+// kept whole.
 func codexCommand(it codexItem) string {
-	if len(it.CommandActions) == 1 && it.CommandActions[0].Command != "" {
-		return it.CommandActions[0].Command
-	}
 	for _, shell := range []string{" -lc ", " -c "} {
 		if _, rest, ok := strings.Cut(it.Command, shell); ok && strings.HasPrefix(it.Command, "/") {
-			if len(rest) > 1 && rest[0] == '\'' && rest[len(rest)-1] == '\'' && !strings.Contains(rest[1:len(rest)-1], "'") {
-				return rest[1 : len(rest)-1]
+			if script, ok := shellWord(rest); ok {
+				return script
 			}
 			return rest
 		}
 	}
 	return it.Command
+}
+
+// shellWord is s read as exactly one POSIX shell word: single-quoted,
+// double-quoted (where \ escapes $ ` " \ and a newline) and bare parts,
+// joined. ok is false for anything else (two words, an unclosed quote, an
+// expansion), which is then not unquoted.
+func shellWord(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(s[i+1 : i+1+end])
+			i += 1 + end
+		case '"':
+			i++
+			for ; i < len(s) && s[i] != '"'; i++ {
+				switch s[i] {
+				case '\\':
+					if i+1 < len(s) && strings.IndexByte("$`\"\\\n", s[i+1]) >= 0 {
+						i++
+						if s[i] == '\n' {
+							continue
+						}
+					}
+				case '$', '`':
+					return "", false
+				}
+				b.WriteByte(s[i])
+			}
+			if i >= len(s) {
+				return "", false
+			}
+		case '\\':
+			if i+1 >= len(s) {
+				return "", false
+			}
+			i++
+			b.WriteByte(s[i])
+		case ' ', '\t', '\n', '$', '`', ';', '&', '|', '<', '>', '(', ')', '*', '?', '[', '~', '#':
+			return "", false
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), len(s) > 0
 }
 
 // codexCall records a tool call when it starts, once: the Run's own (c

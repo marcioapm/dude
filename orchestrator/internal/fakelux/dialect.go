@@ -274,7 +274,7 @@ func (s *Server) harnessTool(run *Run, id, title string, input any, done bool, o
 		if c, ok := args["command"].(string); ok {
 			cmd = c
 		}
-		item = map[string]any{"type": "commandExecution", "id": id, "command": "/bin/bash -lc '" + cmd + "'",
+		item = map[string]any{"type": "commandExecution", "id": id, "command": "/bin/bash -lc " + shellQuote(cmd),
 			"commandActions": []any{map[string]any{"command": cmd, "type": "unknown"}}, "status": status}
 		if done {
 			item["aggregatedOutput"], item["exitCode"] = out, 0
