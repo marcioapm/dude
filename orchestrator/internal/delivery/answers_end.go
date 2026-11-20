@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -296,11 +295,10 @@ func (s *Store) reconcile(ctx context.Context, forges Forges, now time.Time, org
 		return settle(reconciledWithheld, "", forge.Posted{}, nil)
 	}
 	// A reply: dude's own comment carrying its marker, and nothing else,
-	// is evidence it was posted. Never posted again here.
+	// is evidence it was posted. Never posted again here. A search cut at
+	// its bound (forge.ErrSearchIncomplete) is unreadable, so uncertain.
 	posted, err := gh.FindAnswer(ctx, slug, h.Number, id, forge.LineCommentID(h.InReplyTo) != 0)
 	switch {
-	case errors.Is(err, forge.ErrSearchIncomplete):
-		return settle(reconciledUncertain, fmt.Sprintf("the search for its comment stopped at its bound: %v", err), forge.Posted{}, nil)
 	case err != nil:
 		return unreadable(err)
 	case posted.ID != "":
