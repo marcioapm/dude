@@ -31,8 +31,11 @@ type Reply struct {
 type Replied struct {
 	Repo      string `json:"repo"`
 	Number    int    `json:"number"`
-	CommentID string `json:"commentId"`
-	URL       string `json:"url"`
+	CommentID string `json:"commentId,omitempty"`
+	URL       string `json:"url,omitempty"`
+	// A fixer's reply: held, not posted (AnswerHeldReply), and its id.
+	Held     string `json:"held,omitempty"`
+	AnswerID string `json:"answerId,omitempty"`
 }
 
 // ReplyPost is a reply checked and not yet posted.
@@ -56,10 +59,18 @@ type Replied struct {
 // records its own message, possibly in a different order from GitHub's.
 // Allowed whoever decides, and on a task that ended. GitHub refusing it is
 // the conductor's to hear (a Refusal), and nothing is recorded.
+//
+// A pull request fixer's reply is checked the same way, scoped to its
+// batch, and then held: step 1 records it (EvAnswerHeld) instead of
+// returning it to post, step 2 posts nothing and step 3 answers that it is
+// held. dude posts it later, through the same steps, once the fix is on the
+// pull request (PostFixerAnswers), with the stronger guarantees that path
+// documents.
 type ReplyPost struct {
 	ref       RunRef
 	repo      string
 	number    int
+	prID      string
 	slug      string
 	text      string
 	inReplyTo string
@@ -67,8 +78,15 @@ type ReplyPost struct {
 	// conversation.
 	thread int64
 	body   string
-	// Who posted it: the conductor, or a fixer in its own batch.
+	// Who posted it, as its chat.message says: the conductor, or the
+	// fixer whose held answer dude posted (PostFixerAnswers).
 	by string
+	// A fixer's reply, held (EvAnswerHeld, its event id): nothing is posted.
+	heldID string
+	// The answer dude posts for a fixer: its EvAnswerHeld id, also marked
+	// in the comment's body (forge.AnswerMarker) so a post whose record was lost
+	// is found again.
+	answerID string
 }
 
 // actingRun is the Run calling a PR tool: who it is, its status, and the
@@ -102,6 +120,9 @@ func actingRunTx(ctx context.Context, tx pgx.Tx, ref RunRef) (actingRun, error) 
 }
 
 // CheckReplyTx is step 1: the reply as it will be posted, or a Refusal.
+// A fixer's reply in its batch is checked as the conductor's is, against
+// dude's own records only (no GitHub read), and held: recorded here, in tx,
+// and returned marked held.
 func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in Reply) (ReplyPost, error) {
 	if err := LockChat(ctx, tx, ref.TaskID); err != nil {
 		return ReplyPost{}, err
@@ -110,11 +131,10 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	if err != nil {
 		return ReplyPost{}, err
 	}
-	// A fixer answering pull request feedback replies only to its own
-	// batch's comments, while it runs.
-	var batch []string
 	if caller.phase == PhaseFix {
-		batch = caller.batch
+		// A fixer is scoped to its batch, then held: its fix is not on
+		// the pull request while it runs.
+		batch := caller.batch
 		switch {
 		case caller.ended():
 			return ReplyPost{}, refusef(rYourRunPostsNothing, caller.status)
@@ -123,20 +143,25 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 		case !slices.Contains(batch, strings.TrimSpace(in.InReplyTo)):
 			return ReplyPost{}, refusef(rInReplyMustBeOneComments, strings.Join(batch, ", "))
 		}
+		p, err := replyPostTx(ctx, tx, ref, gh, in, "")
+		if err != nil {
+			return ReplyPost{}, err
+		}
+		p.heldID, err = holdAnswerTx(ctx, tx, ref, heldAnswer{Kind: answerReply, Repo: p.repo, Number: p.number, PRID: p.prID,
+			InReplyTo: p.inReplyTo, Text: p.text})
+		return p, err
 	} else if caller.role != RoleConductor {
 		return ReplyPost{}, refuseText(rTaskConductorRepliesOnItsPull)
 	}
 	var live bool
-	if batch != nil {
-		live = true
-	} else if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.id = $1 AND r.task_id = $2 AND `+LiveConductor+`
 		AND NOT COALESCE(`+Ending+`, false))`, ref.RunID, ref.TaskID).Scan(&live); err != nil {
 		return ReplyPost{}, err
 	}
 	if !live {
 		return ReplyPost{}, refuseText(rYouAreNoLongerThisTask5)
 	}
-	if batch == nil && strings.TrimSpace(in.InReplyTo) == "" {
+	if strings.TrimSpace(in.InReplyTo) == "" {
 		// T4: a review-only task's conductor posts no review of its own:
 		// dude's review is the output. Replies in a thread stay its.
 		if n, ok, err := reviewOnlyTx(ctx, tx, ref.TaskID); err != nil {
@@ -145,6 +170,16 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 			return ReplyPost{}, refusef(rReviewOnlyNoOwnComment, n)
 		}
 	}
+	p, err := replyPostTx(ctx, tx, ref, gh, in, "")
+	p.by = RoleConductor
+	return p, err
+}
+
+// replyPostTx is the reply as it will be posted by ref's Run: its text
+// bounded, the pull request the task's, the comment answered on it, and
+// the body quoting it, ending in marker (when set) then forge.ReplyMarker.
+// It reads dude's records only.
+func replyPostTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, in Reply, marker string) (ReplyPost, error) {
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case text == "":
@@ -152,14 +187,11 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 	case len(text) > ChatMessageMax:
 		return ReplyPost{}, refusef(rReplyAtMostBytesAsChat, ChatMessageMax)
 	}
-	repo, number, slug, _, err := replyTargetTx(ctx, tx, ref.TaskID, gh, in.PR)
+	repo, number, slug, prID, err := replyTargetTx(ctx, tx, ref.TaskID, gh, in.PR)
 	if err != nil {
 		return ReplyPost{}, err
 	}
-	p := ReplyPost{ref: ref, repo: repo, number: number, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo), by: "conductor"}
-	if batch != nil {
-		p.by = "fixer"
-	}
+	p := ReplyPost{ref: ref, repo: repo, number: number, prID: prID, slug: slug, text: text, inReplyTo: strings.TrimSpace(in.InReplyTo)}
 	var author, said string
 	if p.inReplyTo != "" {
 		// Its words as last read: an edit since it was first recorded is
@@ -175,46 +207,71 @@ func CheckReplyTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHub, 
 			return ReplyPost{}, err
 		}
 	}
+	end := "\n\n" + forge.ReplyMarker
+	if marker != "" {
+		end = "\n\n" + marker + "\n" + forge.ReplyMarker
+	}
 	if id, ok := strings.CutPrefix(p.inReplyTo, "line-comment-"); ok {
 		if p.thread, err = strconv.ParseInt(id, 10, 64); err != nil {
 			return ReplyPost{}, refusef(rNotLineCommentId, p.inReplyTo)
 		}
-		p.body = text + "\n\n" + forge.ReplyMarker
+		p.body = text + end
 		return p, nil
 	}
 	p.body = text
 	if p.inReplyTo != "" {
 		p.body = fmt.Sprintf("> @%s: %s\n\n%s", author, clip(firstLine(said), 200), text)
 	}
-	p.body += "\n\n" + forge.ReplyMarker
+	p.body += end
 	return p, nil
 }
 
+// Held says the reply is a fixer's, held (EvAnswerHeld), not posted.
+func (p ReplyPost) Held() bool { return p.heldID != "" }
+
 // PostReply is step 2: the comment posted on GitHub. Called with no
 // transaction open.
+// A fixer's held reply posts nothing (CheckReplyTx).
 func PostReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted, error) {
-	var posted forge.Posted
-	var err error
-	if p.thread != 0 {
-		posted, err = gh.ReplyToLineComment(ctx, p.slug, p.number, p.thread, p.body)
-	} else {
-		posted, err = gh.Comment(ctx, p.slug, p.number, p.body)
+	if p.Held() {
+		return forge.Posted{}, nil
 	}
+	posted, err := postReply(ctx, gh, p)
 	if forge.Refused(err) || forge.Transient(err) {
 		return forge.Posted{}, refusef(rGithubDidNotTakeReplyAnd, err)
 	}
 	return posted, err
 }
 
+// postReply is PostReply's GitHub call, its error as GitHub's: whether it
+// is transient (forge.Transient) or refused (forge.Refused) is the
+// caller's to tell.
+func postReply(ctx context.Context, gh *forge.GitHub, p ReplyPost) (forge.Posted, error) {
+	if p.thread != 0 {
+		return gh.ReplyToLineComment(ctx, p.slug, p.number, p.thread, p.body)
+	}
+	return gh.Comment(ctx, p.slug, p.number, p.body)
+}
+
 // RecordReplyTx is step 3: the posted reply in Chat, on the Run that
-// posted it, whether or not it is still the task's conductor.
+// posted it, whether or not it is still the task's conductor. A fixer's
+// held reply was recorded at step 1: it answers that it is held.
 func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Posted) (Replied, error) {
+	if p.Held() {
+		return Replied{Repo: p.repo, Number: p.number, Held: AnswerHeldReply, AnswerID: p.heldID}, nil
+	}
 	g := map[string]any{"repo": p.repo, "number": p.number, "feedbackId": posted.ID, "url": posted.URL}
 	if p.inReplyTo != "" {
 		g["inReplyTo"] = p.inReplyTo
 	}
-	_, err := ledger.Append(ctx, tx, p.ref.Event(EvChatMessage, ledger.ActorAgent,
-		map[string]any{"text": p.text, "by": p.by, "github": g}))
+	if p.answerID != "" {
+		g["answerId"] = p.answerID
+	}
+	e := p.ref.Event(EvChatMessage, ledger.ActorAgent, map[string]any{"text": p.text, "by": p.by, "github": g})
+	// A fixer's answer dude posted names it as its cause: what settles it
+	// (answerSettled, events_run_answer_causation_idx).
+	e.CausationID = p.answerID
+	_, err := ledger.Append(ctx, tx, e)
 	return Replied{Repo: p.repo, Number: p.number, CommentID: posted.ID, URL: posted.URL}, err
 }
 

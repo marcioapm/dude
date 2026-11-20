@@ -966,7 +966,8 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	})
 	// What GitHub says now, without waiting for its webhook. A read that
 	// fails is not the action failing: the webhook or the reconciler reads it later.
-	if p, ok := checked.(delivery.PRActionCheck); ok && err == nil && s.SyncPullRequest != nil {
+	// A fixer's held resolution did nothing there: nothing to read back.
+	if p, ok := checked.(delivery.PRActionCheck); ok && err == nil && !p.Held() && s.SyncPullRequest != nil {
 		if serr := s.SyncPullRequest(ctx, c.Org, p.PullRequestID()); serr != nil {
 			s.Log.Warn("reading a pull request back after an action failed", "pr", p.PullRequestID(), "tool", t.name, "error", serr)
 		}

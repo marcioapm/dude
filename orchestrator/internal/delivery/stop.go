@@ -123,7 +123,8 @@ func (s Stopped) All() []string {
 }
 
 // StopAllTx stops every live Run of the task, whatever its attempt — its
-// phase Runs, its conductor and the conductors' children — for a person's
+// phase Runs, its conductor and the conductors' children — and withholds
+// its fixers' held answers (SettleHeldOnStopTx), for a person's
 // Stop (keep: the phase Runs and the conductor kept to resume) or Close and
 // Archive (nothing kept).
 // Locks as the writers it races take them: the Chat and the conductor's
@@ -158,6 +159,11 @@ func StopAllTx(ctx context.Context, tx pgx.Tx, org, taskID, reason string, keep 
 		return out, err
 	}
 	if out.Children, err = StopChildrenTx(ctx, tx, taskID); err != nil {
+		return out, err
+	}
+	// No later step posts the fixers' held answers: withheld, under the
+	// Chat lock taken above, while the conductor is still live to be told.
+	if err := SettleHeldOnStopTx(ctx, tx, org, taskID); err != nil {
 		return out, err
 	}
 	if conductor != "" {

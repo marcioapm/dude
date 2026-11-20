@@ -103,6 +103,13 @@ type Store struct {
 	// waits before it is withdrawn; zero means the project's
 	// authorQuestionTimeoutMinutes, else 3 days. Tests shorten it.
 	AuthorQuestionTimeout time.Duration
+	// Test hooks of a fixer's held answers (answers_post.go).
+	BeforeAnswerClaim BeforeAnswerClaim
+	BeforeAnswerWrite BeforeAnswerWrite
+	AfterAnswerPost   AfterAnswerPost
+	// Now is the clock of a fixer's held answers: their claims, the verify
+	// bound and the end's reconciliation; nil is time.Now. Tests move it.
+	Now func() time.Time
 
 	// Admission for re-requests, each of which holds a pool connection
 	// across GitHub calls; sized from the pool on first use (rerequestSlots).

@@ -121,6 +121,8 @@ type world struct {
 	syncer    *phases.Syncer
 	artifacts *phases.Artifacts
 	prs       *prs.Syncer
+	// The delivery workflow's store.
+	store *delivery.Store
 	// Branch previews, and a task's servers.
 	previews *servers.Previews
 	// The key servers requests are made as (do).
@@ -226,7 +228,9 @@ func newWorld(t *testing.T) *world {
 	// conductorWorld keeps the default.
 	w.syncer.WakeWindow = 50 * time.Millisecond
 	w.artifacts = &phases.Artifacts{DB: app, Lux: w.syncer.Lux}
+	w.store = store
 	w.prs = &prs.Syncer{DB: app, Forges: forges, Log: w.log,
+		Answers: func(ctx context.Context) (int, error) { return store.ReconcileEndedAnswers(ctx, forges) },
 		Signal: func(ctx context.Context, org, wf, name string, payload any, key string) error {
 			return w.runtime.Signal(ctx, org, wf, name, payload, key)
 		}}

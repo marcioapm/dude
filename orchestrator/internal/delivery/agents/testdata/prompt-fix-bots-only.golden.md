@@ -4,7 +4,7 @@ Bots commented on the pull request since the last fix. They are not requests: ac
 
 **coderabbitai[bot]** — Consider a constant for the separator. _(issue-comment-13)_
 
-Once a comment above is addressed and committed, you may answer it on the pull request: reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change.
+Once a comment above is addressed and committed, answer it: reply_on_pull_request with in_reply_to its id (in italics after it), saying what you changed; for a line comment, then resolve_thread with the same id. Only the comments given to you here. Do not answer what you did not change. Your fix is not on the pull request until your checks pass and dude publishes it, so neither call posts while you work: each answers held, and dude posts your replies, in the order you made them, and resolves the threads only once your published fix is on the pull request's head. Call each once; do not repeat it in your report or elsewhere. If your fix is never published, nothing you answered is posted.
 
 The original task, for context:
 
