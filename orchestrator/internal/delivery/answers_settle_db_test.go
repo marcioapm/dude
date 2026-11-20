@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -147,5 +148,80 @@ func TestAReconciliationIsSettledOnce(t *testing.T) {
 	}
 	if n := f.count(t, `SELECT count(*) FROM events WHERE run_id = 'run_f' AND event_type = $1 AND causation_id = $2`, EvAnswerFailed, h.ID); n != 1 {
 		t.Errorf("the answer is settled %d times, want once", n)
+	}
+}
+
+// The reconciliation pass's row read (reconcileRowSQL) finds the answer's
+// pull request by pull_requests_pkey under a generic plan as dude_app,
+// the plan production's pool settles on: never a scan of every tenant's
+// pull requests behind RLS.
+func TestTheReconciliationRowReadUsesThePullRequestsKey(t *testing.T) {
+	f := newHeldFixture(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := f.owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%v\n%s", err, sql)
+		}
+	}
+	other := dbtest.Org(t, f.owner)
+	for _, org := range []string{f.ref.Org, other} {
+		p := "prj_n_" + org
+		exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($2, $1, 'N', $2, 'PN')`, org, p)
+		exec(`INSERT INTO repositories (id, organization_id, project_id, name, url, default_branch)
+			VALUES ($2 || '_r', $1, $2, 'noise', 'https://github.com/acme/noise.git', 'main')`, org, p)
+		exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ($2 || '_t', $1, $2, 2, 'N', 'g', 'review')`, org, p)
+		exec(`INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title)
+			SELECT $2 || '_pr_' || n, $1, $2, $2 || '_t', $2 || '_r', n, 'https://github.com/acme/noise/pull/' || n, 'b' || n, 'main', 'h', 'N'
+			FROM generate_series(1, 4000) n`, org, p)
+	}
+	h := f.held[0]
+	exec(`INSERT INTO answer_reconciliations (answer_id, organization_id, ended, claimed_at, due_at) VALUES ($1, $2, 'the pull request was merged', now(), now())`,
+		h.ID, f.ref.Org)
+	exec(`ANALYZE pull_requests`)
+	exec(`ANALYZE events`)
+	exec(`ANALYZE answer_reconciliations`)
+	// The read itself, as the pass runs it: the answer's repository.
+	var url string
+	if err := f.app.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, reconcileRowSQL, h.ID).Scan(new(string), new(string), new(string), new(time.Time), new([]byte), &url)
+	}); err != nil || url != "https://github.com/acme/target.git" {
+		t.Fatalf("the row read: %q %v", url, err)
+	}
+	exec(`SET ROLE dude_app`)
+	exec(`SELECT set_config('app.organization_id', $1, false)`, f.ref.Org)
+	defer exec(`RESET ROLE`)
+	exec(`SET plan_cache_mode = force_generic_plan`)
+	defer exec(`RESET plan_cache_mode`)
+	exec(`PREPARE reconcile_row AS ` + reconcileRowSQL)
+	defer exec(`DEALLOCATE reconcile_row`)
+	var plan []byte
+	// EXECUTE takes no bind parameter: the id is ledger-made ([a-z0-9_]).
+	if err := f.owner.QueryRow(ctx, `EXPLAIN (FORMAT JSON) EXECUTE reconcile_row('`+h.ID+`')`).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	var nodes []struct{ Plan map[string]any }
+	if err := json.Unmarshal(plan, &nodes); err != nil {
+		t.Fatal(err)
+	}
+	used := map[string]int{}
+	var walk func(map[string]any)
+	walk = func(node map[string]any) {
+		if name, ok := node["Index Name"].(string); ok {
+			used[name]++
+		}
+		if node["Node Type"] == "Seq Scan" && node["Relation Name"] == "pull_requests" {
+			used["seq scan of pull_requests"]++
+		}
+		children, _ := node["Plans"].([]any)
+		for _, child := range children {
+			walk(child.(map[string]any))
+		}
+	}
+	for _, n := range nodes {
+		walk(n.Plan)
+	}
+	if used["pull_requests_pkey"] != 1 || used["seq scan of pull_requests"] != 0 {
+		t.Fatalf("the reconciliation's row read used %v, want pull_requests_pkey; plan %s", used, plan)
 	}
 }

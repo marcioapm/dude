@@ -225,6 +225,15 @@ func (s *Store) ReconcileEndedAnswers(ctx context.Context, forges Forges) (int, 
 	return n, nil
 }
 
+// reconcileRowSQL is an open reconciliation's answer ($1): its task, Run,
+// project, claim, payload and repository URL. The pull request is found by
+// pull_requests_pkey: payload->>'prId' is not leakproof, so compared
+// directly under RLS it is a filter over every tenant's pull requests;
+// evaluated once in its own subquery, it is a parameter to the index.
+var reconcileRowSQL = `SELECT h.task_id, h.run_id, h.project_id, x.claimed_at, h.payload,
+		COALESCE((SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = (SELECT h.payload->>'prId')), '')
+	FROM answer_reconciliations x JOIN events h ON h.id = x.answer_id WHERE x.answer_id = $1 AND x.outcome IS NULL`
+
 // reconcile settles one row from GitHub, read with no transaction open:
 // whether it did, or the read failed for a moment short of the give-up
 // bound and it is retried.
@@ -235,10 +244,7 @@ func (s *Store) reconcile(ctx context.Context, forges Forges, now time.Time, org
 	var slug string
 	var claimed time.Time
 	if err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT h.task_id, h.run_id, h.project_id, x.claimed_at, h.payload,
-				COALESCE((SELECT r.url FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = h.payload->>'prId'), '')
-			FROM answer_reconciliations x JOIN events h ON h.id = x.answer_id WHERE x.answer_id = $1 AND x.outcome IS NULL`, id).
-			Scan(&ref.TaskID, &ref.RunID, &ref.ProjectID, &claimed, &raw, &slug)
+		return tx.QueryRow(ctx, reconcileRowSQL, id).Scan(&ref.TaskID, &ref.RunID, &ref.ProjectID, &claimed, &raw, &slug)
 	}); errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	} else if err != nil {

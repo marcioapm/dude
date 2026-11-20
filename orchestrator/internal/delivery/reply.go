@@ -269,7 +269,7 @@ func RecordReplyTx(ctx context.Context, tx pgx.Tx, p ReplyPost, posted forge.Pos
 	}
 	e := p.ref.Event(EvChatMessage, ledger.ActorAgent, map[string]any{"text": p.text, "by": p.by, "github": g})
 	// A fixer's answer dude posted names it as its cause: what settles it
-	// (answerSettled, events_run_answer_causation_idx).
+	// (answerSettled, events_run_answers_idx).
 	e.CausationID = p.answerID
 	_, err := ledger.Append(ctx, tx, e)
 	return Replied{Repo: p.repo, Number: p.number, CommentID: posted.ID, URL: posted.URL}, err
