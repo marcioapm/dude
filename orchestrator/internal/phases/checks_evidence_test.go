@@ -165,8 +165,8 @@ func TestAMovedRunsCommitOnAnotherClockHidesNoCallAfterIt(t *testing.T) {
 }
 
 // The host-skew margin is bounded: a call ten minutes before the commit
-// is still not shown.
-func TestACallTenMinutesBeforeTheCommitIsStillHidden(t *testing.T) {
+// is not shown, and its pass is unbacked.
+func TestACallTenMinutesBeforeTheCommitIsNotShown(t *testing.T) {
 	w := newEvidenceWorld(t)
 	w.call(time.Now().Add(-10*time.Minute), "early", "", "make check", exit(0), "ok")
 	a := w.report("make check")
