@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -154,10 +155,27 @@ func reconciling(h string) string {
 	return `EXISTS (SELECT 1 FROM answer_reconciliations x WHERE x.answer_id = ` + h + `.id)`
 }
 
+// reconcilingTx says held answer id is reconciling (reconciling).
+func reconcilingTx(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
+	var x bool
+	err := tx.QueryRow(ctx, `SELECT `+reconciling("h")+` FROM (SELECT $1::text AS id) h`, id).Scan(&x)
+	return x, err
+}
+
 // lastClaimSQL is the latest claim on a held answer ($1 the Run, $2 the
 // answer): when, and whether it was given back.
 var lastClaimSQL = `SELECT c.occurred_at, COALESCE((c.payload->>'released')::bool, false) FROM events c
 	WHERE ` + answerRecord("c", "$1", "$2", EvAnswerClaimed) + ` ORDER BY c.cursor DESC LIMIT 1`
+
+// lastClaimTx is the latest claim on held answer id of Run runID: when,
+// whether it was given back, and whether there is one (claimed).
+func lastClaimTx(ctx context.Context, tx pgx.Tx, runID, id string) (at time.Time, released, claimed bool, err error) {
+	err = tx.QueryRow(ctx, lastClaimSQL, runID, id).Scan(&at, &released)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return at, false, false, nil
+	}
+	return at, released, err == nil, err
+}
 
 // answerEvent is a held answer's claim or settling record on ref's Run,
 // caused by the answer.

@@ -111,8 +111,7 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 		f := &out[len(out)-1]
 		f.ids = append(f.ids, u.h.ID)
 		if u.claimed != nil {
-			if _, err := tx.Exec(ctx, `INSERT INTO answer_reconciliations (answer_id, organization_id, ended, claimed_at, due_at)
-				VALUES ($1, $2, $3, $4, $5)`, u.h.ID, org, reason, *u.claimed, u.claimed.Add(answerReconcileAfter)); err != nil {
+			if err := openReconciliationTx(ctx, tx, org, u.h.ID, reason, *u.claimed); err != nil {
 				return err
 			}
 			f.InFlight = append(f.InFlight, u.h.label())
@@ -129,6 +128,14 @@ func settleHeldOnEndTx(ctx context.Context, tx pgx.Tx, org, taskID, why string, 
 		}
 	}
 	return nil
+}
+
+// openReconciliationTx puts held answer id, last claimed at claimed, in
+// answer_reconciliations for ended, due answerReconcileAfter past the claim.
+func openReconciliationTx(ctx context.Context, tx pgx.Tx, org, id, ended string, claimed time.Time) error {
+	_, err := tx.Exec(ctx, `INSERT INTO answer_reconciliations (answer_id, organization_id, ended, claimed_at, due_at)
+		VALUES ($1, $2, $3, $4, $5)`, id, org, ended, claimed, claimed.Add(answerReconcileAfter))
+	return err
 }
 
 // appendFailedTx records held answer h as not posted, for why; flag, when

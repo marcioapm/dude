@@ -204,41 +204,31 @@ func failAnswerTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf, why stri
 	if done, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || done {
 		return false, err
 	}
-	p := map[string]any{"answerId": h.ID, "kind": h.Kind, "error": why}
-	if withheld {
-		if busy, err := inFlightTx(ctx, tx, ref.RunID, h.ID, now); err != nil || busy {
-			return false, err
-		}
-		var at time.Time
-		var released bool
-		switch err := tx.QueryRow(ctx, lastClaimSQL, ref.RunID, h.ID).Scan(&at, &released); {
-		case err == nil:
-			_, err = tx.Exec(ctx, `INSERT INTO answer_reconciliations (answer_id, organization_id, ended, claimed_at, due_at)
-				VALUES ($1, $2, $3, $4, $5)`, h.ID, ref.Org, clip(oneLine(why), 300), at, at.Add(answerReconcileAfter))
-			return err == nil, err
-		case !errors.Is(err, pgx.ErrNoRows):
-			return false, err
-		}
-		p["withheld"] = true
+	if !withheld {
+		return false, appendFailedTx(ctx, tx, ref, h, why, "")
 	}
-	_, err = ledger.Append(ctx, tx, answerEvent(ref, EvAnswerFailed, h.ID, p))
-	return false, err
+	if busy, err := inFlightTx(ctx, tx, ref.RunID, h.ID, now); err != nil || busy {
+		return false, err
+	}
+	at, _, claimed, err := lastClaimTx(ctx, tx, ref.RunID, h.ID)
+	if err != nil {
+		return false, err
+	}
+	if claimed {
+		err := openReconciliationTx(ctx, tx, ref.Org, h.ID, clip(oneLine(why), 300), at)
+		return err == nil, err
+	}
+	return false, appendFailedTx(ctx, tx, ref, h, why, "withheld")
 }
 
 // inFlightTx says held answer id may be being written to GitHub: its latest
 // claim is unreleased and inside its lease at now, or it is reconciling.
 func inFlightTx(ctx context.Context, tx pgx.Tx, runID, id string, now time.Time) (bool, error) {
-	var x bool
-	if err := tx.QueryRow(ctx, `SELECT `+reconciling("h")+` FROM (SELECT $1::text AS id) h`, id).Scan(&x); err != nil || x {
+	if x, err := reconcilingTx(ctx, tx, id); err != nil || x {
 		return x, err
 	}
-	var at time.Time
-	var released bool
-	err := tx.QueryRow(ctx, lastClaimSQL, runID, id).Scan(&at, &released)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil && !released && now.Sub(at) < answerClaimLease, err
+	at, released, claimed, err := lastClaimTx(ctx, tx, runID, id)
+	return claimed && !released && now.Sub(at) < answerClaimLease, err
 }
 
 // postFixer posts one fixer's unsettled answers, if its fix is on every
@@ -301,15 +291,16 @@ func (s *Store) unverified(ctx context.Context, f fixerToPost, done FixerAnswers
 	slog.Warn("a fixer's answers are held: they could not be verified", "run", f.ref.RunID, "why", u.Why)
 	done.Unverified = u.Why
 	past := s.now().Sub(f.ended) >= answerVerifyBound
+	incomplete := errors.Is(err, forge.ErrSearchIncomplete)
 	why := u.Why
-	if past && errors.Is(err, forge.ErrSearchIncomplete) {
+	if past && incomplete {
 		why = "manual reconciliation required: " + why
 	}
 	if rerr := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error { return recordUnverifiedTx(ctx, tx, f.ref, why) }); rerr != nil {
 		slog.Warn("recording why a fixer's answers could not be verified failed", "run", f.ref.RunID, "error", rerr)
 		return done, nil
 	}
-	if !past || errors.Is(err, forge.ErrSearchIncomplete) {
+	if !past || incomplete {
 		return done, nil
 	}
 	var held []heldOf
@@ -349,7 +340,6 @@ func (s *Store) withhold(ctx context.Context, f fixerToPost, held []heldOf, why,
 	done := FixerAnswers{RunID: f.ref.RunID, Commits: f.commits, Withheld: why, Cause: cause}
 	now := s.now()
 	err := s.DB.InOrg(ctx, f.ref.Org, func(tx pgx.Tx) error {
-		done.ids, done.InFlight = nil, nil
 		for _, h := range held {
 			done.ids = append(done.ids, h.ID)
 			reconciled, err := failAnswerTx(ctx, tx, f.ref, h, why, true, now)
@@ -446,24 +436,19 @@ func (s *Store) claimTx(ctx context.Context, tx pgx.Tx, ref RunRef, h heldOf) (s
 	if ok, err := settledTx(ctx, tx, ref.RunID, h.ID); err != nil || ok {
 		return ok, false, err
 	}
-	var x bool
-	if err := tx.QueryRow(ctx, `SELECT `+reconciling("h")+` FROM (SELECT $1::text AS id) h`, h.ID).Scan(&x); err != nil {
+	if x, err := reconcilingTx(ctx, tx, h.ID); err != nil {
 		return false, false, err
 	} else if x {
 		return false, false, errAnswerEnded
 	}
-	var at time.Time
-	var released bool
-	switch err := tx.QueryRow(ctx, lastClaimSQL, ref.RunID, h.ID).Scan(&at, &released); {
-	case err == nil:
-		if !released && s.now().Sub(at) < answerClaimLease {
-			return false, false, errAnswerBusy
-		}
-		recovering = true
-	case !errors.Is(err, pgx.ErrNoRows):
+	at, released, claimed, err := lastClaimTx(ctx, tx, ref.RunID, h.ID)
+	switch {
+	case err != nil:
 		return false, false, err
+	case claimed && !released && s.now().Sub(at) < answerClaimLease:
+		return false, false, errAnswerBusy
 	}
-	return false, recovering, nil
+	return false, claimed, nil
 }
 
 // appendClaimTx records a claim on answer id, at now, or its release.
