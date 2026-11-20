@@ -99,7 +99,8 @@ func TestACallAtTheLatestCommitBacksThePassTheJudgeAccepts(t *testing.T) {
 		t.Fatalf("evidence %+v", e)
 	}
 	line := w.checksWake()
-	for _, want := range []string{"latest commit is api " + head[:12], "tree clean at report", "make check⟦/external", "→ exit 0", "FOO=1 make check 2>&1 | tail -3"} {
+	for _, want := range []string{"latest commit is api " + head[:12], "tree clean at report", "make check⟦/external", "→ exit 0", "FOO=1 make check 2>&1 | tail -3",
+		"output ends " + delivery.ExternalText(w.run.ID, "ok greeting 0.01s") + "."} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the wake lacks %q: %s", want, line)
 		}

@@ -43,6 +43,19 @@ func TestTheBoundKeepsTheHostSkewMargin(t *testing.T) {
 	}
 }
 
+// The read starts 0.9 s into a second on equal clocks: the container's
+// clock reads that whole second, up to a second behind its true time, so
+// the bound must allow a whole second for it and land no later than the
+// commit (before the host-skew margin).
+func TestTheBoundAllowsTheContainersWholeSecond(t *testing.T) {
+	readStart := time.Unix(1_800_000_000, 900_000_000)
+	committed := readStart.Unix() // the same second, on the same clock
+	got := Checkouts{Now: readStart.Unix(), Heads: []CheckoutHead{{Repo: "api", SHA: strings.Repeat("a", 40), Committed: committed}}}.Since(readStart)
+	if limit := time.Unix(committed, 0).Add(-hostSkewMargin); got.After(limit) {
+		t.Fatalf("since %v, after the commit %v", got, limit)
+	}
+}
+
 // CheckoutScript's account is read whole or not at all.
 func TestParseCheckoutsReadsAWholeAccount(t *testing.T) {
 	a := strings.Repeat("a", 40)
