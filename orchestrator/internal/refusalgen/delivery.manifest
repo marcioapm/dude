@@ -272,6 +272,9 @@ rDispatchQuestionReserved               refusals/delivery/dispatch/question-rese
 rDispatchMaybe                          refusals/delivery/dispatch/maybe
 rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task
 rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed
+rWaitAfterUnreadable                   refusals/delivery/waits/after-unreadable
+rWaitAfterTooShort                     refusals/delivery/waits/after-too-short
+rWaitAfterPastDeadline                 refusals/delivery/waits/after-past-deadline
 rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
 rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
 rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds

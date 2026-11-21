@@ -115,3 +115,32 @@ func TestWaitForIsConductorOnly(t *testing.T) {
 		t.Error("without conduct.wait: MCP tools/call wait_for succeeded")
 	}
 }
+
+// after over the JSON API: under 30m or at the deadline refused, writing
+// nothing; 30m before a 1h deadline opens a wait keeping its time.
+func TestWaitForAfterOverTheTool(t *testing.T) {
+	f := setup(t)
+	token := f.conductor(t)
+	waits := func() int { return f.count(t, `SELECT count(*) FROM conductor_waits`) }
+	for name, body := range map[string]string{
+		"29m":                `{"deadline":"1h","conditions":[{"after":"29m"}]}`,
+		"after the deadline": `{"deadline":"1h","conditions":[{"after":"90m"}]}`,
+	} {
+		var out map[string]any
+		if status := f.postAs(t, token, "wait_for", body, &out); status != 422 {
+			t.Errorf("%s: %d %v", name, status, out)
+		}
+	}
+	if waits() != 0 {
+		t.Fatal("a refused after wrote a wait")
+	}
+	var out map[string]any
+	if status := f.postAs(t, token, "wait_for", `{"deadline":"1h","conditions":[{"after":"30m"}]}`, &out); status != 200 ||
+		out["waitId"] == nil || out["holds"] != nil {
+		t.Fatalf("wait_for after: %d %v", status, out)
+	}
+	if n := f.count(t, `SELECT count(*) FROM conductor_waits
+		WHERE conditions->0->>'kind' = 'after' AND (conditions->0->>'at')::timestamptz > now() + interval '29 minutes'`); n != 1 {
+		t.Fatalf("stored after: %d", n)
+	}
+}

@@ -89,7 +89,7 @@ func failedDispatch(t *testing.T) (*db.DB, string) {
 func TestAWaitOnARefusedDispatchIsRefused(t *testing.T) {
 	app, org := failedDispatch(t)
 	err := app.InOrg(context.Background(), org, func(tx pgx.Tx) error {
-		_, err := normalizeWaitTx(context.Background(), tx, "wi_f", []WaitCondition{{WorkflowEnded: "wfd_f"}})
+		_, err := normalizeWaitTx(context.Background(), tx, "wi_f", WaitMaxDeadline, []WaitCondition{{WorkflowEnded: "wfd_f"}})
 		return err
 	})
 	if !IsRefusal(err) {

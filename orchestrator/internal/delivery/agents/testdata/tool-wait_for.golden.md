@@ -43,6 +43,9 @@ Say what you are waiting on, then end your turn: dude checks it in its own cycle
           },
           "workflowEnded": {
             "type": "string"
+          },
+          "after": {
+            "type": "string"
           }
         },
         "additionalProperties": false

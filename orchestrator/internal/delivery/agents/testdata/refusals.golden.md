@@ -1480,7 +1480,7 @@ the note is at most %d characters
 
 ## refusals/delivery/waits/one-kind-per-condition
 
-each condition is exactly one of runsEnded, prChecksFinal or workflowEnded
+each condition is exactly one of runsEnded, prChecksFinal, workflowEnded or after
 
 ## refusals/delivery/waits/runs-count
 
@@ -1841,4 +1841,16 @@ Ask one thing, in at most %d bytes
 ## refusals/delivery/ask-author/unknown-author
 
 dude does not know who opened pull request #%d, so it cannot ask them: ask the owner (ask_person) instead
+
+## refusals/delivery/waits/after-past-deadline
+
+after %q comes at or after the wait's deadline: the deadline comes first; just set the deadline
+
+## refusals/delivery/waits/after-too-short
+
+after %q is under 30m: for a shorter time, just set the deadline
+
+## refusals/delivery/waits/after-unreadable
+
+after %q is not a duration: give one such as 45m or 2h
 

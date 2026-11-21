@@ -10,7 +10,7 @@
 
 {{- define "refusals/delivery/waits/too-many-conditions"}}at most %d conditions to a wait{{end}}
 
-{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal or workflowEnded{{end}}
+{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded or after{{end}}
 
 {{- define "refusals/delivery/waits/runs-count"}}runsEnded names 1 to %d Runs{{end}}
 
@@ -23,3 +23,9 @@
 {{- define "refusals/delivery/waits/not-dispatch-of-this-task"}}%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches){{end}}
 
 {{- define "refusals/delivery/waits/dispatch-failed"}}GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow){{end}}
+
+{{- define "refusals/delivery/waits/after-unreadable"}}after %q is not a duration: give one such as 45m or 2h{{end}}
+
+{{- define "refusals/delivery/waits/after-too-short"}}after %q is under 30m: for a shorter time, just set the deadline{{end}}
+
+{{- define "refusals/delivery/waits/after-past-deadline"}}after %q comes at or after the wait's deadline: the deadline comes first; just set the deadline{{end}}

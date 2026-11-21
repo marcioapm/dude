@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -571,5 +572,122 @@ func TestAWaitOnAStoppedTaskStaysForThePickUp(t *testing.T) {
 		return err
 	}); err != nil || woken != "" {
 		t.Fatalf("woken %q: %v", woken, err)
+	}
+}
+
+func afterCond(d string) WaitCondition { return WaitCondition{After: d} }
+
+// moveAfterIntoThePast sets every after condition's time of the open
+// waits a second before Postgres's now.
+func (w *childWorld) moveAfterIntoThePast() {
+	w.t.Helper()
+	w.exec(`UPDATE conductor_waits SET conditions = (SELECT jsonb_agg(CASE WHEN c->>'kind' = 'after'
+			THEN jsonb_set(c, '{at}', to_jsonb(now() - interval '1 second')) ELSE c END ORDER BY n)
+		FROM jsonb_array_elements(conditions) WITH ORDINALITY AS e(c, n)) WHERE ended_at IS NULL`)
+}
+
+// after holds by Postgres's clock once its time comes, which it keeps as
+// an absolute time from the call: a retried call is the same wait and the
+// same time.
+func TestWaitForAfterHoldsOnceItsTimeComes(t *testing.T) {
+	w := newWaitWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{afterCond("30m")}, Deadline: "1h"})
+	if opened.Holds || opened.WaitID == "" {
+		t.Fatalf("opened %+v", opened)
+	}
+	var stored string
+	if err := w.owner.QueryRow(w.ctx, `SELECT conditions->0->>'at' FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	again := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{afterCond("30m")}, Deadline: "1h"})
+	var after string
+	if err := w.owner.QueryRow(w.ctx, `SELECT conditions->0->>'at' FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if again.WaitID != opened.WaitID || after != stored || w.count("conductor_waits") != 1 {
+		t.Fatalf("retried: %+v, at %s then %s", again, stored, after)
+	}
+	w.evaluate()
+	if len(w.waitWakes()) != 0 || w.waitEnd(opened.WaitID) != "" {
+		t.Fatalf("held before its time: %v", w.waitWakes())
+	}
+	w.moveAfterIntoThePast()
+	w.evaluate()
+	w.evaluate()
+	if got := w.waitWakes(); len(got) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || w.events(EvConductorWaitEnded) != 1 {
+		t.Fatalf("after its time: wakes %v, ended %q", got, w.waitEnd(opened.WaitID))
+	}
+	var digest string
+	if err := w.owner.QueryRow(w.ctx, `SELECT digest FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Your wait " + opened.WaitID + " held (1 of 1): 30m elapsed (since "; !strings.HasPrefix(digest, want) || !strings.HasSuffix(digest, " UTC).") {
+		t.Fatalf("digest %q", digest)
+	}
+}
+
+// after holds at its time exactly (now() >= at), and not a moment before.
+func TestAfterHoldsAtItsTimeExactly(t *testing.T) {
+	w := newWaitWorld(t)
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		var now time.Time
+		if err := tx.QueryRow(w.ctx, `SELECT now()`).Scan(&now); err != nil {
+			return err
+		}
+		for _, tc := range []struct {
+			at    time.Time
+			holds bool
+		}{{now, true}, {now.Add(time.Millisecond), false}, {now.Add(-time.Millisecond), true}} {
+			since := tc.at.Add(-WaitMinAfter)
+			it, err := afterItemTx(w.ctx, tx, waitCond{Kind: condAfter, After: "30m", Since: &since, At: &tc.at})
+			if err != nil {
+				return err
+			}
+			if it.Ended != tc.holds {
+				t.Errorf("at now%+v: holds %v, want %v", tc.at.Sub(now), it.Ended, tc.holds)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForAfterRefusals(t *testing.T) {
+	w := newWaitWorld(t)
+	for name, ask := range map[string]WaitAsk{
+		"29m":                {Deadline: "2h", Conditions: []WaitCondition{afterCond("29m")}},
+		"unreadable":         {Deadline: "2h", Conditions: []WaitCondition{afterCond("soon")}},
+		"after the deadline": {Deadline: "1h", Conditions: []WaitCondition{afterCond("2h")}},
+		"at the deadline":    {Deadline: "1h", Conditions: []WaitCondition{afterCond("1h")}},
+		"two kinds in one":   {Deadline: "2h", Conditions: []WaitCondition{{After: "45m", WorkflowEnded: "wfd_x"}}},
+	} {
+		if _, err := w.waitFor("c-"+name, ask); !IsRefusal(err) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if w.count("conductor_waits") != 0 || w.events(EvConductorWaiting) != 0 {
+		t.Fatal("a refused call wrote")
+	}
+}
+
+// With wake any beside a Run that has not ended, after alone wakes it.
+func TestWaitForAnyWakesOnAfterAlone(t *testing.T) {
+	w := newWaitWorld(t)
+	w.phaseRun("run_a", "review")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{runsEnded("run_a"), afterCond("45m")}, Wake: "any", Deadline: "2h"})
+	w.evaluate()
+	if len(w.waitWakes()) != 0 {
+		t.Fatal("held with nothing done")
+	}
+	w.moveAfterIntoThePast()
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
+		t.Fatalf("any: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+	var held, of int
+	if err := w.owner.QueryRow(w.ctx, `SELECT (payload->>'held')::int, (payload->>'of')::int FROM events WHERE event_type = $1`,
+		EvConductorWaitEnded).Scan(&held, &of); err != nil || held != 1 || of != 2 {
+		t.Fatalf("held %d of %d: %v", held, of, err)
 	}
 }

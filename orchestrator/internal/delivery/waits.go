@@ -45,8 +45,11 @@ const (
 	WaitMaxDeadline   = 24 * time.Hour
 	WaitMaxConditions = 8
 	WaitMaxRuns       = 8
-	WaitNoteMax       = 500
-	waitLineChars     = 2000
+	// An after condition waits at least this long: a shorter one is a
+	// deadline.
+	WaitMinAfter  = 30 * time.Minute
+	WaitNoteMax   = 500
+	waitLineChars = 2000
 )
 
 // How a wait ended (conductor_waits.ended_by).
@@ -67,6 +70,9 @@ type WaitCondition struct {
 	// terminal outcome: completed, unknown, or dude cannot see it. One
 	// GitHub refused (failed) is refused: nothing ran.
 	WorkflowEnded string `json:"workflowEnded,omitempty"`
+	// A time passed since the wait opened: a Go duration, from
+	// WaitMinAfter, before the wait's deadline.
+	After string `json:"after,omitempty"`
 }
 
 // PRChecksAsk names a pull request (12, #12, repo#12) and the head its
@@ -110,12 +116,18 @@ type waitCond struct {
 	Head   string `json:"head,omitempty"`
 	// workflow_ended: the workflow_dispatches row.
 	Dispatch string `json:"dispatch,omitempty"`
+	// after: the duration as asked, when the wait opened (Postgres's
+	// clock) and when it holds, both UTC.
+	After string     `json:"after,omitempty"`
+	Since *time.Time `json:"since,omitempty"`
+	At    *time.Time `json:"at,omitempty"`
 }
 
 const (
 	condRunsEnded     = "runs_ended"
 	condPRChecksFinal = "pr_checks_final"
 	condWorkflowEnded = "workflow_ended"
+	condAfter         = "after"
 )
 
 // parseWaitDeadline reads a deadline: a Go duration, or an RFC 3339 time,
@@ -182,7 +194,7 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 	if utf8.RuneCountInString(ask.Note) > WaitNoteMax {
 		return out, refusef(rWaitNoteTooLong, WaitNoteMax)
 	}
-	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, ask.Conditions)
+	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, deadline.Sub(now), ask.Conditions)
 	if err != nil {
 		return out, err
 	}
@@ -242,15 +254,16 @@ func decisionWaitingTx(ctx context.Context, tx pgx.Tx, taskID string) (string, e
 
 // normalizeWaitTx checks the conditions and stores them as the evaluator
 // reads them: Runs of this task, a pull request of this task by its row,
-// its head pinned.
-func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCondition) ([]waitCond, error) {
+// its head pinned, a time as when it comes (before the deadline, ahead of
+// the call).
+func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.Duration, in []WaitCondition) ([]waitCond, error) {
 	if len(in) > WaitMaxConditions {
 		return nil, refusef(rWaitTooManyConditions, WaitMaxConditions)
 	}
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
 		kinds := 0
-		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != ""} {
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != ""} {
 			if set {
 				kinds++
 			}
@@ -258,6 +271,28 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 		switch {
 		case kinds != 1:
 			return nil, refuseText(rWaitOneKindPerCondition)
+		case c.After != "":
+			s := strings.TrimSpace(c.After)
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return nil, refusef(rWaitAfterUnreadable, s)
+			}
+			if d < WaitMinAfter {
+				return nil, refusef(rWaitAfterTooShort, s)
+			}
+			// Before the deadline, as both were asked: one that comes
+			// first makes this a deadline.
+			if d >= ahead {
+				return nil, refusef(rWaitAfterPastDeadline, s)
+			}
+			// Postgres's clock, as the evaluator reads it.
+			var since time.Time
+			if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&since); err != nil {
+				return nil, err
+			}
+			since = since.UTC()
+			at := since.Add(d)
+			out = append(out, waitCond{Kind: condAfter, After: s, Since: &since, At: &at})
 		case c.WorkflowEnded != "":
 			id := strings.TrimSpace(c.WorkflowEnded)
 			// A dispatch GitHub refused (failed) never ran: nothing will
@@ -341,7 +376,10 @@ type waitItem struct {
 	// A dispatched workflow (Kind "workflow"): as the supervisor last
 	// stored it.
 	Workflow *workflowFacts
-	rank     int
+	// A time (Kind "after"): the duration asked, when it began and when
+	// it comes (HH:MM UTC), and whether it came.
+	After, Since, Until string
+	rank                int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -390,6 +428,13 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			}
 			held = it.rank != rankWaiting
 			ev.items = append(ev.items, it)
+		case condAfter:
+			it, err := afterItemTx(ctx, tx, c)
+			if err != nil {
+				return ev, err
+			}
+			held = it.Ended
+			ev.items = append(ev.items, it)
 		}
 		if held {
 			ev.held++
@@ -406,6 +451,23 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 
 // maxReplacements bounds following a Run's replacements.
 const maxReplacements = 50
+
+// afterItemTx reads an after condition by Postgres's clock: it holds once
+// now() reaches its time.
+func afterItemTx(ctx context.Context, tx pgx.Tx, c waitCond) (waitItem, error) {
+	it := waitItem{Kind: "after", After: c.After, rank: rankWaiting}
+	if c.At == nil || c.Since == nil {
+		return it, nil
+	}
+	it.Since, it.Until = c.Since.UTC().Format("15:04"), c.At.UTC().Format("15:04")
+	if err := tx.QueryRow(ctx, `SELECT now() >= $1`, *c.At).Scan(&it.Ended); err != nil {
+		return it, err
+	}
+	if it.Ended {
+		it.rank = rankGood
+	}
+	return it, nil
+}
 
 func runItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error) {
 	it := waitItem{Kind: "run", RunID: id}
