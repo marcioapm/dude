@@ -400,15 +400,21 @@ func TestOverlappingChildrenShowTheirOwnCompletions(t *testing.T) {
 	at := after()
 	w.s.Now = func() time.Time { return at }
 	defer func() { w.s.Now = nil }()
+	// payload is child's bash call "dup" (from its parent's task_ call), with fields.
+	payload := func(child string, fields map[string]any) map[string]any {
+		p := map[string]any{"childId": "chd_" + child, "parentCallId": "task_" + child, "callId": "dup", "tool": "bash"}
+		maps.Copy(p, fields)
+		return p
+	}
 	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
 		for _, event := range []struct {
 			kind    string
 			payload map[string]any
 		}{
-			{evChildToolCalled, map[string]any{"childId": "chd_check", "parentCallId": "task_check", "callId": "dup", "tool": "bash", "input": map[string]any{"command": "make check"}}},
-			{evChildToolCalled, map[string]any{"childId": "chd_lint", "parentCallId": "task_lint", "callId": "dup", "tool": "bash", "input": map[string]any{"command": "make lint"}}},
-			{evChildToolCompleted, map[string]any{"childId": "chd_lint", "parentCallId": "task_lint", "callId": "dup", "tool": "bash", "status": "completed", "exitCode": 0, "output": map[string]any{"head": "lint ok"}}},
-			{evChildToolCompleted, map[string]any{"childId": "chd_check", "parentCallId": "task_check", "callId": "dup", "tool": "bash", "status": "completed", "exitCode": 1, "output": map[string]any{"head": "FAIL greeting"}}},
+			{evChildToolCalled, payload("check", map[string]any{"input": map[string]any{"command": "make check"}})},
+			{evChildToolCalled, payload("lint", map[string]any{"input": map[string]any{"command": "make lint"}})},
+			{evChildToolCompleted, payload("lint", map[string]any{"status": "completed", "exitCode": 0, "output": map[string]any{"head": "lint ok"}})},
+			{evChildToolCompleted, payload("check", map[string]any{"status": "completed", "exitCode": 1, "output": map[string]any{"head": "FAIL greeting"}})},
 		} {
 			if err := w.s.event(context.Background(), tx, w.run, event.kind, ledger.ActorAgent, event.payload); err != nil {
 				return err
