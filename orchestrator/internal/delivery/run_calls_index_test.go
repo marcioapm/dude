@@ -55,6 +55,7 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	used := map[string]int{}
+	incrementalSorts := 0
 	var walk func(map[string]any)
 	walk = func(node map[string]any) {
 		if name, ok := node["Index Name"].(string); ok {
@@ -64,7 +65,7 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 			used["seq scan"]++
 		}
 		if node["Node Type"] == "Incremental Sort" {
-			used["incremental sort"]++
+			incrementalSorts++
 		}
 		if node["Node Type"] == "Sort" {
 			keys, _ := node["Sort Key"].([]any)
@@ -80,10 +81,9 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 	for _, n := range nodes {
 		walk(n.Plan)
 	}
-	if used["incremental sort"] == 0 {
+	if incrementalSorts == 0 {
 		t.Fatalf("completion lookup must sort only equal-time groups, not the whole tail; plan %s", plan)
 	}
-	delete(used, "incremental sort")
 	if len(used) != 1 || used["events_run_tool_calls_idx"] == 0 {
 		t.Fatalf("the calls at a commit read %v, want events_run_tool_calls_idx alone; plan %s", used, plan)
 	}
