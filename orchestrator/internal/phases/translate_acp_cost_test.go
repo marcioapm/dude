@@ -1,11 +1,13 @@
 package phases
 
-import (
-	"testing"
-)
+import "testing"
 
-// acpCost is an ACP agent's running report of its session's cost: the
-// session's total so far, not the turn's.
+// acpSession, acpCost: lux's session record, and an ACP agent's running
+// report of its session's cost: the session's total so far, not the turn's.
+func acpSession(id string) map[string]any {
+	return rec("lux.session", map[string]any{"sessionId": id})
+}
+
 func acpCost(amount float64) map[string]any {
 	return rec("acp.usage_update", map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": amount, "currency": "USD"}})
 }
@@ -25,11 +27,11 @@ func (w *harnessWorld) harnessStateHas(key string) bool {
 // a restart of the follower (#480).
 func TestANewACPSessionsCostIsCountedOnTopOfTheOldOnes(t *testing.T) {
 	w := newHarnessWorld(t)
-	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.2))
+	w.feedAt(1, acpSession("ses_a"), acpCost(1.2))
 	w.feedAt(2, rec("lux.warning", map[string]any{"message": "session/load failed, starting a new session"}),
-		rec("lux.session", map[string]any{"sessionId": "ses_b"}), acpCost(0.8))
+		acpSession("ses_b"), acpCost(0.8))
 	w.restart()
-	w.feedAt(3, rec("lux.session", map[string]any{"sessionId": "ses_b"}), acpCost(1.5))
+	w.feedAt(3, acpSession("ses_b"), acpCost(1.5))
 	if got := w.turnCosts(); !nearAll(got, []float64{1.2, 0.8, 0.7}) {
 		t.Errorf("costs = %v, want [1.2 0.8 0.7]", got)
 	}
@@ -37,7 +39,7 @@ func TestANewACPSessionsCostIsCountedOnTopOfTheOldOnes(t *testing.T) {
 		t.Errorf("run cost = %v, want 1.2 + 1.5", got)
 	}
 	// A new session's report of 0 is an unknown cost: no refund.
-	w.feedAt(4, rec("lux.session", map[string]any{"sessionId": "ses_c"}), acpCost(0))
+	w.feedAt(4, acpSession("ses_c"), acpCost(0))
 	if got := w.turnCosts(); len(got) != 0 {
 		t.Errorf("a new session's unknown cost recorded %v", got)
 	}
@@ -57,9 +59,9 @@ func TestANewACPSessionsCostIsCountedOnTopOfTheOldOnes(t *testing.T) {
 // counted once, not again on top of itself.
 func TestAResumedACPSessionCountsItsCostOnce(t *testing.T) {
 	w := newHarnessWorld(t)
-	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.2))
+	w.feedAt(1, acpSession("ses_a"), acpCost(1.2))
 	w.restart()
-	w.feedAt(2, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.5))
+	w.feedAt(2, acpSession("ses_a"), acpCost(1.5))
 	if got := w.turnCosts(); !nearAll(got, []float64{1.2, 0.3}) {
 		t.Errorf("costs = %v, want [1.2 0.3]", got)
 	}
@@ -73,8 +75,8 @@ func TestAResumedACPSessionCountsItsCostOnce(t *testing.T) {
 // session's next report is counted only for what that session grew by.
 func TestAHandedOverACPRunCountsOnlyItsSessionsGrowth(t *testing.T) {
 	w := newHarnessWorld(t)
-	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.2))
-	w.feedAt(2, rec("lux.session", map[string]any{"sessionId": "ses_b"}), acpCost(0.5))
+	w.feedAt(1, acpSession("ses_a"), acpCost(1.2))
+	w.feedAt(2, acpSession("ses_b"), acpCost(0.5))
 	if !w.harnessStateHas("acpCostBase") {
 		t.Fatal("the replaced session's base was not kept in harness_state")
 	}
@@ -86,7 +88,7 @@ func TestAHandedOverACPRunCountsOnlyItsSessionsGrowth(t *testing.T) {
 	}
 	w.events()
 	w.restart()
-	w.feedAt(3, rec("lux.session", map[string]any{"sessionId": "ses_b"}), acpCost(0.9))
+	w.feedAt(3, acpSession("ses_b"), acpCost(0.9))
 	if got := w.turnCosts(); !nearAll(got, []float64{0.4}) {
 		t.Errorf("costs = %v, want the session's growth [0.4]", got)
 	}
@@ -98,7 +100,7 @@ func TestAHandedOverACPRunCountsOnlyItsSessionsGrowth(t *testing.T) {
 		t.Errorf("base = %v (%v), want 1.7", base, err)
 	}
 	// And a session replaced in the next round counts from there.
-	w.feedAt(4, rec("lux.session", map[string]any{"sessionId": "ses_c"}), acpCost(0.3))
+	w.feedAt(4, acpSession("ses_c"), acpCost(0.3))
 	if got := w.turnCosts(); !nearAll(got, []float64{0.3}) {
 		t.Errorf("costs = %v, want [0.3]", got)
 	}
@@ -111,7 +113,7 @@ func TestAHandedOverACPRunCountsOnlyItsSessionsGrowth(t *testing.T) {
 // none, and its session's total is counted as it was.
 func TestAnACPRunWithNoCostBaseKeptCountsAsBefore(t *testing.T) {
 	w := newHarnessWorld(t)
-	w.feedAt(1, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.2))
+	w.feedAt(1, acpSession("ses_a"), acpCost(1.2))
 	if w.harnessStateHas("acpCostBase") {
 		t.Error("a Run with no replaced session saved an acpCostBase")
 	}
@@ -119,7 +121,7 @@ func TestAnACPRunWithNoCostBaseKeptCountsAsBefore(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.restart()
-	w.feedAt(2, rec("lux.session", map[string]any{"sessionId": "ses_a"}), acpCost(1.0), acpCost(1.5))
+	w.feedAt(2, acpSession("ses_a"), acpCost(1.0), acpCost(1.5))
 	if got := w.turnCosts(); !nearAll(got, []float64{1.2, 0.3}) {
 		t.Errorf("costs = %v, want [1.2 0.3]", got)
 	}
