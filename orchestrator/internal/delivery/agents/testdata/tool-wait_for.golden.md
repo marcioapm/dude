@@ -46,6 +46,30 @@ Say what you are waiting on, then end your turn: dude checks it in its own cycle
           },
           "after": {
             "type": "string"
+          },
+          "siblingTask": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "task": {
+                "type": "string"
+              },
+              "becomes": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

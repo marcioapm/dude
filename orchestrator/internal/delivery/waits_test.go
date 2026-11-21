@@ -144,7 +144,7 @@ func TestWaitForRunsEndedHoldsOnceAllEnd(t *testing.T) {
 	var ev waitEval
 	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
 		var err error
-		ev, err = evaluateConditionsTx(w.ctx, tx, []waitCond{{Kind: condRunsEnded, Runs: []string{"run_a", "run_b"}}}, true)
+		ev, err = evaluateConditionsTx(w.ctx, tx, []waitCond{{Kind: condRunsEnded, Runs: []string{"run_a", "run_b"}}}, true, 0)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -689,5 +689,223 @@ func TestWaitForAnyWakesOnAfterAlone(t *testing.T) {
 	if err := w.owner.QueryRow(w.ctx, `SELECT (payload->>'held')::int, (payload->>'of')::int FROM events WHERE event_type = $1`,
 		EvConductorWaitEnded).Scan(&held, &of); err != nil || held != 1 || of != 2 {
 		t.Fatalf("held %d of %d: %v", held, of, err)
+	}
+}
+
+// newSiblingWorld is newWaitWorld with the task on an epic, beside a
+// sibling P-2 (wi_sib, "Ship the <importer>", queued) on it too.
+func newSiblingWorld(t *testing.T) *childWorld {
+	w := newWaitWorld(t)
+	w.exec(`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('ep_life', $1, 'prj_life', 'Epic')`, w.org)
+	w.exec(`UPDATE tasks SET epic_id = 'ep_life' WHERE id = 'wi_life'`)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal, status)
+		VALUES ('wi_sib', $1, 'prj_life', 2, 'ep_life', 'Ship the ⟦importer⟧', 'Ship', 'queued')`, w.org)
+	return w
+}
+
+func siblingCond(task string, becomes ...string) WaitCondition {
+	return WaitCondition{SiblingTask: &SiblingTaskAsk{Task: task, Becomes: becomes}}
+}
+
+// moveSibling moves wi_sib's status the way dude does (SetTaskStatusTx:
+// the row and a task.status_changed event).
+func (w *childWorld) moveSibling(status string) {
+	w.t.Helper()
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		moved, err := SetTaskStatusTx(w.ctx, tx, w.org, "prj_life", "wi_sib", "", status, "test")
+		if err == nil && !moved {
+			err = errors.New("not moved")
+		}
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// siblingEvent appends an event on wi_sib.
+func (w *childWorld) siblingEvent(typ string) {
+	w.t.Helper()
+	ref := RunRef{Org: w.org, ProjectID: "prj_life", TaskID: "wi_sib"}
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(w.ctx, tx, ref.Event(typ, ledger.ActorHuman, map[string]any{}))
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *childWorld) digest(id string) string {
+	w.t.Helper()
+	var d string
+	if err := w.owner.QueryRow(w.ctx, `SELECT COALESCE(digest, '') FROM conductor_waits WHERE id = $1`, id).Scan(&d); err != nil {
+		w.t.Fatal(err)
+	}
+	return d
+}
+
+func TestWaitForSiblingStarted(t *testing.T) {
+	w := newSiblingWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("p-2", "started")}, Deadline: "1h"})
+	w.evaluate()
+	if opened.Holds || len(w.waitWakes()) != 0 {
+		t.Fatalf("held with the sibling queued: %+v %v", opened, w.waitWakes())
+	}
+	w.moveSibling("running")
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
+		t.Fatalf("started: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+	d := w.digest(opened.WaitID)
+	if !strings.Contains(d, "P-2 ⟦external P-2⟧Ship the [importer]⟦/external P-2⟧ moved to running at ") {
+		t.Fatalf("digest %q", d)
+	}
+}
+
+func TestWaitForSiblingBecomesOnlyWhatItNames(t *testing.T) {
+	w := newSiblingWorld(t)
+	w.moveSibling("running")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("wi_sib", "done")}, Deadline: "1h"})
+	w.moveSibling("review")
+	w.evaluate()
+	if len(w.waitWakes()) != 0 {
+		t.Fatalf("review held [done]: %v", w.waitWakes())
+	}
+	w.moveSibling("done")
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
+		t.Fatalf("done: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+}
+
+// stopped is the task.stopped event, not a status: a Stop leaves the task
+// aborted, and an aborted with no Stop is not one.
+func TestWaitForSiblingStopped(t *testing.T) {
+	w := newSiblingWorld(t)
+	w.moveSibling("running")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "stopped")}, Deadline: "1h"})
+	w.exec(`UPDATE tasks SET status = 'aborted' WHERE id = 'wi_sib'`)
+	w.evaluate()
+	if len(w.waitWakes()) != 0 {
+		t.Fatalf("aborted with no Stop held stopped: %v", w.waitWakes())
+	}
+	w.siblingEvent(EvTaskStopped)
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || !strings.Contains(w.digest(opened.WaitID), " was stopped at ") {
+		t.Fatalf("stopped: %v %q %q", w.waitWakes(), w.waitEnd(opened.WaitID), w.digest(opened.WaitID))
+	}
+}
+
+// closed through Close (CloseTx): its task.closed event.
+func TestWaitForSiblingClosed(t *testing.T) {
+	w := newSiblingWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "closed")}, Deadline: "1h"})
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := CloseTx(w.ctx, tx, w.org, CloseInput{TaskID: "wi_sib", Resolution: ResolutionWontDo,
+			Actor: Actor{ActorType: "system", ActorID: "test"}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || !strings.Contains(w.digest(opened.WaitID), " was closed at ") {
+		t.Fatalf("closed: %v %q %q", w.waitWakes(), w.waitEnd(opened.WaitID), w.digest(opened.WaitID))
+	}
+}
+
+// A sibling already in a status it is waited on to become at the call
+// does not hold: it waits for a change.
+func TestWaitForSiblingAlreadyThereWaitsForAChange(t *testing.T) {
+	w := newSiblingWorld(t)
+	w.moveSibling("running")
+	w.moveSibling("review")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "review", "started")}, Deadline: "1h"})
+	w.evaluate()
+	if opened.Holds || opened.WaitID == "" || len(w.waitWakes()) != 0 {
+		t.Fatalf("already in review held: %+v %v", opened, w.waitWakes())
+	}
+	w.moveSibling("running")
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
+		t.Fatalf("started again: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+}
+
+// With no becomes, any change of status holds; none does not.
+func TestWaitForSiblingAnyChange(t *testing.T) {
+	w := newSiblingWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2")}, Deadline: "1h"})
+	w.evaluate()
+	if len(w.waitWakes()) != 0 {
+		t.Fatal("held with no change")
+	}
+	w.moveSibling("intake")
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
+		t.Fatalf("any change: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+}
+
+func TestWaitForSiblingRefusals(t *testing.T) {
+	w := newSiblingWorld(t)
+	w.exec(`INSERT INTO epics (id, organization_id, project_id, title) VALUES ('ep_other', $1, 'prj_life', 'Other')`, w.org)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, epic_id, title, goal, status)
+		VALUES ('wi_far', $1, 'prj_life', 3, 'ep_other', 'Far', 'Far', 'running')`, w.org)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+		VALUES ('wi_loose', $1, 'prj_life', 4, 'Loose', 'Loose', 'running')`, w.org)
+	for name, c := range map[string]WaitCondition{
+		"another epic":   siblingCond("P-3"),
+		"no epic":        siblingCond("P-4"),
+		"own task":       siblingCond("P-1"),
+		"own task by id": siblingCond("wi_life"),
+		"unknown task":   siblingCond("P-99"),
+		"unknown id":     siblingCond("wi_nope"),
+		"unknown value":  siblingCond("P-2", "done", "merged"),
+	} {
+		if _, err := w.waitFor("c-"+name, WaitAsk{Deadline: "1h", Conditions: []WaitCondition{c}}); !IsRefusal(err) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// The conductor's own task off the epic: no sibling is on its epic.
+	w.exec(`UPDATE tasks SET epic_id = NULL WHERE id = 'wi_life'`)
+	if _, err := w.waitFor("c-off", WaitAsk{Deadline: "1h", Conditions: []WaitCondition{siblingCond("P-2")}}); !IsRefusal(err) {
+		t.Errorf("own task with no epic: %v", err)
+	}
+	if w.count("conductor_waits") != 0 || w.events(EvConductorWaiting) != 0 {
+		t.Fatal("a refused call wrote")
+	}
+}
+
+// An idle wait on a sibling is read, not locked: its evaluation waits on
+// neither task's Chat lock, nor its wait's row, nor the sibling's row.
+func TestEvaluatingAnIdleSiblingWaitTakesNoLock(t *testing.T) {
+	w := newSiblingWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "done")}, Deadline: "1h"})
+	w.moveSibling("running")
+	holder, err := w.owner.Begin(w.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(w.ctx) }()
+	for _, task := range []string{"wi_life", "wi_sib"} {
+		if err := LockChat(w.ctx, holder, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := holder.Exec(w.ctx, `SELECT 1 FROM conductor_waits WHERE id = $1 FOR UPDATE`, opened.WaitID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(w.ctx, `SELECT 1 FROM tasks WHERE id = 'wi_sib' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, 3*time.Second)
+	defer cancel()
+	if err := w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		ended, err := EvaluateWaitTx(ctx, tx, w.org, "wi_life", opened.WaitID)
+		if ended {
+			t.Error("an idle wait ended")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("an idle evaluation waited on a lock: %v", err)
 	}
 }

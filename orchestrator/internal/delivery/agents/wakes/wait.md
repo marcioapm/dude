@@ -14,6 +14,12 @@
 {{- else}} not ended ({{.Status}})
 {{- end}}
 {{- else if eq .Kind "workflow"}}{{.Workflow.Line}}
+{{- else if eq .Kind "task"}}{{.TaskKey}} {{.Title}}
+{{- if not .Ended}} is {{.Status}}, {{with .Becomes}}not yet {{join . " or "}}{{else}}unchanged{{end}}
+{{- else if eq .Became "stopped"}} was stopped at {{.At}} UTC
+{{- else if eq .Became "closed"}} was closed at {{.At}} UTC
+{{- else}} moved to {{.Became}} at {{.At}} UTC
+{{- end}}
 {{- else if eq .Kind "after"}}{{.After}} {{if .Ended}}elapsed (since {{.Since}} UTC){{else}}not elapsed (until {{.Until}} UTC){{end}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed

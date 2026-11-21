@@ -10,7 +10,7 @@
 
 {{- define "refusals/delivery/waits/too-many-conditions"}}at most %d conditions to a wait{{end}}
 
-{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded or after{{end}}
+{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after or siblingTask{{end}}
 
 {{- define "refusals/delivery/waits/runs-count"}}runsEnded names 1 to %d Runs{{end}}
 
@@ -29,3 +29,11 @@
 {{- define "refusals/delivery/waits/after-too-short"}}after %q is under 30m: for a shorter time, just set the deadline{{end}}
 
 {{- define "refusals/delivery/waits/after-past-deadline"}}after %q comes at or after the wait's deadline: the deadline comes first; just set the deadline{{end}}
+
+{{- define "refusals/delivery/waits/sibling-not-found"}}%q is not a task of this organisation: name a task on this task's epic by its key (CP-62){{end}}
+
+{{- define "refusals/delivery/waits/sibling-is-this-task"}}siblingTask names this task: only another task in the same epic is waited on{{end}}
+
+{{- define "refusals/delivery/waits/sibling-not-on-this-epic"}}%s is not on this task's epic: only a task in the same epic is waited on{{end}}
+
+{{- define "refusals/delivery/waits/sibling-becomes-unknown"}}becomes %q is not one of %s; leave becomes out for any change{{end}}
