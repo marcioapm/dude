@@ -153,6 +153,10 @@ type harnessState struct {
 	stopState
 	// What the Run's init printed, and a setup script that failed in it.
 	init InitOutput
+	// The cost earlier ACP sessions of this Run's harness recorded: the
+	// current session's running total (usageUpdate) counts on top of it.
+	// Set when lux replaces the session (acpSessionStarted).
+	acpCostBase float64
 }
 
 // talkerState is the part of harness_state a conductor or session agent
@@ -196,6 +200,7 @@ type harnessStateJSON struct {
 	CodexThread    string                  `json:"codexThread,omitempty"`
 	CodexSpawns    map[string][]codexSpawn `json:"codexSpawns,omitempty"`
 	Init           *InitOutput             `json:"init,omitempty"`
+	AcpCostBase    float64                 `json:"acpCostBase,omitempty"`
 	talkerState
 	stopState
 }
@@ -203,7 +208,8 @@ type harnessStateJSON struct {
 func (h harnessState) MarshalJSON() ([]byte, error) {
 	j := harnessStateJSON{ClaudeCost: h.claudeCost, ClaudeCostSeen: h.claudeCostSeen, ClaudeTasks: h.claudeTasks,
 		ClaudeTaskNext: h.claudeTaskNext, ClaudeHalf: h.claudeHalf, ClaudeUsage: h.claudeUsage, ClaudeIdle: h.claudeIdle, TurnError: h.turnError,
-		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, talkerState: h.talkerState, stopState: h.stopState}
+		Children: h.Children, CodexThread: h.codexThread, CodexSpawns: h.codexSpawns, AcpCostBase: h.acpCostBase,
+		talkerState: h.talkerState, stopState: h.stopState}
 	if h.codexTurn != (codexTokens{}) {
 		j.CodexTurn = &h.codexTurn
 	}
@@ -220,7 +226,8 @@ func (h *harnessState) UnmarshalJSON(b []byte) error {
 	}
 	*h = harnessState{claudeCost: j.ClaudeCost, claudeCostSeen: j.ClaudeCostSeen, claudeTasks: j.ClaudeTasks,
 		claudeTaskNext: j.ClaudeTaskNext, claudeHalf: j.ClaudeHalf, claudeUsage: j.ClaudeUsage, claudeIdle: j.ClaudeIdle, turnError: j.TurnError,
-		Children: j.Children, codexThread: j.CodexThread, codexSpawns: j.CodexSpawns, talkerState: j.talkerState, stopState: j.stopState}
+		Children: j.Children, codexThread: j.CodexThread, codexSpawns: j.CodexSpawns, acpCostBase: j.AcpCostBase,
+		talkerState: j.talkerState, stopState: j.stopState}
 	// Legacy tasks used their original one-based position as identity.
 	for i, task := range h.claudeTasks {
 		id, _ := task["id"].(string)
@@ -1046,6 +1053,7 @@ func (t *translator) sessionKept(ctx context.Context, tx pgx.Tx, s *Syncer, id s
 	}
 	// A new session: its running cost starts from zero.
 	t.claudeSessionStarted()
+	t.acpSessionStarted()
 	payload := map[string]any{"from": had, "to": id, "reason": reason}
 	if t.run.talker() {
 		ref := t.run.ref()
@@ -1547,12 +1555,14 @@ func (t *translator) flushWhole(ctx context.Context, tx pgx.Tx, s *Syncer, buf *
 
 // usageUpdate: ACP's running report of the conversation's size, and of cost
 // when the agent knows prices. Recorded whenever either moves — a cost of
-// zero means unknown, not free, and must not hide the tokens.
+// zero means unknown, not free, and must not hide the tokens. The cost is
+// the session's running total, on top of what earlier sessions of the Run
+// cost (acpCostBase); a total below what is recorded refunds nothing.
 func (t *translator) usageUpdate(ctx context.Context, tx pgx.Tx, s *Syncer, u map[string]any) error {
 	used := int64(number(u["used"]))
 	cost, _ := u["cost"].(map[string]any)
 	amount := number(cost["amount"])
-	delta := amount - t.usage.cost
+	delta := t.acpCostBase + amount - t.usage.cost
 	if (used == 0 || used == t.usage.context) && delta <= 0 {
 		return nil
 	}
@@ -1561,10 +1571,17 @@ func (t *translator) usageUpdate(ctx context.Context, tx pgx.Tx, s *Syncer, u ma
 	}
 	payload := map[string]any{"contextTokens": t.usage.context, "contextWindow": int64(number(u["size"]))}
 	if delta > 0 {
-		t.usage.cost = amount
+		t.usage.cost += delta
 		payload["costUsd"] = delta
 	}
 	return s.event(ctx, tx, t.run, evModelRequestDone, ledger.ActorAgent, payload)
+}
+
+// acpSessionStarted: the resumed agent is in a new session (sessionKept):
+// an ACP agent's running cost starts from zero there, on top of all the
+// Run recorded so far. The recorded total itself is kept.
+func (t *translator) acpSessionStarted() {
+	t.acpCostBase = t.usage.cost
 }
 
 // turnUsage: the tokens a whole turn used, which ACP reports only with the
