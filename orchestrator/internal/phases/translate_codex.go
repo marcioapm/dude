@@ -236,15 +236,20 @@ func codexArgs(it codexItem) any {
 }
 
 // codexCommand is the script a command item ran: Codex runs each in a
-// login shell (/bin/zsh -lc '…'), and its command is that shell's argv
-// joined and quoted, so the script is the one word after -lc, unquoted.
+// login or non-login shell (/bin/zsh -lc or -c '…'), and its command is
+// that shell's argv joined and quoted. Only the flag immediately after the
+// absolute shell path introduces the script, which is one word, unquoted.
 // Codex's commandActions are not used: for a read, search or list they are
 // its own rewrite of the script (`rg -n TODO src || true` reads as
 // `rg -n TODO src`), which did not run. A command not in that shape is
 // kept whole.
 func codexCommand(it codexItem) string {
-	for _, shell := range []string{" -lc ", " -c "} {
-		if _, rest, ok := strings.Cut(it.Command, shell); ok && strings.HasPrefix(it.Command, "/") {
+	prog, args, ok := strings.Cut(it.Command, " ")
+	if !ok || !strings.HasPrefix(prog, "/") {
+		return it.Command
+	}
+	for _, flag := range []string{"-lc ", "-c "} {
+		if rest, ok := strings.CutPrefix(args, flag); ok {
 			if script, ok := shellWord(rest); ok {
 				return script
 			}
