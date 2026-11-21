@@ -272,12 +272,21 @@ type RunCall struct {
 	// Child: the subagent (child session) that made it, "" for the Run's
 	// own agent.
 	Child string `json:"child,omitempty"`
+	// Background: the agent ran it in the background (Claude Code's Bash
+	// input.run_in_background): its completion is the launch's, recorded
+	// at once as completed whatever the command does after, so it says
+	// nothing of how the command ended. Codex and OpenCode record no such
+	// flag on their shell calls.
+	Background bool `json:"background,omitempty"`
 }
 
 // ExitWords is how the call ended, in the words the conductor reads:
-// "exit N", or "no exit recorded" with what was.
+// "exit N", or "no exit recorded" with what was. A call run in the
+// background is never read as finished: its exit was not waited for.
 func (c RunCall) ExitWords() string {
 	switch {
+	case c.Background:
+		return "no exit recorded (run in the background, its exit not waited for)"
 	case c.Exit != nil:
 		return fmt.Sprintf("exit %d", *c.Exit)
 	case !c.Ended:
@@ -295,34 +304,43 @@ const runToolEvents = `event_type IN ('agent.tool.called', 'agent.tool.completed
 
 // RunCallsQuery reads a Run's shell calls started after $2, newest first,
 // at most $3 of them, those whose command holds $4 (any with ""): each
-// call's start, command, child, and its completion's exit code, status and
+// call's start, command, child, whether it was run in the background
+// (RunCall.Background), and its completion's exit code, status and
 // output. Each command is read clipped to EvidenceCommand (2000)
 // characters; the filter matches the whole. Both sides are bounded by the
-// Run and the time: the calls by their start, their completions by the
-// oldest start among them (a call ends after it starts).
+// Run and the time: the calls by their start, each one's completion by
+// its own start (a call ends after it starts).
+//
+// A call's completion is the first matching completion by recorded time,
+// then cursor, of the same kind (the Run's own, or the same child's) with
+// its callId, after its own cursor. Normal recording is chronological.
+// Ids are not unique within a Run, so pairing by id alone would show a
+// later call with an earlier one's exit. The time bound and ordering let
+// the existing tool-event index stop at the first matching completion.
+// A never-completed child call can still borrow a later completion if the
+// child resumes and reuses its id; tool events carry no session epoch.
 const RunCallsQuery = `WITH c AS (
 	SELECT cursor, occurred_at, event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child,
-		left(payload->'input'->>'command', 2000) AS command
+		left(payload->'input'->>'command', 2000) AS command,
+		COALESCE(payload->'input'->>'run_in_background', '') = 'true' AS background
 	FROM events
 	WHERE run_id = $1 AND ` + runToolEvents + ` AND event_type IN ('agent.tool.called', 'agent.child.tool.called')
 		AND occurred_at > $2 AND payload->'input' ? 'command'
 		AND strpos(lower(payload->'input'->>'command'), lower($4)) > 0
 	ORDER BY occurred_at DESC, cursor DESC LIMIT $3
-), d AS (
-	SELECT DISTINCT ON (event_type, payload->>'callId', COALESCE(payload->>'childId', ''))
-		event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child, payload
-	FROM events
-	WHERE run_id = $1 AND ` + runToolEvents + ` AND event_type IN ('agent.tool.completed', 'agent.child.tool.completed')
-		AND occurred_at >= (SELECT min(occurred_at) FROM c)
-		AND payload->>'callId' IN (SELECT call_id FROM c)
-	ORDER BY event_type, payload->>'callId', COALESCE(payload->>'childId', ''), cursor
 )
-SELECT c.occurred_at, c.command, c.child, d.payload IS NOT NULL, d.payload->'exitCode', COALESCE(d.payload->>'status', ''),
+SELECT c.occurred_at, c.command, c.child, c.background, d.payload IS NOT NULL, d.payload->'exitCode', COALESCE(d.payload->>'status', ''),
 	concat_ws(E'\n', COALESCE(d.payload->'output'->>'tail', d.payload->'output'->>'head'),
 		COALESCE(d.payload->'stdout'->>'tail', d.payload->'stdout'->>'head'),
 		COALESCE(d.payload->'stderr'->>'tail', d.payload->'stderr'->>'head'))
-FROM c LEFT JOIN d ON d.call_id = c.call_id AND d.child = c.child
-	AND d.event_type = CASE c.event_type WHEN 'agent.tool.called' THEN 'agent.tool.completed' ELSE 'agent.child.tool.completed' END
+FROM c LEFT JOIN LATERAL (
+	SELECT e.payload FROM events e
+	WHERE e.run_id = $1 AND e.` + runToolEvents + `
+		AND e.event_type = CASE c.event_type WHEN 'agent.tool.called' THEN 'agent.tool.completed' ELSE 'agent.child.tool.completed' END
+		AND e.occurred_at >= c.occurred_at AND e.cursor > c.cursor
+		AND e.payload->>'callId' = c.call_id AND COALESCE(e.payload->>'childId', '') = c.child
+	ORDER BY e.occurred_at, e.cursor LIMIT 1
+) d ON true
 ORDER BY c.occurred_at DESC, c.cursor DESC`
 
 // RunCallsTx is runID's shell calls started after since, newest first: at
@@ -340,7 +358,7 @@ func RunCallsTx(ctx context.Context, tx pgx.Tx, runID string, since time.Time, f
 		var c RunCall
 		var exit *float64
 		var output string
-		if err := rows.Scan(&c.At, &c.Command, &c.Child, &c.Ended, &exit, &c.Status, &output); err != nil {
+		if err := rows.Scan(&c.At, &c.Command, &c.Child, &c.Background, &c.Ended, &exit, &c.Status, &output); err != nil {
 			return nil, false, err
 		}
 		if exit != nil {

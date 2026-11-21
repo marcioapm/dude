@@ -45,7 +45,7 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 	exec(`PREPARE run_calls(text, timestamptz, int, text) AS ` + RunCallsQuery)
 	defer exec(`DEALLOCATE run_calls`)
 
-	since := time.Now().Add(-10 * time.Minute)
+	since := time.Now().Add(-3 * time.Hour)
 	var plan []byte
 	if err := owner.QueryRow(ctx, `EXPLAIN (FORMAT JSON) EXECUTE run_calls('run_busy', '`+since.UTC().Format(time.RFC3339Nano)+`', 31, '')`).Scan(&plan); err != nil {
 		t.Fatal(err)
@@ -55,6 +55,7 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	used := map[string]int{}
+	incrementalSorts := 0
 	var walk func(map[string]any)
 	walk = func(node map[string]any) {
 		if name, ok := node["Index Name"].(string); ok {
@@ -63,6 +64,15 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 		if node["Node Type"] == "Seq Scan" && node["Relation Name"] == "events" {
 			used["seq scan"]++
 		}
+		if node["Node Type"] == "Incremental Sort" {
+			incrementalSorts++
+		}
+		if node["Node Type"] == "Sort" {
+			keys, _ := node["Sort Key"].([]any)
+			if len(keys) == 1 && keys[0] == "e.cursor" {
+				t.Fatalf("completion lookup sorts the whole tail by cursor; plan %s", plan)
+			}
+		}
 		children, _ := node["Plans"].([]any)
 		for _, child := range children {
 			walk(child.(map[string]any))
@@ -70,6 +80,9 @@ func TestTheRunsCallsAtACommitReadTheirIndex(t *testing.T) {
 	}
 	for _, n := range nodes {
 		walk(n.Plan)
+	}
+	if incrementalSorts == 0 {
+		t.Fatalf("completion lookup must sort only equal-time groups, not the whole tail; plan %s", plan)
 	}
 	if len(used) != 1 || used["events_run_tool_calls_idx"] == 0 {
 		t.Fatalf("the calls at a commit read %v, want events_run_tool_calls_idx alone; plan %s", used, plan)

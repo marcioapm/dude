@@ -433,6 +433,41 @@ func TestEachHarnessesToolsAreNamedAsTheChatKnowsThem(t *testing.T) {
 	}
 }
 
+// Codex's command is recorded as the script its login shell ran, the
+// wrapper unwrapped however Codex quoted it (single quotes, double quotes,
+// and the two joined, as in testdata/codex-real.jsonl), never its
+// commandActions' summary; a command not one shell word is kept whole.
+func TestCodexsCommandIsTheScriptThatRan(t *testing.T) {
+	for _, tc := range []struct{ command, actions, want string }{
+		{`/bin/bash -lc 'rg -n TODO src || true'`, "rg -n TODO src", "rg -n TODO src || true"},
+		{`/bin/zsh -lc "sed -n '1,20p' README.md"`, "sed -n '1,20p' README.md", "sed -n '1,20p' README.md"},
+		{`/bin/zsh -lc "rg -n 'harness' docs/operations.md"`, "rg -n harness docs/operations.md", "rg -n 'harness' docs/operations.md"},
+		{`/bin/zsh -lc "rg --files --hidden -g 'scripts/*.py' -g '"'!scripts/*/*'"'"`, "rg --files", `rg --files --hidden -g 'scripts/*.py' -g '!scripts/*/*'`},
+		{`/bin/zsh -lc "echo \"a\" \$HOME"`, "echo", `echo "a" $HOME`},
+		{`/bin/bash -c 'true -lc make check'`, "make check", "true -lc make check"},
+		{`/bin/bash -c 'ls -lc dir'`, "ls -lc dir", "ls -lc dir"},
+		{`/bin/zsh -c "true -lc make check"`, "make check", "true -lc make check"},
+		{`/bin/bash -lc 'make check'|true`, "make check", `'make check'|true`},
+		{`/bin/bash -lc $'make\tcheck'`, "make check", `$'make\tcheck'`},
+		{`/bin/bash -lc ls`, "ls", "ls"},
+		{`/bin/bash -lc 'make check' extra`, "make check", `'make check' extra`},
+		{`/bin/zsh -lc "echo $HOME"`, "echo", `"echo $HOME"`},
+		{`make check`, "make check", "make check"},
+	} {
+		item := map[string]any{"type": "commandExecution", "id": "x1", "command": tc.command,
+			"commandActions": []any{map[string]any{"type": "search", "command": tc.actions}}, "status": "inProgress"}
+		w := newHarnessWorld(t)
+		w.feed(map[string]any{"type": "codex.item/started", "data": map[string]any{"item": item}})
+		called := ofType(w.events(), evToolCalled)
+		if len(called) != 1 {
+			t.Fatalf("%s: %d calls", tc.command, len(called))
+		}
+		if got := called[0].Payload["input"].(map[string]any)["command"]; got != tc.want {
+			t.Errorf("%s: recorded %q, want %q", tc.command, got, tc.want)
+		}
+	}
+}
+
 // Codex's patch is an edit, its diff the output; a command that failed is
 // an error with its exit code; an MCP call that failed, an error with
 // Codex's message (the shapes of codex app-server's ThreadItem).

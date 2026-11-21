@@ -64,7 +64,7 @@ func (s *Server) command(run *Run, id string, c [3]string) {
 			"tool_use_result": result})
 	case dialectCodex:
 		s.sayFlush(run)
-		item := map[string]any{"type": "commandExecution", "id": id, "command": "/bin/bash -lc '" + c[0] + "'",
+		item := map[string]any{"type": "commandExecution", "id": id, "command": "/bin/bash -lc " + shellQuote(c[0]),
 			"commandActions": []any{map[string]any{"command": c[0], "type": "unknown"}}, "status": "inProgress"}
 		s.codexItem(run, "item/started", item)
 		status := "completed"
@@ -89,3 +89,7 @@ func (s *Server) command(run *Run, id string, c [3]string) {
 			"rawOutput": map[string]any{"output": c[1], "metadata": map[string]any{"output": c[1], "exit": exit, "truncated": false}}})
 	}
 }
+
+// shellQuote is s as one single-quoted shell word, as Codex quotes the
+// script it runs in its login shell (/bin/bash -lc '…').
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

@@ -233,7 +233,7 @@ func (s *Server) codexChild(run *Run, st ChildStep) {
 		on(run.SessionID, "item/started", map[string]any{"turnId": turn, "item": collab(wait, "wait", "inProgress", []any{st.ChildID})})
 	case "tool":
 		cmd := fmt.Sprint(st.Input["command"])
-		item := map[string]any{"type": "commandExecution", "id": st.ToolCallID, "command": "/bin/zsh -lc '" + cmd + "'",
+		item := map[string]any{"type": "commandExecution", "id": st.ToolCallID, "command": "/bin/zsh -lc " + shellQuote(cmd),
 			"commandActions": []any{map[string]any{"type": "unknown", "command": cmd}}, "status": "inProgress"}
 		on(st.ChildID, "item/started", map[string]any{"item": item})
 		if st.Done {

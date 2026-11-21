@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -356,6 +357,160 @@ func TestACallWithNoExitSaysNoExitRecorded(t *testing.T) {
 	}
 	if line := w.checksWake(); !strings.Contains(line, "→ no exit recorded (completed)") {
 		t.Fatalf("wake %s", line)
+	}
+}
+
+// A Run that records two calls under one id shows each with its own
+// completion: the first after it, never the other's. A subagent's calls
+// are recorded per id only while open (childState.Calls), so a subagent
+// reusing an id records both; the Run's own are kept apart the same way.
+// A failing check run second under a lint's id is not shown with the
+// lint's exit 0, and its pass is unbacked.
+func TestACallReusingAnIdShowsItsOwnExit(t *testing.T) {
+	for _, child := range []string{"", "chd_explore"} {
+		t.Run("child="+child, func(t *testing.T) {
+			w := newEvidenceWorld(t)
+			base := after()
+			w.call(base, "dup", child, "make lint", exit(0), "lint ok")
+			// Recording can give successive events the same timestamp; the
+			// second call must still exclude the first call's completion.
+			w.call(base, "dup", child, "make check", exit(1), "FAIL greeting")
+			a := w.report("make check")
+			e := a.Evidence
+			if e == nil || len(e.Calls) != 2 || e.Calls[0].Command != "make check" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 1 ||
+				e.Calls[0].Tail != "FAIL greeting" || e.Calls[1].Command != "make lint" || e.Calls[1].Exit == nil || *e.Calls[1].Exit != 0 ||
+				e.Calls[1].Tail != "lint ok" {
+				t.Fatalf("evidence %+v", e)
+			}
+			if line := w.checksWake(); !strings.Contains(line, "make check⟦/external "+w.run.ID+"⟧ → exit 1") {
+				t.Fatalf("wake %s", line)
+			}
+			w.decideAsTheDefaults(w.cond)
+			if pass, _ := w.gate(); pass {
+				t.Fatal("a failing check passed on another call's exit")
+			}
+		})
+	}
+}
+
+// Overlapping children can use the same harness call id. The successful
+// child's earlier completion must not lend its exit to the failing check.
+func TestOverlappingChildrenShowTheirOwnCompletions(t *testing.T) {
+	w := newEvidenceWorld(t)
+	at := after()
+	w.s.Now = func() time.Time { return at }
+	defer func() { w.s.Now = nil }()
+	// payload is child's bash call "dup" (from its parent's task_ call), with fields.
+	payload := func(child string, fields map[string]any) map[string]any {
+		p := map[string]any{"childId": "chd_" + child, "parentCallId": "task_" + child, "callId": "dup", "tool": "bash"}
+		maps.Copy(p, fields)
+		return p
+	}
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+		for _, event := range []struct {
+			kind    string
+			payload map[string]any
+		}{
+			{evChildToolCalled, payload("check", map[string]any{"input": map[string]any{"command": "make check"}})},
+			{evChildToolCalled, payload("lint", map[string]any{"input": map[string]any{"command": "make lint"}})},
+			{evChildToolCompleted, payload("lint", map[string]any{"status": "completed", "exitCode": 0, "output": map[string]any{"head": "lint ok"}})},
+			{evChildToolCompleted, payload("check", map[string]any{"status": "completed", "exitCode": 1, "output": map[string]any{"head": "FAIL greeting"}})},
+		} {
+			if err := w.s.event(context.Background(), tx, w.run, event.kind, ledger.ActorAgent, event.payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := w.report("make check")
+	if a.Evidence == nil || len(a.Evidence.Calls) != 2 {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	for _, c := range a.Evidence.Calls {
+		switch c.Child {
+		case "chd_check":
+			if c.Command != "make check" || c.Exit == nil || *c.Exit != 1 || c.Tail != "FAIL greeting" {
+				t.Fatalf("check borrowed another child's completion: %+v", c)
+			}
+		case "chd_lint":
+			if c.Command != "make lint" || c.Exit == nil || *c.Exit != 0 || c.Tail != "lint ok" {
+				t.Fatalf("lint borrowed another child's completion: %+v", c)
+			}
+		default:
+			t.Fatalf("unexpected child: %+v", c)
+		}
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a failing check passed on another child's exit")
+	}
+}
+
+// A Claude Code Bash call run in the background returns at once, its
+// result "completed" whatever the command later does, and Claude records
+// no exit: the evidence shows it run in the background, its exit not
+// waited for, never as a plain completion, and its pass stays unbacked.
+// The same command in the foreground reads as before.
+func TestABackgroundedClaudeCallIsNotShownAsFinished(t *testing.T) {
+	w := newEvidenceWorld(t)
+	result := func(id, content string, shell map[string]any) map[string]any {
+		return map[string]any{"type": "claude.user", "data": map[string]any{"type": "user", "message": map[string]any{
+			"content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": content}}}, "tool_use_result": shell}}
+	}
+	w.feed(claudeToolUse("fg", "Bash", map[string]any{"command": "true"}),
+		result("fg", "", map[string]any{"stdout": "", "stderr": "", "interrupted": false}),
+		claudeToolUse("bg", "Bash", map[string]any{"command": "false", "run_in_background": true}),
+		result("bg", "Command running in background with ID: b1", map[string]any{"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "b1"}))
+	a := w.report("false")
+	e := a.Evidence
+	if e == nil || len(e.Calls) != 2 || e.Calls[0].Command != "false" || e.Calls[0].Exit != nil || e.Calls[1].Command != "true" ||
+		e.Calls[0].ExitWords() != "no exit recorded (run in the background, its exit not waited for)" || e.Calls[1].ExitWords() != "no exit recorded (completed)" {
+		t.Fatalf("evidence %+v", e)
+	}
+	line := w.checksWake()
+	id := w.run.ID
+	for _, want := range []string{
+		delivery.ExternalText(id, "false") + " → no exit recorded (run in the background, its exit not waited for).",
+		delivery.ExternalText(id, "true") + " → no exit recorded (completed).",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the wake lacks %s: %s", want, line)
+		}
+	}
+	if strings.Contains(line, delivery.ExternalText(id, "false")+" → no exit recorded (completed)") {
+		t.Fatalf("the backgrounded call reads as finished: %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass backed only by a backgrounded call passed")
+	}
+}
+
+// A Codex command is shown as the script that ran, not Codex's own
+// summary of it: for a search Codex's commandActions rewrite
+// `rg -n TODO src || true` as `rg -n TODO src`, which did not run (and
+// would have failed with nothing found). The evidence shows the item's
+// command with its login shell's wrapper unwrapped.
+func TestACodexCallShowsTheScriptThatRan(t *testing.T) {
+	w := newEvidenceWorld(t)
+	item := map[string]any{"type": "commandExecution", "id": "x1", "command": "/bin/bash -lc 'rg -n TODO src || true'",
+		"commandActions": []any{map[string]any{"type": "search", "command": "rg -n TODO src", "query": "TODO", "path": "src"}}, "status": "inProgress"}
+	done := maps.Clone(item)
+	done["status"], done["exitCode"], done["aggregatedOutput"] = "completed", 0, ""
+	w.feed(map[string]any{"type": "codex.item/started", "data": map[string]any{"item": item}},
+		map[string]any{"type": "codex.item/completed", "data": map[string]any{"item": done}})
+	a := w.report("rg -n TODO src")
+	if e := a.Evidence; e == nil || len(e.Calls) != 1 || e.Calls[0].Command != "rg -n TODO src || true" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 0 {
+		t.Fatalf("evidence %+v", e)
+	}
+	if line := w.checksWake(); !strings.Contains(line, delivery.ExternalText(w.run.ID, "rg -n TODO src || true")+" → exit 0") {
+		t.Fatalf("wake %s", line)
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a pass of a command that did not run passed on Codex's summary of another")
 	}
 }
 
