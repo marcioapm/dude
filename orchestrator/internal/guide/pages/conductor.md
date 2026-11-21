@@ -76,7 +76,7 @@ When a Run that changes code ended with commits it never published — lux stopp
 
 ## Waiting for something
 
-When its next step waits on something, the conductor says what with `wait_for` and ends its turn: Runs of the task ending, a pull request's checks finishing on a head, or just a time. dude checks it in its own cycle, from what it already reads from lux and GitHub, and wakes the conductor once: when it holds, or at the deadline every wait has (at most 24 hours). The note it is woken with says what held, what did not and what else happened meanwhile.
+When its next step waits on something, the conductor says what with `wait_for` and ends its turn: Runs of the task ending, a pull request's checks finishing on a head, a time passing (at least 30 minutes, before the deadline), another task on the same epic starting, stopping, reaching a status or closing, or nothing but its deadline, as a timer. dude checks it in its own cycle, from what it already reads from lux and GitHub, and wakes the conductor once: when it holds, or at the deadline every wait has (at most 24 hours). The note it is woken with says what held, what did not and what else happened meanwhile.
 
 Waiting decides nothing. dude's other reasons to wake the conductor still come as they do: a decision, an escalation, a child agent's result. A wait ends when the task is closed or started over, when you stop the conductor, and when you pick a stopped task up with Try again.
 
