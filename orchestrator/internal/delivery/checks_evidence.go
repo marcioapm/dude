@@ -311,14 +311,14 @@ const runToolEvents = `event_type IN ('agent.tool.called', 'agent.tool.completed
 // Run and the time: the calls by their start, each one's completion by
 // its own start (a call ends after it starts).
 //
-// A call's completion is its own: the first completion after it (by
-// cursor) of the same kind (the Run's own, or the same child's) with its
-// callId. Ids are not unique within a Run (a harness may reuse one after a
-// session replacement; a child's calls are kept per id only while open),
-// so pairing by id alone would show a later call with an earlier one's
-// exit. The tool events carry no session epoch, so the cursor alone orders
-// them; a completion is recorded at or after its call's time, so the time
-// bounds the index's range too.
+// A call's completion is the first matching completion by recorded time,
+// then cursor, of the same kind (the Run's own, or the same child's) with
+// its callId, after its own cursor. Normal recording is chronological.
+// Ids are not unique within a Run, so pairing by id alone would show a
+// later call with an earlier one's exit. The time bound and ordering let
+// the existing tool-event index stop at the first matching completion.
+// A never-completed child call can still borrow a later completion if the
+// child resumes and reuses its id; tool events carry no session epoch.
 const RunCallsQuery = `WITH c AS (
 	SELECT cursor, occurred_at, event_type, payload->>'callId' AS call_id, COALESCE(payload->>'childId', '') AS child,
 		left(payload->'input'->>'command', 2000) AS command,
@@ -339,7 +339,7 @@ FROM c LEFT JOIN LATERAL (
 		AND e.event_type = CASE c.event_type WHEN 'agent.tool.called' THEN 'agent.tool.completed' ELSE 'agent.child.tool.completed' END
 		AND e.occurred_at >= c.occurred_at AND e.cursor > c.cursor
 		AND e.payload->>'callId' = c.call_id AND COALESCE(e.payload->>'childId', '') = c.child
-	ORDER BY e.cursor LIMIT 1
+	ORDER BY e.occurred_at, e.cursor LIMIT 1
 ) d ON true
 ORDER BY c.occurred_at DESC, c.cursor DESC`
 

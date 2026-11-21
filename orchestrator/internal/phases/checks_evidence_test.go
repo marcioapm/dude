@@ -372,7 +372,9 @@ func TestACallReusingAnIdShowsItsOwnExit(t *testing.T) {
 			w := newEvidenceWorld(t)
 			base := after()
 			w.call(base, "dup", child, "make lint", exit(0), "lint ok")
-			w.call(base.Add(time.Second), "dup", child, "make check", exit(1), "FAIL greeting")
+			// Recording can give successive events the same timestamp; the
+			// second call must still exclude the first call's completion.
+			w.call(base, "dup", child, "make check", exit(1), "FAIL greeting")
 			a := w.report("make check")
 			e := a.Evidence
 			if e == nil || len(e.Calls) != 2 || e.Calls[0].Command != "make check" || e.Calls[0].Exit == nil || *e.Calls[0].Exit != 1 ||
@@ -388,6 +390,55 @@ func TestACallReusingAnIdShowsItsOwnExit(t *testing.T) {
 				t.Fatal("a failing check passed on another call's exit")
 			}
 		})
+	}
+}
+
+// Overlapping children can use the same harness call id. The successful
+// child's earlier completion must not lend its exit to the failing check.
+func TestOverlappingChildrenShowTheirOwnCompletions(t *testing.T) {
+	w := newEvidenceWorld(t)
+	at := after()
+	w.s.Now = func() time.Time { return at }
+	defer func() { w.s.Now = nil }()
+	if err := w.s.DB.InOrg(context.Background(), w.run.Org, func(tx pgx.Tx) error {
+		for _, event := range []struct {
+			kind    string
+			payload map[string]any
+		}{
+			{evChildToolCalled, map[string]any{"childId": "chd_check", "parentCallId": "task_check", "callId": "dup", "tool": "bash", "input": map[string]any{"command": "make check"}}},
+			{evChildToolCalled, map[string]any{"childId": "chd_lint", "parentCallId": "task_lint", "callId": "dup", "tool": "bash", "input": map[string]any{"command": "make lint"}}},
+			{evChildToolCompleted, map[string]any{"childId": "chd_lint", "parentCallId": "task_lint", "callId": "dup", "tool": "bash", "status": "completed", "exitCode": 0, "output": map[string]any{"head": "lint ok"}}},
+			{evChildToolCompleted, map[string]any{"childId": "chd_check", "parentCallId": "task_check", "callId": "dup", "tool": "bash", "status": "completed", "exitCode": 1, "output": map[string]any{"head": "FAIL greeting"}}},
+		} {
+			if err := w.s.event(context.Background(), tx, w.run, event.kind, ledger.ActorAgent, event.payload); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := w.report("make check")
+	if a.Evidence == nil || len(a.Evidence.Calls) != 2 {
+		t.Fatalf("evidence %+v", a.Evidence)
+	}
+	for _, c := range a.Evidence.Calls {
+		switch c.Child {
+		case "chd_check":
+			if c.Command != "make check" || c.Exit == nil || *c.Exit != 1 || c.Tail != "FAIL greeting" {
+				t.Fatalf("check borrowed another child's completion: %+v", c)
+			}
+		case "chd_lint":
+			if c.Command != "make lint" || c.Exit == nil || *c.Exit != 0 || c.Tail != "lint ok" {
+				t.Fatalf("lint borrowed another child's completion: %+v", c)
+			}
+		default:
+			t.Fatalf("unexpected child: %+v", c)
+		}
+	}
+	w.decideAsTheDefaults(w.cond)
+	if pass, _ := w.gate(); pass {
+		t.Fatal("a failing check passed on another child's exit")
 	}
 }
 
