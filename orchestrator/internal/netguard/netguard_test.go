@@ -40,12 +40,35 @@ func TestRefusedRanges(t *testing.T) {
 		{"::ffff:169.254.169.254", "link-local"},
 		{"::ffff:10.0.0.1", "private"},
 		{"::ffff:100.64.0.1", "carrier-grade NAT"},
+		{"192.0.0.1", "IETF protocol assignments (192.0.0.0/24)"},
+		{"192.0.0.170", "IETF protocol assignments (192.0.0.0/24)"},
+		{"198.18.0.1", "benchmarking (198.18.0.0/15)"},
+		{"198.19.255.254", "benchmarking (198.18.0.0/15)"},
+		{"240.0.0.1", "reserved (240.0.0.0/4)"},
+		{"255.255.255.254", "reserved (240.0.0.0/4)"},
+		// An IPv4 address carried in an IPv6 one is read as itself.
+		{"64:ff9b::a9fe:a9fe", "link-local (169.254.169.254 embedded)"},
+		{"64:ff9b::7f00:1", "loopback (127.0.0.1 embedded)"},
+		{"64:ff9b::10.0.0.1", "private (10.0.0.1 embedded)"},
+		{"64:ff9b:1::a9fe:a9fe", "link-local (169.254.169.254 embedded)"},
+		{"64:ff9b:1:2::c0a8:101", "private (192.168.1.1 embedded)"},
+		{"2002:a9fe:a9fe::", "link-local (169.254.169.254 embedded)"},
+		{"2002:7f00:1::1", "loopback (127.0.0.1 embedded)"},
+		{"2002:0a00:0001:1::5", "private (10.0.0.1 embedded)"},
+		{"2002:6440:1::", "carrier-grade NAT (100.64.0.1 embedded)"},
+		{"::a9fe:a9fe", "link-local (169.254.169.254 embedded)"},
+		{"::127.0.0.1", "loopback (127.0.0.1 embedded)"},
+		{"::10.0.0.1", "private (10.0.0.1 embedded)"},
+		{"64:ff9b::f000:1", "reserved (240.0.0.0/4) (240.0.0.1 embedded)"},
 	} {
 		if got := Refused(netip.MustParseAddr(tc.addr)); got != tc.why {
 			t.Errorf("%s: %q, want %q", tc.addr, got, tc.why)
 		}
 	}
-	for _, ok := range []string{"8.8.8.8", "1.1.1.1", "100.63.255.255", "100.128.0.1", "2606:4700::1111", "172.32.0.1"} {
+	for _, ok := range []string{"8.8.8.8", "1.1.1.1", "100.63.255.255", "100.128.0.1", "2606:4700::1111", "172.32.0.1",
+		"192.0.1.1", "198.17.255.255", "198.20.0.1", "223.255.255.254",
+		// Carrying a public IPv4 address: as public as it.
+		"64:ff9b::808:808", "64:ff9b:1::101:101", "2002:808:808::1", "::8.8.8.8"} {
 		if got := Refused(netip.MustParseAddr(ok)); got != "" {
 			t.Errorf("%s refused: %s", ok, got)
 		}
@@ -73,6 +96,7 @@ func TestCheckURL(t *testing.T) {
 		"mixed6.test":   {"2606:4700::1111", "fd00::1"},
 		"metadata.test": {"169.254.169.254"},
 		"localhost":     {"127.0.0.1", "::1"},
+		"nat64.test":    {"2606:4700::1111", "64:ff9b::a9fe:a9fe"},
 	})))
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -92,6 +116,14 @@ func TestCheckURL(t *testing.T) {
 		{"http://10.2.3.4/", "private"},
 		{"http://100.64.1.1/", "carrier-grade NAT"},
 		{"http://[fd00::1]/", "private"},
+		{"http://[64:ff9b::a9fe:a9fe]/latest/meta-data/", "link-local (169.254.169.254 embedded)"},
+		{"http://[64:ff9b:1::a00:1]/", "private (10.0.0.1 embedded)"},
+		{"http://[2002:a9fe:a9fe::]/", "link-local (169.254.169.254 embedded)"},
+		{"http://[::7f00:1]/", "loopback (127.0.0.1 embedded)"},
+		{"http://192.0.0.8/", "IETF protocol assignments (192.0.0.0/24)"},
+		{"http://198.18.5.5/", "benchmarking (198.18.0.0/15)"},
+		{"http://240.1.2.3/", "reserved (240.0.0.0/4)"},
+		{"https://nat64.test/", "link-local (169.254.169.254 embedded)"},
 		{"https://user:pw@public.test/", "no credentials in the URL"},
 		{"https://user@public.test/", "no credentials in the URL"},
 		{"ftp://public.test/", "only http and https URLs"},

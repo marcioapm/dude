@@ -87,13 +87,45 @@ func New(opts ...Option) *Guard {
 var (
 	cgnat     = netip.MustParsePrefix("100.64.0.0/10")
 	thisNet   = netip.MustParsePrefix("0.0.0.0/8")
+	ietf      = netip.MustParsePrefix("192.0.0.0/24")
+	benchmark = netip.MustParsePrefix("198.18.0.0/15")
+	reserved  = netip.MustParsePrefix("240.0.0.0/4")
 	broadcast = netip.MustParseAddr("255.255.255.255")
+	nat64     = netip.MustParsePrefix("64:ff9b::/96")
+	nat64Ext  = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFour = netip.MustParsePrefix("2002::/16")
+	v4compat  = netip.MustParsePrefix("::/96")
 )
 
+// embedded is the IPv4 address an IPv6 one carries to reach it — NAT64
+// (64:ff9b::/96, 64:ff9b:1::/48: the last 32 bits), 6to4 (2002::/16: bits
+// 16 to 48), IPv4-compatible (::a.b.c.d) — and whether it carries one.
+func embedded(a netip.Addr) (netip.Addr, bool) {
+	if !a.Is6() || a.Is4In6() {
+		return netip.Addr{}, false
+	}
+	b := a.As16()
+	switch {
+	case nat64.Contains(a), nat64Ext.Contains(a):
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), true
+	case sixToFour.Contains(a):
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), true
+	case v4compat.Contains(a) && !a.IsUnspecified() && !a.IsLoopback():
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), true
+	}
+	return netip.Addr{}, false
+}
+
 // Refused is why an address is refused, "" for a public one. An
-// IPv4-mapped IPv6 address is read as its IPv4 address.
+// IPv4-mapped IPv6 address is read as its IPv4 address, and one that
+// carries an IPv4 address (embedded) is refused when that address is.
 func Refused(a netip.Addr) string {
 	a = a.Unmap()
+	if v4, ok := embedded(a); ok {
+		if why := Refused(v4); why != "" {
+			return why + " (" + v4.String() + " embedded)"
+		}
+	}
 	switch {
 	case !a.IsValid():
 		return "not an address"
@@ -113,6 +145,12 @@ func Refused(a netip.Addr) string {
 		return "carrier-grade NAT"
 	case thisNet.Contains(a):
 		return "this network (0.0.0.0/8)"
+	case ietf.Contains(a):
+		return "IETF protocol assignments (192.0.0.0/24)"
+	case benchmark.Contains(a):
+		return "benchmarking (198.18.0.0/15)"
+	case reserved.Contains(a):
+		return "reserved (240.0.0.0/4)"
 	}
 	return ""
 }
