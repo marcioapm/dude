@@ -105,28 +105,6 @@ const (
 var SiblingBecomes = []string{BecomesStarted, BecomesStopped, BecomesReview, BecomesReadyToMerge, BecomesAwaitHuman,
 	BecomesDone, BecomesFailed, BecomesAborted, BecomesClosed}
 
-// becomesStatus is the task status a becomes value is, "" for an event's.
-func becomesStatus(b string) string {
-	switch b {
-	case BecomesStarted:
-		return "running"
-	case BecomesStopped, BecomesClosed:
-		return ""
-	}
-	return b
-}
-
-// becomesEvent is the ledger event a becomes value is, "" for a status's.
-func becomesEvent(b string) string {
-	switch b {
-	case BecomesStopped:
-		return EvTaskStopped
-	case BecomesClosed:
-		return EvTaskClosed
-	}
-	return ""
-}
-
 // EvTaskStopped is a person's Stop of a task (api/stop.go, supersede.go).
 const EvTaskStopped = "task.stopped"
 
@@ -642,17 +620,17 @@ func siblingItemTx(ctx context.Context, tx pgx.Tx, c waitCond, since int64) (wai
 }
 
 // siblingWants says whether a sibling becoming became (a status it moved
-// to, or stopped or closed) is one of becomes: any, for none.
+// to, or stopped or closed) is one of becomes: any, for none. started is a
+// move to running; every other value names itself.
 func siblingWants(becomes []string, became string) bool {
 	if len(becomes) == 0 {
 		return true
 	}
 	for _, b := range becomes {
-		if ev := becomesEvent(b); ev != "" {
-			if b == became {
-				return true
-			}
-		} else if becomesStatus(b) == became {
+		if b == BecomesStarted {
+			b = "running"
+		}
+		if b == became {
 			return true
 		}
 	}
@@ -662,7 +640,7 @@ func siblingWants(becomes []string, became string) bool {
 func siblingBecame(it waitItem, became string, at time.Time) waitItem {
 	it.Ended, it.Became, it.At = true, became, at.UTC().Format("15:04")
 	switch became {
-	case "failed", "aborted", BecomesStopped, BecomesClosed, BecomesAwaitHuman:
+	case BecomesFailed, BecomesAborted, BecomesStopped, BecomesClosed, BecomesAwaitHuman:
 		it.rank = rankBad
 	default:
 		it.rank = rankGood
