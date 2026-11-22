@@ -1258,12 +1258,12 @@ func waitForConditions(workflows, after, siblings, prsEnded, urls []string) ([]a
 		conditions = append(conditions, map[string]any{"after": a})
 	}
 	for _, s := range siblings {
-		task, becomes, hasBecomes := strings.Cut(s, "=")
-		if task == "" {
+		task, becomes, ok := cutNameValue(s)
+		if !ok {
 			return nil, false
 		}
 		sibling := map[string]any{"task": task}
-		if hasBecomes {
+		if becomes != "" {
 			list := strings.Split(becomes, ",")
 			if slices.Contains(list, "") {
 				return nil, false
@@ -1273,12 +1273,12 @@ func waitForConditions(workflows, after, siblings, prsEnded, urls []string) ([]a
 		conditions = append(conditions, map[string]any{"siblingTask": sibling})
 	}
 	for _, p := range prsEnded {
-		pr, how, hasHow := strings.Cut(p, "=")
-		if pr == "" || hasHow && how == "" {
+		pr, how, ok := cutNameValue(p)
+		if !ok {
 			return nil, false
 		}
 		ended := map[string]any{"pr": pr}
-		if hasHow {
+		if how != "" {
 			ended["how"] = how
 		}
 		conditions = append(conditions, map[string]any{"prEnded": ended})
@@ -1298,6 +1298,13 @@ func waitForConditions(workflows, after, siblings, prsEnded, urls []string) ([]a
 		conditions = append(conditions, map[string]any{"url": ask})
 	}
 	return conditions, true
+}
+
+// cutNameValue splits a NAME[=VALUE] flag on its first "=", value "" when
+// absent; false for no NAME, or for an "=" with no VALUE.
+func cutNameValue(flag string) (name, value string, ok bool) {
+	name, value, hasValue := strings.Cut(flag, "=")
+	return name, value, name != "" && (!hasValue || value != "")
 }
 
 const settingsUsage = "usage: dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]"

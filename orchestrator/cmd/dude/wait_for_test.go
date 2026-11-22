@@ -61,26 +61,49 @@ func TestDudeWaitForPassesItsConditions(t *testing.T) {
 	}
 }
 
+// waitForServer stands in for the tools API: it answers every call with
+// status and reply, and records each call's path and raw body.
+type waitForServer struct {
+	paths []string
+	raws  [][]byte
+}
+
+func serveWaitFor(t *testing.T, status int, reply any) *waitForServer {
+	t.Helper()
+	s := &waitForServer{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		s.paths = append(s.paths, r.URL.Path)
+		s.raws = append(s.raws, raw)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(reply)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("LUX_SERVICE_DUDE", "")
+	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	return s
+}
+
+// body is call i's body, decoded.
+func (s *waitForServer) body(t *testing.T, i int) map[string]any {
+	t.Helper()
+	var args map[string]any
+	if err := json.Unmarshal(s.raws[i], &args); err != nil {
+		t.Fatal(err)
+	}
+	return args
+}
+
 // dude wait-for passes --workflow, --after, --sibling (TASK=B1,B2 names
 // what it becomes), --pr-ended (PR=how) and --url ([!][STATUS,]URL, split
 // on the first comma) as one condition each, after the runs and the pull
 // requests; a malformed flag is a usage error and calls nothing.
 func TestDudeWaitForPassesTheOtherConditions(t *testing.T) {
-	var paths []string
-	var bodies []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		var args map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-			t.Error(err)
-		}
-		bodies = append(bodies, args)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"waitId":"cwt_1","next":"end your turn"}`))
-	}))
-	defer srv.Close()
-	t.Setenv("LUX_SERVICE_DUDE", "")
-	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	srv := serveWaitFor(t, http.StatusOK, map[string]string{"waitId": "cwt_1", "next": "end your turn"})
 	var out bytes.Buffer
 	if err := run([]string{"wait-for", "--run", "run_a", "--pr", "7",
 		"--url", "https://example.com/up",
@@ -108,23 +131,23 @@ func TestDudeWaitForPassesTheOtherConditions(t *testing.T) {
 		},
 		"deadline": "3h",
 	}
-	if len(paths) != 1 || paths[0] != "/tools/wait_for" || !reflect.DeepEqual(bodies[0], want) {
-		t.Fatalf("called %v with %v", paths, bodies)
+	if len(srv.paths) != 1 || srv.paths[0] != "/tools/wait_for" || !reflect.DeepEqual(srv.body(t, 0), want) {
+		t.Fatalf("called %v with %s", srv.paths, srv.raws)
 	}
 	// A first field that is not a status is part of the URL.
 	if err := run([]string{"wait-for", "--url", "!https://example.com/a,b", "--deadline", "1h"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if want := []any{map[string]any{"url": map[string]any{"url": "https://example.com/a,b", "not": true}}}; !reflect.DeepEqual(bodies[1]["conditions"], want) {
-		t.Fatalf("a URL with a comma: %v", bodies[1])
+	if want := []any{map[string]any{"url": map[string]any{"url": "https://example.com/a,b", "not": true}}}; !reflect.DeepEqual(srv.body(t, 1)["conditions"], want) {
+		t.Fatalf("a URL with a comma: %s", srv.raws[1])
 	}
 	for _, bad := range [][]string{
 		{"--sibling", "=done"}, {"--sibling", "CP-62="}, {"--pr-ended", "=merged"}, {"--url", "!"},
 		{"--url", "5xx,"}, {"--after", "45m", "--after", "1h"},
 	} {
 		err := run(append(append([]string{"wait-for"}, bad...), "--deadline", "2h"), &out)
-		if err == nil || err.Error() != waitForUsage || len(paths) != 2 {
-			t.Fatalf("%v: %v, calls %v", bad, err, paths)
+		if err == nil || err.Error() != waitForUsage || len(srv.paths) != 2 {
+			t.Fatalf("%v: %v, calls %v", bad, err, srv.paths)
 		}
 	}
 }
@@ -132,54 +155,31 @@ func TestDudeWaitForPassesTheOtherConditions(t *testing.T) {
 // The tool's refusal of a condition is dude wait-for's error, in its words:
 // the CLI judges only the flags' syntax.
 func TestDudeWaitForSurfacesTheToolsRefusal(t *testing.T) {
-	// As the tools API answers a refusal: 422, {"error", "code"} (the
-	// code "" for delivery's), here rWaitAfterTooShort's words.
+	// The tools API refuses with 422 {"error", "code"}; these are rWaitAfterTooShort's words.
 	refusal := `after "5m" is under 30m: for a shorter time, just set the deadline`
-	var bodies []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var args map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-			t.Error(err)
-		}
-		bodies = append(bodies, args)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": refusal, "code": ""})
-	}))
-	defer srv.Close()
-	t.Setenv("LUX_SERVICE_DUDE", "")
-	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	srv := serveWaitFor(t, http.StatusUnprocessableEntity, map[string]string{"error": refusal, "code": ""})
 	var out bytes.Buffer
 	err := run([]string{"wait-for", "--after", "5m", "--url", "418,https://example.com", "--deadline", "2h"}, &out)
 	if err == nil || err.Error() != refusal || out.Len() != 0 {
 		t.Fatalf("the refusal: %v %q", err, out.String())
 	}
 	want := []any{map[string]any{"after": "5m"}, map[string]any{"url": map[string]any{"url": "https://example.com", "status": "418"}}}
-	if len(bodies) != 1 || !reflect.DeepEqual(bodies[0]["conditions"], want) {
-		t.Fatalf("sent %v", bodies)
+	if len(srv.raws) != 1 || !reflect.DeepEqual(srv.body(t, 0)["conditions"], want) {
+		t.Fatalf("sent %s", srv.raws)
 	}
 }
 
-// The body dude wait-for builds is what wait_for decodes: strictly, into
-// delivery.WaitCondition (as agenttools.waitForIn and defineFor do). The
-// anonymous struct mirrors agenttools.waitForIn, which is unexported in
-// another package.
+// The body decodes strictly into delivery.WaitCondition, as wait_for takes
+// it; the struct mirrors agenttools.waitForIn, which is unexported.
 func TestDudeWaitForBodyDecodesAsTheToolTakesIt(t *testing.T) {
-	var raw []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"waitId":"cwt_1","next":"x"}`))
-	}))
-	defer srv.Close()
-	t.Setenv("LUX_SERVICE_DUDE", "")
-	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	srv := serveWaitFor(t, http.StatusOK, map[string]string{"waitId": "cwt_1", "next": "x"})
 	var out bytes.Buffer
 	if err := run([]string{"wait-for", "--workflow", "wfd_1", "--after", "45m", "--sibling", "CP-62=done,failed",
 		"--sibling", "CP-63", "--pr-ended", "owner/repo#1=merged", "--url", "!5xx,https://x/a,b",
 		"--url", "2x,https://y", "--deadline", "3h"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	raw := srv.raws[0]
 	var in struct {
 		Conditions []delivery.WaitCondition `json:"conditions,omitempty"`
 		Wake       string                   `json:"wake,omitempty"`
