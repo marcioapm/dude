@@ -595,33 +595,27 @@ func TestWaitForAfterHoldsOnceItsTimeComes(t *testing.T) {
 	if opened.Holds || opened.WaitID == "" {
 		t.Fatalf("opened %+v", opened)
 	}
-	var stored string
-	if err := w.owner.QueryRow(w.ctx, `SELECT conditions->0->>'at' FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&stored); err != nil {
-		t.Fatal(err)
+	storedAt := func() string {
+		t.Helper()
+		var at string
+		if err := w.owner.QueryRow(w.ctx, `SELECT conditions->0->>'at' FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
 	}
+	stored := storedAt()
 	again := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{afterCond("30m")}, Deadline: "1h"})
-	var after string
-	if err := w.owner.QueryRow(w.ctx, `SELECT conditions->0->>'at' FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&after); err != nil {
-		t.Fatal(err)
-	}
-	if again.WaitID != opened.WaitID || after != stored || w.count("conductor_waits") != 1 {
+	if after := storedAt(); again.WaitID != opened.WaitID || after != stored || w.count("conductor_waits") != 1 {
 		t.Fatalf("retried: %+v, at %s then %s", again, stored, after)
 	}
-	w.evaluate()
-	if len(w.waitWakes()) != 0 || w.waitEnd(opened.WaitID) != "" {
-		t.Fatalf("held before its time: %v", w.waitWakes())
-	}
+	w.mustStillWait(opened.WaitID, "before its time")
 	w.moveAfterIntoThePast()
 	w.evaluate()
 	w.evaluate()
 	if got := w.waitWakes(); len(got) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || w.events(EvConductorWaitEnded) != 1 {
 		t.Fatalf("after its time: wakes %v, ended %q", got, w.waitEnd(opened.WaitID))
 	}
-	var digest string
-	if err := w.owner.QueryRow(w.ctx, `SELECT digest FROM conductor_waits WHERE id = $1`, opened.WaitID).Scan(&digest); err != nil {
-		t.Fatal(err)
-	}
-	if want := "Your wait " + opened.WaitID + " held (1 of 1): 30m elapsed (since "; !strings.HasPrefix(digest, want) || !strings.HasSuffix(digest, " UTC).") {
+	if digest, want := w.digest(opened.WaitID), "Your wait "+opened.WaitID+" held (1 of 1): 30m elapsed (since "; !strings.HasPrefix(digest, want) || !strings.HasSuffix(digest, " UTC).") {
 		t.Fatalf("digest %q", digest)
 	}
 }
@@ -676,15 +670,9 @@ func TestWaitForAnyWakesOnAfterAlone(t *testing.T) {
 	w := newWaitWorld(t)
 	w.phaseRun("run_a", "review")
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{runsEnded("run_a"), afterCond("45m")}, Wake: "any", Deadline: "2h"})
-	w.evaluate()
-	if len(w.waitWakes()) != 0 {
-		t.Fatal("held with nothing done")
-	}
+	w.mustStillWait(opened.WaitID, "nothing done")
 	w.moveAfterIntoThePast()
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
-		t.Fatalf("any: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
+	w.mustHold(opened.WaitID, "any")
 	var held, of int
 	if err := w.owner.QueryRow(w.ctx, `SELECT (payload->>'held')::int, (payload->>'of')::int FROM events WHERE event_type = $1`,
 		EvConductorWaitEnded).Scan(&held, &of); err != nil || held != 1 || of != 2 {
@@ -743,22 +731,46 @@ func (w *childWorld) digest(id string) string {
 	return d
 }
 
+// mustHold runs an evaluator pass and says the wait held, with one wake.
+func (w *childWorld) mustHold(id, what string) {
+	w.t.Helper()
+	w.evaluate()
+	if got := w.waitWakes(); len(got) != 1 || w.waitEnd(id) != WaitHeld {
+		w.t.Fatalf("%s: wakes %v, ended %q", what, got, w.waitEnd(id))
+	}
+}
+
+// mustStillWait runs an evaluator pass and says the wait is open, with no
+// wake.
+func (w *childWorld) mustStillWait(id, what string) {
+	w.t.Helper()
+	w.evaluate()
+	if got := w.waitWakes(); len(got) != 0 || w.waitEnd(id) != "" {
+		w.t.Fatalf("%s: wakes %v, ended %q", what, got, w.waitEnd(id))
+	}
+}
+
+// closeSibling closes wi_sib through Close (CloseTx), won't do.
+func (w *childWorld) closeSibling() {
+	w.t.Helper()
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := CloseTx(w.ctx, tx, w.org, CloseInput{TaskID: "wi_sib", Resolution: ResolutionWontDo,
+			Actor: Actor{ActorType: "system", ActorID: "test"}})
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 func TestWaitForSiblingStarted(t *testing.T) {
 	w := newSiblingWorld(t)
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("p-2", "started")}, Deadline: "1h"})
-	w.evaluate()
-	if opened.Holds || len(w.waitWakes()) != 0 {
-		t.Fatalf("held with the sibling queued: %+v %v", opened, w.waitWakes())
+	if opened.Holds {
+		t.Fatalf("held with the sibling queued: %+v", opened)
 	}
+	w.mustStillWait(opened.WaitID, "the sibling queued")
 	w.moveSibling("running")
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
-		t.Fatalf("started: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
-	d := w.digest(opened.WaitID)
-	if !strings.Contains(d, "P-2 ⟦external P-2⟧Ship the [importer]⟦/external P-2⟧ moved to running at ") {
-		t.Fatalf("digest %q", d)
-	}
+	w.heldOnceStarted(opened.WaitID)
 }
 
 // sinceCursor is a wait's since_cursor.
@@ -857,22 +869,13 @@ func TestWaitForSiblingRepeatedStatusIsNotAMove(t *testing.T) {
 	if opened.Holds || opened.WaitID == "" {
 		t.Fatalf("already aborted held: %+v", opened)
 	}
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		_, err := CloseTx(w.ctx, tx, w.org, CloseInput{TaskID: "wi_sib", Resolution: ResolutionWontDo,
-			Actor: Actor{ActorType: "system", ActorID: "test"}})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
+	w.closeSibling()
 	var repeated int
 	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_sib' AND event_type = $1
 		AND payload->>'status' = 'aborted' AND cursor > $2`, EvTaskStatusChanged, w.sinceCursor(opened.WaitID)).Scan(&repeated); err != nil || repeated != 1 {
 		t.Fatalf("repeated aborted events after the call %d: %v", repeated, err)
 	}
-	w.evaluate()
-	if len(w.waitWakes()) != 0 || w.waitEnd(opened.WaitID) != "" {
-		t.Fatalf("a repeated aborted held: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
+	w.mustStillWait(opened.WaitID, "a repeated aborted")
 }
 
 func TestWaitForSiblingBecomesOnlyWhatItNames(t *testing.T) {
@@ -880,15 +883,9 @@ func TestWaitForSiblingBecomesOnlyWhatItNames(t *testing.T) {
 	w.moveSibling("running")
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("wi_sib", "done")}, Deadline: "1h"})
 	w.moveSibling("review")
-	w.evaluate()
-	if len(w.waitWakes()) != 0 {
-		t.Fatalf("review held [done]: %v", w.waitWakes())
-	}
+	w.mustStillWait(opened.WaitID, "review, waited on to become done")
 	w.moveSibling("done")
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
-		t.Fatalf("done: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
+	w.mustHold(opened.WaitID, "done")
 }
 
 // stopped is the task.stopped event, not a status: a Stop leaves the task
@@ -898,14 +895,11 @@ func TestWaitForSiblingStopped(t *testing.T) {
 	w.moveSibling("running")
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "stopped")}, Deadline: "1h"})
 	w.exec(`UPDATE tasks SET status = 'aborted' WHERE id = 'wi_sib'`)
-	w.evaluate()
-	if len(w.waitWakes()) != 0 {
-		t.Fatalf("aborted with no Stop held stopped: %v", w.waitWakes())
-	}
+	w.mustStillWait(opened.WaitID, "aborted with no Stop")
 	w.siblingEvent(EvTaskStopped)
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || !strings.Contains(w.digest(opened.WaitID), " was stopped at ") {
-		t.Fatalf("stopped: %v %q %q", w.waitWakes(), w.waitEnd(opened.WaitID), w.digest(opened.WaitID))
+	w.mustHold(opened.WaitID, "stopped")
+	if d := w.digest(opened.WaitID); !strings.Contains(d, " was stopped at ") {
+		t.Fatalf("stopped: digest %q", d)
 	}
 }
 
@@ -913,16 +907,10 @@ func TestWaitForSiblingStopped(t *testing.T) {
 func TestWaitForSiblingClosed(t *testing.T) {
 	w := newSiblingWorld(t)
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "closed")}, Deadline: "1h"})
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		_, err := CloseTx(w.ctx, tx, w.org, CloseInput{TaskID: "wi_sib", Resolution: ResolutionWontDo,
-			Actor: Actor{ActorType: "system", ActorID: "test"}})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld || !strings.Contains(w.digest(opened.WaitID), " was closed at ") {
-		t.Fatalf("closed: %v %q %q", w.waitWakes(), w.waitEnd(opened.WaitID), w.digest(opened.WaitID))
+	w.closeSibling()
+	w.mustHold(opened.WaitID, "closed")
+	if d := w.digest(opened.WaitID); !strings.Contains(d, " was closed at ") {
+		t.Fatalf("closed: digest %q", d)
 	}
 }
 
@@ -933,30 +921,21 @@ func TestWaitForSiblingAlreadyThereWaitsForAChange(t *testing.T) {
 	w.moveSibling("running")
 	w.moveSibling("review")
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "review", "started")}, Deadline: "1h"})
-	w.evaluate()
-	if opened.Holds || opened.WaitID == "" || len(w.waitWakes()) != 0 {
-		t.Fatalf("already in review held: %+v %v", opened, w.waitWakes())
+	if opened.Holds || opened.WaitID == "" {
+		t.Fatalf("already in review held: %+v", opened)
 	}
+	w.mustStillWait(opened.WaitID, "already in review")
 	w.moveSibling("running")
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
-		t.Fatalf("started again: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
+	w.mustHold(opened.WaitID, "started again")
 }
 
 // With no becomes, any change of status holds; none does not.
 func TestWaitForSiblingAnyChange(t *testing.T) {
 	w := newSiblingWorld(t)
 	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2")}, Deadline: "1h"})
-	w.evaluate()
-	if len(w.waitWakes()) != 0 {
-		t.Fatal("held with no change")
-	}
+	w.mustStillWait(opened.WaitID, "no change")
 	w.moveSibling("intake")
-	w.evaluate()
-	if len(w.waitWakes()) != 1 || w.waitEnd(opened.WaitID) != WaitHeld {
-		t.Fatalf("any change: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
-	}
+	w.mustHold(opened.WaitID, "any change")
 }
 
 func TestWaitForSiblingRefusals(t *testing.T) {
