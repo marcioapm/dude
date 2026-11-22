@@ -761,6 +761,120 @@ func TestWaitForSiblingStarted(t *testing.T) {
 	}
 }
 
+// sinceCursor is a wait's since_cursor.
+func (w *childWorld) sinceCursor(id string) int64 {
+	w.t.Helper()
+	var since int64
+	if err := w.owner.QueryRow(w.ctx, `SELECT since_cursor FROM conductor_waits WHERE id = $1`, id).Scan(&since); err != nil {
+		w.t.Fatal(err)
+	}
+	return since
+}
+
+// heldOnceStarted says the wait held, once, on wi_sib moving to running,
+// its title quoted as external text: a second pass records nothing more.
+func (w *childWorld) heldOnceStarted(id string) {
+	w.t.Helper()
+	w.evaluate()
+	w.evaluate()
+	if len(w.waitWakes()) != 1 || w.waitEnd(id) != WaitHeld || w.events(EvConductorWaitEnded) != 1 {
+		w.t.Fatalf("wakes %v ended %q ended events %d", w.waitWakes(), w.waitEnd(id), w.events(EvConductorWaitEnded))
+	}
+	if d := w.digest(id); !strings.Contains(d, "P-2 ⟦external P-2⟧Ship the [importer]⟦/external P-2⟧ moved to running at ") {
+		w.t.Fatalf("digest %q", d)
+	}
+}
+
+// A status move whose transaction takes its event's cursor before the call
+// and commits after it: the call's since_cursor (the org's max cursor it
+// could see) is past that event, which the walk never reads. The row has
+// moved, though: the move is still seen.
+func TestWaitForSiblingSeesAMoveCommittedLate(t *testing.T) {
+	w := newSiblingWorld(t)
+	ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+	defer cancel()
+	// The late move, on a connection of its own, uncommitted.
+	late, err := w.s.DB.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = late.Rollback(w.ctx) }()
+	if _, err := late.Exec(ctx, `SELECT set_config('app.organization_id', $1, true)`, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := SetTaskStatusTx(ctx, late, w.org, "prj_life", "wi_sib", "", "running", "test"); err != nil || !moved {
+		t.Fatalf("moved %v: %v", moved, err)
+	}
+	var lateCursor int64
+	if err := late.QueryRow(ctx, `SELECT cursor FROM events WHERE task_id = 'wi_sib' AND event_type = $1`,
+		EvTaskStatusChanged).Scan(&lateCursor); err != nil {
+		t.Fatal(err)
+	}
+	// Another event of the org commits past it.
+	ref := RunRef{Org: w.org, ProjectID: "prj_life", TaskID: "wi_life"}
+	if err := w.s.DB.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := ledger.Append(ctx, tx, ref.Event(EvTaskStopped, ledger.ActorHuman, map[string]any{}))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "started")}, Deadline: "1h"})
+	if opened.Holds || opened.WaitID == "" {
+		t.Fatalf("held before the move committed: %+v", opened)
+	}
+	if since := w.sinceCursor(opened.WaitID); lateCursor >= since {
+		t.Fatalf("the late event's cursor %d is not below since_cursor %d: not the case under test", lateCursor, since)
+	}
+	if err := late.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.heldOnceStarted(opened.WaitID)
+}
+
+// A status move the row shows with no task.status_changed event: the walk
+// reads no event, the row has moved, and the move is seen.
+func TestWaitForSiblingSeesARowMovedWithNoEvent(t *testing.T) {
+	w := newSiblingWorld(t)
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "started")}, Deadline: "1h"})
+	// A direct UPDATE, not SetTaskStatusTx: a row moved with no status
+	// event is the very case the row fallback exists for.
+	w.exec(`UPDATE tasks SET status = 'running', updated_at = now() WHERE id = 'wi_sib'`)
+	if n := w.events(EvTaskStatusChanged); n != 0 {
+		t.Fatalf("status events %d", n)
+	}
+	w.heldOnceStarted(opened.WaitID)
+}
+
+// A status event equal to the status the sibling was in is not a move:
+// Close of a stopped (aborted) task records task.status_changed aborted
+// again, which does not hold becomes [aborted] pinned at aborted.
+func TestWaitForSiblingRepeatedStatusIsNotAMove(t *testing.T) {
+	w := newSiblingWorld(t)
+	w.moveSibling("running")
+	// Stop's status move (api/stop.go: SetTaskStatusTx to aborted).
+	w.moveSibling("aborted")
+	opened := w.mustWait("c1", WaitAsk{Conditions: []WaitCondition{siblingCond("P-2", "aborted")}, Deadline: "1h"})
+	if opened.Holds || opened.WaitID == "" {
+		t.Fatalf("already aborted held: %+v", opened)
+	}
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		_, err := CloseTx(w.ctx, tx, w.org, CloseInput{TaskID: "wi_sib", Resolution: ResolutionWontDo,
+			Actor: Actor{ActorType: "system", ActorID: "test"}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var repeated int
+	if err := w.owner.QueryRow(w.ctx, `SELECT count(*) FROM events WHERE task_id = 'wi_sib' AND event_type = $1
+		AND payload->>'status' = 'aborted' AND cursor > $2`, EvTaskStatusChanged, w.sinceCursor(opened.WaitID)).Scan(&repeated); err != nil || repeated != 1 {
+		t.Fatalf("repeated aborted events after the call %d: %v", repeated, err)
+	}
+	w.evaluate()
+	if len(w.waitWakes()) != 0 || w.waitEnd(opened.WaitID) != "" {
+		t.Fatalf("a repeated aborted held: %v %q", w.waitWakes(), w.waitEnd(opened.WaitID))
+	}
+}
+
 func TestWaitForSiblingBecomesOnlyWhatItNames(t *testing.T) {
 	w := newSiblingWorld(t)
 	w.moveSibling("running")
