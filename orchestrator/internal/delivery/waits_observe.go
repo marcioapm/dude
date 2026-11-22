@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,8 +13,9 @@ import (
 
 // Observations: a wait's conditions on something outside dude — a pull
 // request dude does not track (prEnded), a URL (url) — are read by the
-// sweep's ObserveWaits, never by the evaluation. Each due one is selected
-// (oldest reading first, waitObserveBatch a pass), read with no
+// orchestrator's own observation loop (ObserveWaits), never by the
+// evaluation nor the phase sweep. Each due one is selected
+// (oldest reading first, waitObserveBatch a pass, read at once), read with no
 // transaction open, and its reading stored on its condition
 // (conditions[i].obs) in one short transaction of its organisation, which
 // writes no wait that ended meanwhile. EvaluateWaitTx reads the stored
@@ -93,42 +95,74 @@ func recordObservationTx(ctx context.Context, tx pgx.Tx, o WaitObservation, obs 
 	return tag.RowsAffected() == 1, nil
 }
 
-// ObserveWaits is the sweep's observation step: it reads each condition
-// due a reading (DueWaitObservationsTx) and stores what it saw. A pull
-// request's read spends the task's GitHub reads, counted before it is
-// made; with them spent it is not made, and "budget" is stored. Returns
-// how many readings it stored.
+// waitObservePass is how long one pass of ObserveWaits may take.
+var waitObservePass = 20 * time.Second
+
+// ObserveWaits is the observation loop's pass: it reads each condition due
+// a reading (DueWaitObservationsTx), all of them at once (at most
+// waitObserveBatch, each under its own timeout), and stores what it saw. A
+// pull request's read spends the task's GitHub reads, counted before it is
+// made; with them spent it is not made, and "budget" is stored.
+//
+// The pass has a deadline (waitObservePass). A read the pass cut short (its
+// deadline, or ctx ended) stores nothing: the condition keeps its last
+// reading's time, so it stays due, oldest first, and is never read as a
+// timeout it was not. Only a read's own timeout or failure is stored as
+// an error. Returns how many readings it stored.
 func ObserveWaits(ctx context.Context, d *db.DB, forges Forges) (int, error) {
+	pass, cancel := context.WithTimeout(ctx, waitObservePass)
+	defer cancel()
 	var due []WaitObservation
-	if err := d.InSystem(ctx, "phase-sync", func(tx pgx.Tx) error {
+	if err := d.InSystem(pass, "wait-observations", func(tx pgx.Tx) error {
 		var err error
-		due, err = DueWaitObservationsTx(ctx, tx)
+		due, err = DueWaitObservationsTx(pass, tx)
 		return err
 	}); err != nil {
 		return 0, err
 	}
-	stored := 0
-	var firstErr error
+	var (
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		stored   int
+		firstErr error
+	)
 	for _, o := range due {
-		obs, ok, err := observe(ctx, d, forges, o)
-		if err != nil {
-			firstErr = cmpErr(firstErr, err)
-			continue
-		}
-		if !ok {
-			continue
-		}
-		if err := d.InOrg(ctx, o.Org, func(tx pgx.Tx) error {
-			wrote, err := recordObservationTx(ctx, tx, o, obs)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wrote, err := observeOne(ctx, pass, d, forges, o)
+			mu.Lock()
+			defer mu.Unlock()
 			if wrote {
 				stored++
 			}
-			return err
-		}); err != nil {
-			firstErr = cmpErr(firstErr, err)
-		}
+			if err != nil {
+				firstErr = cmpErr(firstErr, err)
+			}
+		}()
 	}
+	wg.Wait()
 	return stored, firstErr
+}
+
+// observeOne reads o under the pass's context and, unless the pass cut the
+// read short, stores the reading under ctx's.
+func observeOne(ctx, pass context.Context, d *db.DB, forges Forges, o WaitObservation) (bool, error) {
+	obs, ok, err := observe(pass, d, forges, o)
+	if pass.Err() != nil {
+		// Cut short by the pass, not by the read's own timeout: no reading.
+		return false, nil
+	}
+	if err != nil || !ok {
+		return false, err
+	}
+	wrote := false
+	err = d.InOrg(ctx, o.Org, func(tx pgx.Tx) error {
+		var err error
+		wrote, err = recordObservationTx(ctx, tx, o, obs)
+		return err
+	})
+	return wrote, err
 }
 
 // observe reads one condition, with no transaction open: false for a

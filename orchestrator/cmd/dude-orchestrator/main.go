@@ -282,6 +282,11 @@ func run(log *slog.Logger) error {
 	loops := []loop{
 		{"workflow", 250 * time.Millisecond, func(ctx context.Context) (int, error) { return runtime.Dispatch(ctx, stepSlots) }},
 		{"phase-sync", time.Second, syncer.Sweep},
+		// Conductors' waits on things outside dude (a pull request dude
+		// does not track, a URL): read and stored apart from the phase
+		// sweep, whose evaluation reads only what is stored. A pass reads
+		// its due conditions at once and ends within 20 s.
+		{"wait-observations", time.Second, syncer.ObserveWaits},
 		// Conductors' publishes, apart from the phase sweep: a slow forge
 		// holds this loop, never the Runs.
 		{"conductor-publishes", time.Second, syncer.SettlePublishes},
