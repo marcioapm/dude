@@ -62,22 +62,22 @@ func TestDudeWaitForPassesItsConditions(t *testing.T) {
 }
 
 // waitForServer stands in for the tools API: it answers every call with
-// status and reply, and records each call's path and raw body.
+// status and reply, and records each call's path and body, raw and decoded.
 type waitForServer struct {
-	paths []string
-	raws  [][]byte
+	paths  []string
+	raws   [][]byte
+	bodies []map[string]any
 }
 
 func serveWaitFor(t *testing.T, status int, reply any) *waitForServer {
-	t.Helper()
 	s := &waitForServer{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Error(err)
 		}
-		s.paths = append(s.paths, r.URL.Path)
-		s.raws = append(s.raws, raw)
+		s.paths, s.raws, s.bodies = append(s.paths, r.URL.Path), append(s.raws, raw), append(s.bodies, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(reply)
@@ -86,16 +86,6 @@ func serveWaitFor(t *testing.T, status int, reply any) *waitForServer {
 	t.Setenv("LUX_SERVICE_DUDE", "")
 	t.Setenv("DUDE_TOOLS_URL", srv.URL)
 	return s
-}
-
-// body is call i's body, decoded.
-func (s *waitForServer) body(t *testing.T, i int) map[string]any {
-	t.Helper()
-	var args map[string]any
-	if err := json.Unmarshal(s.raws[i], &args); err != nil {
-		t.Fatal(err)
-	}
-	return args
 }
 
 // dude wait-for passes --workflow, --after, --sibling (TASK=B1,B2 names
@@ -131,18 +121,18 @@ func TestDudeWaitForPassesTheOtherConditions(t *testing.T) {
 		},
 		"deadline": "3h",
 	}
-	if len(srv.paths) != 1 || srv.paths[0] != "/tools/wait_for" || !reflect.DeepEqual(srv.body(t, 0), want) {
-		t.Fatalf("called %v with %s", srv.paths, srv.raws)
+	if len(srv.paths) != 1 || srv.paths[0] != "/tools/wait_for" || !reflect.DeepEqual(srv.bodies[0], want) {
+		t.Fatalf("called %v with %v", srv.paths, srv.bodies)
 	}
 	// A first field that is not a status is part of the URL.
 	if err := run([]string{"wait-for", "--url", "!https://example.com/a,b", "--deadline", "1h"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if want := []any{map[string]any{"url": map[string]any{"url": "https://example.com/a,b", "not": true}}}; !reflect.DeepEqual(srv.body(t, 1)["conditions"], want) {
-		t.Fatalf("a URL with a comma: %s", srv.raws[1])
+	if want := []any{map[string]any{"url": map[string]any{"url": "https://example.com/a,b", "not": true}}}; !reflect.DeepEqual(srv.bodies[1]["conditions"], want) {
+		t.Fatalf("a URL with a comma: %v", srv.bodies[1])
 	}
 	for _, bad := range [][]string{
-		{"--sibling", "=done"}, {"--sibling", "CP-62="}, {"--pr-ended", "=merged"}, {"--url", "!"},
+		{"--sibling", "=done"}, {"--sibling", "CP-62="}, {"--sibling", "CP-62=done,"}, {"--pr-ended", "=merged"}, {"--url", "!"},
 		{"--url", "5xx,"}, {"--after", "45m", "--after", "1h"},
 	} {
 		err := run(append(append([]string{"wait-for"}, bad...), "--deadline", "2h"), &out)
@@ -164,8 +154,8 @@ func TestDudeWaitForSurfacesTheToolsRefusal(t *testing.T) {
 		t.Fatalf("the refusal: %v %q", err, out.String())
 	}
 	want := []any{map[string]any{"after": "5m"}, map[string]any{"url": map[string]any{"url": "https://example.com", "status": "418"}}}
-	if len(srv.raws) != 1 || !reflect.DeepEqual(srv.body(t, 0)["conditions"], want) {
-		t.Fatalf("sent %s", srv.raws)
+	if len(srv.bodies) != 1 || !reflect.DeepEqual(srv.bodies[0]["conditions"], want) {
+		t.Fatalf("sent %v", srv.bodies)
 	}
 }
 
