@@ -207,6 +207,9 @@ func (g *Guard) Client(timeout time.Duration) *http.Client {
 		DisableKeepAlives:     true,
 	}
 	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		// net/http set Referer to the previous URL, query included (it may
+		// hold a token): never send it on.
+		req.Header.Del("Referer")
 		if len(via) > MaxRedirects {
 			return &RedirectError{To: HostPath(req.URL), Err: errors.New("more than 3 redirects")}
 		}

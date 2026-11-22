@@ -132,6 +132,32 @@ func TestGetFollowsCheckedRedirects(t *testing.T) {
 	}
 }
 
+// A redirect never carries the previous URL (its query may hold a token)
+// to the next host in Referer.
+func TestARedirectSendsNoReferer(t *testing.T) {
+	var got atomic.Value
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.Header.Get("Referer"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer b.Close()
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, b.URL+"/landing", http.StatusFound)
+	}))
+	defer a.Close()
+	status, err := local().Get(context.Background(), a.URL+"/status?token=SECRET", 5*time.Second)
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("status %d, %v", status, err)
+	}
+	ref, ok := got.Load().(string)
+	if !ok {
+		t.Fatal("the redirect target was not reached")
+	}
+	if ref != "" {
+		t.Fatalf("Referer at the redirect target: %q", ref)
+	}
+}
+
 func TestARedirectToAPrivateAddressIsRefusedAtTheRedirect(t *testing.T) {
 	var reached atomic.Int32
 	inside := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
