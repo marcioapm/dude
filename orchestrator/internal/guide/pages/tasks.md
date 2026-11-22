@@ -49,6 +49,7 @@ Agents on the same epic are **peers**. An implementer, the conductor and an inve
 
 - `message` sends a short message to a peer task's agent, delivered at its next step. A Run may send at most 5 messages an hour.
 - `wait_for_reply` ends the agent's turn until the reply comes. It parks if no reply comes in time; the reply resumes it.
+- The conductor can wait on a peer task: its wait ends when the peer starts, stops, reaches a status such as review or done, or closes after the wait began.
 - `note` pins a short working fact on the epic — a contract, a decision, where the docs are. Every agent on the epic is told at its next step, and every new Run on the epic reads it. An epic has at most 10 current notes, each at most 2,000 characters. Notes are never edited; a new note replaces an old one.
 
 Reviewers, the simplifier and the tester read their peers but never write to them.

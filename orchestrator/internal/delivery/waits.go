@@ -45,8 +45,11 @@ const (
 	WaitMaxDeadline   = 24 * time.Hour
 	WaitMaxConditions = 8
 	WaitMaxRuns       = 8
-	WaitNoteMax       = 500
-	waitLineChars     = 2000
+	// An after condition waits at least this long: a shorter one is a
+	// deadline.
+	WaitMinAfter  = 30 * time.Minute
+	WaitNoteMax   = 500
+	waitLineChars = 2000
 )
 
 // How a wait ended (conductor_waits.ended_by).
@@ -67,7 +70,43 @@ type WaitCondition struct {
 	// terminal outcome: completed, unknown, or dude cannot see it. One
 	// GitHub refused (failed) is refused: nothing ran.
 	WorkflowEnded string `json:"workflowEnded,omitempty"`
+	// A time passed since the wait opened: a Go duration, from
+	// WaitMinAfter, before the wait's deadline.
+	After string `json:"after,omitempty"`
+	// Another task on this task's epic changing: its status moving, or it
+	// being stopped or closed.
+	SiblingTask *SiblingTaskAsk `json:"siblingTask,omitempty"`
 }
+
+// SiblingTaskAsk names a task on this task's epic (its key or id) and what
+// it is waited on to become (SiblingBecomes); none for any change.
+type SiblingTaskAsk struct {
+	Task    string   `json:"task"`
+	Becomes []string `json:"becomes,omitempty"`
+}
+
+// What a sibling task is waited on to become. started is a move to running
+// from anything else; stopped and closed are a task.stopped and a
+// task.closed event; the rest are a move to that status. Each counts only
+// after the wait opened: a task already there waits for a change.
+const (
+	BecomesStarted      = "started"
+	BecomesStopped      = "stopped"
+	BecomesReview       = "review"
+	BecomesReadyToMerge = "ready_to_merge"
+	BecomesAwaitHuman   = "awaiting_human"
+	BecomesDone         = "done"
+	BecomesFailed       = "failed"
+	BecomesAborted      = "aborted"
+	BecomesClosed       = "closed"
+)
+
+// SiblingBecomes are the becomes values, in the order they are listed.
+var SiblingBecomes = []string{BecomesStarted, BecomesStopped, BecomesReview, BecomesReadyToMerge, BecomesAwaitHuman,
+	BecomesDone, BecomesFailed, BecomesAborted, BecomesClosed}
+
+// EvTaskStopped is a person's Stop of a task (api/stop.go, supersede.go).
+const EvTaskStopped = "task.stopped"
 
 // PRChecksAsk names a pull request (12, #12, repo#12) and the head its
 // checks are waited on at: a full SHA, or "" for its head now.
@@ -110,12 +149,26 @@ type waitCond struct {
 	Head   string `json:"head,omitempty"`
 	// workflow_ended: the workflow_dispatches row.
 	Dispatch string `json:"dispatch,omitempty"`
+	// after: the duration as asked, when the wait opened (Postgres's
+	// clock) and when it holds, both UTC.
+	After string     `json:"after,omitempty"`
+	Since *time.Time `json:"since,omitempty"`
+	At    *time.Time `json:"at,omitempty"`
+	// sibling_task: the task, its key, what it is waited on to become
+	// (none for any change) and its status pinned at the call; events on
+	// it count after the wait's since_cursor.
+	Task    string   `json:"task,omitempty"`
+	TaskKey string   `json:"taskKey,omitempty"`
+	Becomes []string `json:"becomes,omitempty"`
+	Pinned  string   `json:"pinned,omitempty"`
 }
 
 const (
 	condRunsEnded     = "runs_ended"
 	condPRChecksFinal = "pr_checks_final"
 	condWorkflowEnded = "workflow_ended"
+	condAfter         = "after"
+	condSiblingTask   = "sibling_task"
 )
 
 // parseWaitDeadline reads a deadline: a Go duration, or an RFC 3339 time,
@@ -182,12 +235,18 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 	if utf8.RuneCountInString(ask.Note) > WaitNoteMax {
 		return out, refusef(rWaitNoteTooLong, WaitNoteMax)
 	}
-	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, ask.Conditions)
+	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, deadline.Sub(now), ask.Conditions)
 	if err != nil {
 		return out, err
 	}
+	// The org's ledger cursor at the call (since_cursor): a sibling task's
+	// events count after it, and only those.
+	var since int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(cursor), 0) FROM events WHERE organization_id = $1`, ref.Org).Scan(&since); err != nil {
+		return out, err
+	}
 	if len(conds) > 0 {
-		ev, err := evaluateConditionsTx(ctx, tx, conds, all)
+		ev, err := evaluateConditionsTx(ctx, tx, conds, all, since)
 		if err != nil {
 			return out, err
 		}
@@ -209,10 +268,9 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 	out.WaitID = ids.New("cwt")
 	if err := tx.QueryRow(ctx, `INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions,
 			wake_all, note, deadline_at, since_cursor, call_key)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NULLIF($8, ''), $9,
-			(SELECT COALESCE(max(cursor), 0) FROM events WHERE organization_id = $2), $10)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NULLIF($8, ''), $9, $11, $10)
 		RETURNING deadline_at`,
-		out.WaitID, ref.Org, ref.TaskID, ref.RunID, attempt, raw, all, ask.Note, deadline, ask.CallKey).Scan(&out.DeadlineAt); err != nil {
+		out.WaitID, ref.Org, ref.TaskID, ref.RunID, attempt, raw, all, ask.Note, deadline, ask.CallKey, since).Scan(&out.DeadlineAt); err != nil {
 		return out, err
 	}
 	wake := "all"
@@ -242,15 +300,16 @@ func decisionWaitingTx(ctx context.Context, tx pgx.Tx, taskID string) (string, e
 
 // normalizeWaitTx checks the conditions and stores them as the evaluator
 // reads them: Runs of this task, a pull request of this task by its row,
-// its head pinned.
-func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCondition) ([]waitCond, error) {
+// its head pinned, a time as when it comes (before the deadline, ahead of
+// the call).
+func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.Duration, in []WaitCondition) ([]waitCond, error) {
 	if len(in) > WaitMaxConditions {
 		return nil, refusef(rWaitTooManyConditions, WaitMaxConditions)
 	}
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
 		kinds := 0
-		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != ""} {
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != "", c.SiblingTask != nil} {
 			if set {
 				kinds++
 			}
@@ -258,6 +317,34 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 		switch {
 		case kinds != 1:
 			return nil, refuseText(rWaitOneKindPerCondition)
+		case c.SiblingTask != nil:
+			sc, err := siblingCondTx(ctx, tx, taskID, *c.SiblingTask)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sc)
+		case c.After != "":
+			s := strings.TrimSpace(c.After)
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return nil, refusef(rWaitAfterUnreadable, s)
+			}
+			if d < WaitMinAfter {
+				return nil, refusef(rWaitAfterTooShort, s)
+			}
+			// Before the deadline, as both were asked: one that comes
+			// first makes this a deadline.
+			if d >= ahead {
+				return nil, refusef(rWaitAfterPastDeadline, s)
+			}
+			// Postgres's clock, as the evaluator reads it.
+			var since time.Time
+			if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&since); err != nil {
+				return nil, err
+			}
+			since = since.UTC()
+			at := since.Add(d)
+			out = append(out, waitCond{Kind: condAfter, After: s, Since: &since, At: &at})
 		case c.WorkflowEnded != "":
 			id := strings.TrimSpace(c.WorkflowEnded)
 			// A dispatch GitHub refused (failed) never ran: nothing will
@@ -325,8 +412,58 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, in []WaitCon
 	return out, nil
 }
 
-// waitItem is one fact a wait's digest tells: a Run (Kind "run") or a pull
-// request (Kind "pr"). rank orders them worst first.
+// siblingCondTx checks a siblingTask condition: a task of the org, by its
+// key or id, other than this one and on this task's epic; becomes values
+// SiblingBecomes lists. Its status now is pinned.
+func siblingCondTx(ctx context.Context, tx pgx.Tx, taskID string, ask SiblingTaskAsk) (waitCond, error) {
+	var becomes []string
+	for _, b := range ask.Becomes {
+		b = strings.TrimSpace(b)
+		if !slices.Contains(SiblingBecomes, b) {
+			return waitCond{}, refusef(rWaitSiblingBecomesUnknown, b, strings.Join(SiblingBecomes, ", "))
+		}
+		if !slices.Contains(becomes, b) {
+			becomes = append(becomes, b)
+		}
+	}
+	ref := strings.TrimSpace(ask.Task)
+	q := `SELECT t.id, p.key_prefix || '-' || t.number, t.status::text, t.epic_id
+		FROM tasks t JOIN projects p ON p.id = t.project_id
+		WHERE t.organization_id = (SELECT organization_id FROM tasks WHERE id = $1) AND `
+	args := []any{taskID}
+	if key, ok := TaskKey(ref); ok {
+		prefix, number, _ := strings.Cut(key, "-")
+		q += `upper(p.key_prefix) = $2 AND t.number = $3::int`
+		args = append(args, prefix, number)
+	} else {
+		q += `t.id = $2`
+		args = append(args, ref)
+	}
+	c := waitCond{Kind: condSiblingTask, Becomes: becomes}
+	var epic *string
+	err := tx.QueryRow(ctx, q, args...).Scan(&c.Task, &c.TaskKey, &c.Pinned, &epic)
+	if db.IsNotFound(err) {
+		return c, refusef(rWaitSiblingNotFound, ref)
+	}
+	if err != nil {
+		return c, err
+	}
+	if c.Task == taskID {
+		return c, refuseText(rWaitSiblingIsThisTask)
+	}
+	var ours *string
+	if err := tx.QueryRow(ctx, `SELECT epic_id FROM tasks WHERE id = $1`, taskID).Scan(&ours); err != nil {
+		return c, err
+	}
+	if ours == nil || epic == nil || *ours != *epic {
+		return c, refusef(rWaitSiblingNotOnThisEpic, c.TaskKey)
+	}
+	return c, nil
+}
+
+// waitItem is one fact a wait's digest tells: a Run (Kind "run"), a pull
+// request (Kind "pr"), a dispatched workflow, a time or a sibling task.
+// rank orders them worst first.
 type waitItem struct {
 	Kind string
 	// A Run: whose it is (its phase or profile), its id and, once
@@ -341,7 +478,16 @@ type waitItem struct {
 	// A dispatched workflow (Kind "workflow"): as the supervisor last
 	// stored it.
 	Workflow *workflowFacts
-	rank     int
+	// A time (Kind "after"): the duration asked, when it began and when
+	// it comes (HH:MM UTC), and whether it came.
+	After, Since, Until string
+	// A sibling task (Kind "task"): its key, its title quoted as external
+	// text (a person wrote it), its status now, what it became ("" while
+	// waiting: a status, or stopped or closed) and when (HH:MM UTC), and
+	// what it is waited on to become.
+	TaskKey, Title, Became, At string
+	Becomes                    []string
+	rank                       int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -360,9 +506,11 @@ const (
 
 // evaluateConditionsTx reads each condition from what dude keeps, with no
 // locks: a Run's latest replacement (replaced_by) ended; a pull request's
-// checks final on the head, its head moved, or it ended. Checks unknown are
-// not final: the deadline covers a repository with no CI.
-func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all bool) (waitEval, error) {
+// checks final on the head, its head moved, or it ended; a time come by
+// Postgres's clock; a sibling task's status and its events after since
+// (the wait's since_cursor). Checks unknown are not final: the deadline
+// covers a repository with no CI.
+func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all bool, since int64) (waitEval, error) {
 	ev := waitEval{of: len(conds), waitedAll: all}
 	for _, c := range conds {
 		held := true
@@ -390,6 +538,20 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			}
 			held = it.rank != rankWaiting
 			ev.items = append(ev.items, it)
+		case condAfter:
+			it, err := afterItemTx(ctx, tx, c)
+			if err != nil {
+				return ev, err
+			}
+			held = it.Ended
+			ev.items = append(ev.items, it)
+		case condSiblingTask:
+			it, err := siblingItemTx(ctx, tx, c, since)
+			if err != nil {
+				return ev, err
+			}
+			held = it.Ended
+			ev.items = append(ev.items, it)
 		}
 		if held {
 			ev.held++
@@ -404,8 +566,107 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 	return ev, nil
 }
 
+// siblingItemTx reads a siblingTask condition with no locks: the task's
+// row and its status changes, stops and closes after since, in ledger
+// order, from the status pinned at the call. The first that is one it is
+// waited on to become (any, for none named) holds it; a status the row has
+// moved to with no event read is the last move. A task that was already
+// there at the call waits for a change.
+func siblingItemTx(ctx context.Context, tx pgx.Tx, c waitCond, since int64) (waitItem, error) {
+	it := waitItem{Kind: "task", TaskKey: c.TaskKey, Becomes: c.Becomes, rank: rankWaiting}
+	var title string
+	var updated time.Time
+	if err := tx.QueryRow(ctx, `SELECT title, status::text, updated_at FROM tasks WHERE id = $1`, c.Task).
+		Scan(&title, &it.Status, &updated); err != nil {
+		return it, err
+	}
+	it.Title = ExternalText(c.TaskKey, clip(oneLine(title), 120))
+	rows, err := tx.Query(ctx, `SELECT event_type, COALESCE(payload->>'status', ''), occurred_at FROM events
+		WHERE task_id = $1 AND cursor > $2 AND event_type IN ($3, $4, $5) ORDER BY cursor`,
+		c.Task, since, EvTaskStatusChanged, EvTaskStopped, EvTaskClosed)
+	if err != nil {
+		return it, err
+	}
+	type move struct {
+		Type, Status string
+		At           time.Time
+	}
+	moves, err := pgx.CollectRows(rows, pgx.RowToStructByPos[move])
+	if err != nil {
+		return it, err
+	}
+	was := c.Pinned
+	for _, m := range moves {
+		var became string
+		switch m.Type {
+		case EvTaskStopped:
+			became = BecomesStopped
+		case EvTaskClosed:
+			became = BecomesClosed
+		default:
+			if m.Status == "" || m.Status == was {
+				continue
+			}
+			became, was = m.Status, m.Status
+		}
+		if siblingWants(c.Becomes, became) {
+			return siblingBecame(it, became, m.At), nil
+		}
+	}
+	if it.Status != was && siblingWants(c.Becomes, it.Status) {
+		return siblingBecame(it, it.Status, updated), nil
+	}
+	return it, nil
+}
+
+// siblingWants says whether a sibling becoming became (a status it moved
+// to, or stopped or closed) is one of becomes: any, for none. started is a
+// move to running; every other value names itself.
+func siblingWants(becomes []string, became string) bool {
+	if len(becomes) == 0 {
+		return true
+	}
+	for _, b := range becomes {
+		if b == BecomesStarted {
+			b = "running"
+		}
+		if b == became {
+			return true
+		}
+	}
+	return false
+}
+
+func siblingBecame(it waitItem, became string, at time.Time) waitItem {
+	it.Ended, it.Became, it.At = true, became, at.UTC().Format("15:04")
+	switch became {
+	case BecomesFailed, BecomesAborted, BecomesStopped, BecomesClosed, BecomesAwaitHuman:
+		it.rank = rankBad
+	default:
+		it.rank = rankGood
+	}
+	return it
+}
+
 // maxReplacements bounds following a Run's replacements.
 const maxReplacements = 50
+
+// afterItemTx reads an after condition by Postgres's clock: it holds once
+// now() reaches its time.
+func afterItemTx(ctx context.Context, tx pgx.Tx, c waitCond) (waitItem, error) {
+	it := waitItem{Kind: "after", After: c.After, rank: rankWaiting}
+	if c.At == nil || c.Since == nil {
+		return it, nil
+	}
+	it.Since, it.Until = c.Since.UTC().Format("15:04"), c.At.UTC().Format("15:04")
+	if err := tx.QueryRow(ctx, `SELECT now() >= $1`, *c.At).Scan(&it.Ended); err != nil {
+		return it, err
+	}
+	if it.Ended {
+		it.rank = rankGood
+	}
+	return it, nil
+}
 
 func runItemTx(ctx context.Context, tx pgx.Tx, id string) (waitItem, error) {
 	it := waitItem{Kind: "run", RunID: id}
@@ -608,7 +869,7 @@ func readWaitTx(ctx context.Context, tx pgx.Tx, taskID, waitID string, lock bool
 	}
 	v.ev = waitEval{waitedAll: all}
 	if len(conds) > 0 {
-		if v.ev, err = evaluateConditionsTx(ctx, tx, conds, all); err != nil {
+		if v.ev, err = evaluateConditionsTx(ctx, tx, conds, all, v.since); err != nil {
 			return v, err
 		}
 	}
