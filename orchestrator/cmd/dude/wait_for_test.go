@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // dude wait-for passes each --run and --pr (PR@HEAD pins a head) as one
@@ -154,5 +157,47 @@ func TestDudeWaitForSurfacesTheToolsRefusal(t *testing.T) {
 	want := []any{map[string]any{"after": "5m"}, map[string]any{"url": map[string]any{"url": "https://example.com", "status": "418"}}}
 	if len(bodies) != 1 || !reflect.DeepEqual(bodies[0]["conditions"], want) {
 		t.Fatalf("sent %v", bodies)
+	}
+}
+
+// The body dude wait-for builds is what wait_for decodes: strictly, into
+// delivery.WaitCondition (as agenttools.waitForIn and defineFor do). The
+// anonymous struct mirrors agenttools.waitForIn, which is unexported in
+// another package.
+func TestDudeWaitForBodyDecodesAsTheToolTakesIt(t *testing.T) {
+	var raw []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"waitId":"cwt_1","next":"x"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("LUX_SERVICE_DUDE", "")
+	t.Setenv("DUDE_TOOLS_URL", srv.URL)
+	var out bytes.Buffer
+	if err := run([]string{"wait-for", "--workflow", "wfd_1", "--after", "45m", "--sibling", "CP-62=done,failed",
+		"--sibling", "CP-63", "--pr-ended", "owner/repo#1=merged", "--url", "!5xx,https://x/a,b",
+		"--url", "2x,https://y", "--deadline", "3h"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var in struct {
+		Conditions []delivery.WaitCondition `json:"conditions,omitempty"`
+		Wake       string                   `json:"wake,omitempty"`
+		Deadline   string                   `json:"deadline"`
+		Note       string                   `json:"note,omitempty"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		t.Fatalf("%s: %v", raw, err)
+	}
+	want := []delivery.WaitCondition{{WorkflowEnded: "wfd_1"}, {After: "45m"},
+		{SiblingTask: &delivery.SiblingTaskAsk{Task: "CP-62", Becomes: []string{"done", "failed"}}},
+		{SiblingTask: &delivery.SiblingTaskAsk{Task: "CP-63"}},
+		{PREnded: &delivery.PREndedAsk{PR: "owner/repo#1", How: "merged"}},
+		{URL: &delivery.URLAsk{URL: "https://x/a,b", Status: "5xx", Not: true}},
+		{URL: &delivery.URLAsk{URL: "2x,https://y"}}}
+	if !reflect.DeepEqual(in.Conditions, want) || in.Deadline != "3h" {
+		t.Fatalf("%s", raw)
 	}
 }
