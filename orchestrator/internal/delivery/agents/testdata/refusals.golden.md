@@ -1480,7 +1480,7 @@ the note is at most %d characters
 
 ## refusals/delivery/waits/one-kind-per-condition
 
-each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask or prEnded
+each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask, prEnded or url
 
 ## refusals/delivery/waits/runs-count
 
@@ -1889,4 +1889,12 @@ how %q is not merged, closed or any
 ## refusals/delivery/waits/pr-unread
 
 dude cannot wait on %s: %s
+
+## refusals/delivery/waits/url-refused
+
+dude does not wait on %s: %s. URL: public addresses only
+
+## refusals/delivery/waits/url-status-unknown
+
+status %q is not a code (200) or a class (2xx, 5xx)
 

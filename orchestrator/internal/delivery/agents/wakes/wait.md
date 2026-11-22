@@ -27,6 +27,10 @@
 {{- else if or (eq .State "merged") (eq .State "closed")}} was {{.State}}{{with .At}} at {{.}} UTC{{end}}, not {{.How}} as waited on
 {{- else}} open{{with .Read}}, last read {{.}} UTC{{end}}
 {{- end}}
+{{- else if eq .Kind "url"}}{{.Where}}
+{{- if not .Read}} not read yet (waiting for{{if .Not}} anything but{{end}} {{.Want}})
+{{- else}} {{with .Code}}answered {{.}}{{else}}{{.Error}}{{end}} at {{.Read}} UTC: {{if .Ended}}held{{else}}waiting{{end}} for{{if .Not}} anything but{{end}} {{.Want}}
+{{- end}}
 {{- else if eq .Kind "after"}}{{.After}} {{if .Ended}}elapsed (since {{.Since}} UTC){{else}}not elapsed (until {{.Until}} UTC){{end}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed

@@ -10,7 +10,7 @@
 
 {{- define "refusals/delivery/waits/too-many-conditions"}}at most %d conditions to a wait{{end}}
 
-{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask or prEnded{{end}}
+{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask, prEnded or url{{end}}
 
 {{- define "refusals/delivery/waits/runs-count"}}runsEnded names 1 to %d Runs{{end}}
 
@@ -48,3 +48,6 @@
 
 {{- define "refusals/delivery/waits/pr-budget"}}dude cannot read %s now: this task's GitHub reads (%d an hour) are spent; wait on it once they come back{{end}}
 
+{{- define "refusals/delivery/waits/url-status-unknown"}}status %q is not a code (200) or a class (2xx, 5xx){{end}}
+
+{{- define "refusals/delivery/waits/url-refused"}}dude does not wait on %s: %s. URL: public addresses only{{end}}

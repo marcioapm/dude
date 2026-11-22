@@ -79,6 +79,8 @@ type WaitCondition struct {
 	// Any pull request the organisation's GitHub can read being merged or
 	// closed.
 	PREnded *PREndedAsk `json:"prEnded,omitempty"`
+	// A URL's response status matching, or not matching, a status.
+	URL *URLAsk `json:"url,omitempty"`
 }
 
 // PREndedAsk names a pull request (owner/repo#123, repo#123 or #123 in this
@@ -95,6 +97,15 @@ const (
 	PREndedClosed = "closed"
 	PREndedAny    = "any"
 )
+
+// URLAsk names a public http(s) URL and the status its response is waited
+// on to have: a code (200) or a class (2xx, 5xx), 2xx by default; Not
+// waits for it not to have it (a timeout or a connection error included).
+type URLAsk struct {
+	URL    string `json:"url"`
+	Status string `json:"status,omitempty"`
+	Not    bool   `json:"not,omitempty"`
+}
 
 // SiblingTaskAsk names a task on this task's epic (its key or id) and what
 // it is waited on to become (SiblingBecomes); none for any change.
@@ -191,6 +202,13 @@ type waitCond struct {
 	Slug   string `json:"slug,omitempty"`
 	Number int    `json:"number,omitempty"`
 	Title  string `json:"title,omitempty"`
+	// url: the URL as asked (needed to fetch it), its host and path (what
+	// is shown), the status waited on and whether not; what the last read
+	// of it saw (Obs).
+	URL   string `json:"url,omitempty"`
+	Where string `json:"where,omitempty"`
+	Want  string `json:"status,omitempty"`
+	Not   bool   `json:"not,omitempty"`
 	// An observation (pr_ended untracked, url): the last read, which the
 	// sweep's ObserveWaits makes outside any evaluation and the evaluation
 	// reads from here.
@@ -345,7 +363,7 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 		wake = "any"
 	}
 	if _, err := ledger.Append(ctx, tx, ref.Event(EvConductorWaiting, ledger.ActorAgent, map[string]any{
-		"waitId": out.WaitID, "conditions": conds, "wake": wake, "deadlineAt": out.DeadlineAt})); err != nil {
+		"waitId": out.WaitID, "conditions": condsForLedger(conds), "wake": wake, "deadlineAt": out.DeadlineAt})); err != nil {
 		return out, err
 	}
 	out.DecisionPoint, err = decisionWaitingTx(ctx, tx, ref.TaskID)
@@ -376,7 +394,7 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.D
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
 		kinds := 0
-		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != "", c.SiblingTask != nil, c.PREnded != nil} {
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != "", c.SiblingTask != nil, c.PREnded != nil, c.URL != nil} {
 			if set {
 				kinds++
 			}
@@ -390,6 +408,12 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.D
 				return nil, err
 			}
 			out = append(out, pc)
+		case c.URL != nil:
+			uc, err := urlCond(ctx, *c.URL)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, uc)
 		case c.SiblingTask != nil:
 			sc, err := siblingCondTx(ctx, tx, taskID, *c.SiblingTask)
 			if err != nil {
@@ -565,7 +589,12 @@ type waitItem struct {
 	// (How); when it was last read (Read, HH:MM UTC, "" for one dude
 	// tracks) and why it was not (Error).
 	How, By, Read string
-	rank          int
+	// A URL (Kind "url"): its host and path, the status waited on and
+	// whether not; its last status (Code) or Error, at Read.
+	Where, Want string
+	Not         bool
+	Code        int
+	rank        int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -635,6 +664,10 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			if err != nil {
 				return ev, err
 			}
+			held = it.Ended
+			ev.items = append(ev.items, it)
+		case condURL:
+			it := urlItem(c)
 			held = it.Ended
 			ev.items = append(ev.items, it)
 		}

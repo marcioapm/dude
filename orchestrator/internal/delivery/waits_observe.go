@@ -144,6 +144,8 @@ func observe(ctx context.Context, d *db.DB, forges Forges, o WaitObservation) (w
 			return waitObs{Error: obsBudget}, true, nil
 		}
 		return observePR(ctx, forges, o), true, nil
+	case condURL:
+		return observeURL(ctx, o.cond), true, nil
 	}
 	return waitObs{}, false, nil
 }

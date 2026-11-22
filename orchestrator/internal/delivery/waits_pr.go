@@ -351,3 +351,16 @@ func prEndedItemTx(ctx context.Context, tx pgx.Tx, c waitCond) (waitItem, error)
 	}
 	return it, nil
 }
+
+// condsForLedger is the conditions as the conductor.waiting event tells
+// them: a URL's query (which may hold a token) left out.
+func condsForLedger(conds []waitCond) []waitCond {
+	out := make([]waitCond, len(conds))
+	for i, c := range conds {
+		if c.Kind == condURL {
+			c.URL = ""
+		}
+		out[i] = c
+	}
+	return out
+}

@@ -88,6 +88,27 @@ Say what you are waiting on, then end your turn: dude checks it in its own cycle
               "pr"
             ],
             "additionalProperties": false
+          },
+          "url": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "not": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
