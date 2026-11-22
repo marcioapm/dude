@@ -320,7 +320,7 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 			}
 			locked = true
 		}
-		if err := spendGitHubRead(ctx, tx, ref.Event, c, ""); err != nil {
+		if err := spendGitHubRead(ctx, tx, ref.Event, c); err != nil {
 			return out, err
 		}
 	}

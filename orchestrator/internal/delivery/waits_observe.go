@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"sync"
@@ -136,9 +137,7 @@ func ObserveWaits(ctx context.Context, d *db.DB, forges Forges) (int, error) {
 			if wrote {
 				stored++
 			}
-			if err != nil {
-				firstErr = cmpErr(firstErr, err)
-			}
+			firstErr = cmp.Or(firstErr, err)
 		}()
 	}
 	wg.Wait()
@@ -182,11 +181,4 @@ func observe(ctx context.Context, d *db.DB, forges Forges, o WaitObservation) (w
 		return observeURL(ctx, o.cond), true, nil
 	}
 	return waitObs{}, false, nil
-}
-
-func cmpErr(first, err error) error {
-	if first != nil {
-		return first
-	}
-	return err
 }

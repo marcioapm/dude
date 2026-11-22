@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strconv"
@@ -225,34 +226,24 @@ func prObs(end forge.PullRequestEnd, at time.Time) *waitObs {
 	o := &waitObs{At: at, State: end.State, MergedBy: end.MergedBy}
 	switch end.State {
 	case forge.StateMerged:
-		o.EndedAt = cmpTime(end.MergedAt, end.ClosedAt)
+		o.EndedAt = cmp.Or(end.MergedAt, end.ClosedAt)
 	case forge.StateClosed:
 		o.EndedAt = end.ClosedAt
 	}
 	return o
 }
 
-func cmpTime(a, b *time.Time) *time.Time {
-	if a != nil {
-		return a
-	}
-	return b
-}
-
 // spendGitHubRead records one GitHub read made for a wait on the task's
 // budget: a counted attempt (tool wait_for, marked attempted so the Run's
 // call counts are not spent) and a github.read event as the GitHub tools
-// record theirs (tool, repo, number; refused when GitHub did not answer).
-func spendGitHubRead(ctx context.Context, tx pgx.Tx, event func(typ, actor string, payload map[string]any) ledger.Event, c waitCond, refused string) error {
+// record theirs (tool, repo, number).
+func spendGitHubRead(ctx context.Context, tx pgx.Tx, event func(typ, actor string, payload map[string]any) ledger.Event, c waitCond) error {
 	if _, err := ledger.Append(ctx, tx, event(EvToolAttempted, ledger.ActorAgent, map[string]any{
 		"tool": "wait_for", "attempted": true, "repo": c.Slug, "number": c.Number})); err != nil {
 		return err
 	}
-	payload := map[string]any{"tool": "wait_for", "repo": c.Slug, "number": c.Number}
-	if refused != "" {
-		payload["refused"] = refused
-	}
-	_, err := ledger.Append(ctx, tx, event(EvGitHubRead, ledger.ActorAgent, payload))
+	_, err := ledger.Append(ctx, tx, event(EvGitHubRead, ledger.ActorAgent, map[string]any{
+		"tool": "wait_for", "repo": c.Slug, "number": c.Number}))
 	return err
 }
 
@@ -271,7 +262,7 @@ func reservePRReadTx(ctx context.Context, d *db.DB, o WaitObservation) (bool, er
 		}
 		ok = true
 		ref := RunRef{Org: o.Org, ProjectID: o.ProjectID, TaskID: o.TaskID, RunID: o.Conductor}
-		return spendGitHubRead(ctx, tx, ref.Event, o.cond, "")
+		return spendGitHubRead(ctx, tx, ref.Event, o.cond)
 	})
 	return ok && err == nil, err
 }
@@ -321,7 +312,7 @@ func prEndedItemTx(ctx context.Context, tx pgx.Tx, c waitCond) (waitItem, error)
 			return it, err
 		}
 		if it.State == forge.StateMerged {
-			at = cmpTime(merged, closed)
+			at = cmp.Or(merged, closed)
 		} else {
 			at = closed
 		}
