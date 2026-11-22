@@ -35,9 +35,7 @@ func newStatusServer(t *testing.T, status int) *statusServer {
 	s.status.Store(int32(status))
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.hits.Add(1)
-		if x := s.watch.Load(); x != nil {
-			x.see()
-		}
+		s.watch.Load().see()
 		if d := time.Duration(s.sleep.Load()); d > 0 {
 			select {
 			case <-time.After(d):
@@ -48,9 +46,7 @@ func newStatusServer(t *testing.T, status int) *statusServer {
 		w.WriteHeader(int(s.status.Load()))
 	}))
 	t.Cleanup(s.srv.Close)
-	guard := waitGuard
-	waitGuard = netguard.New(netguard.AllowForTests(netip.MustParsePrefix("127.0.0.1/32")))
-	t.Cleanup(func() { waitGuard = guard })
+	setForTest(t, &waitGuard, netguard.New(netguard.AllowForTests(netip.MustParsePrefix("127.0.0.1/32"))))
 	return s
 }
 
@@ -118,9 +114,7 @@ func TestWaitForURLExactCode(t *testing.T) {
 
 // A timeout is no match: it does not hold 2xx, and holds not 2xx.
 func TestAURLTimeoutIsNoMatch(t *testing.T) {
-	timeout := urlTimeout
-	urlTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { urlTimeout = timeout })
+	setForTest(t, &urlTimeout, 200*time.Millisecond)
 	for _, not := range []bool{false, true} {
 		w := newWaitWorld(t)
 		s := newStatusServer(t, 200)

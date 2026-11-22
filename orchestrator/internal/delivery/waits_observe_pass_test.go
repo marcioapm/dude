@@ -2,7 +2,6 @@ package delivery
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -23,24 +22,23 @@ func (w *childWorld) openURLWaits(n int, u string, not bool) []string {
 		for range k {
 			conds = append(conds, map[string]any{"kind": condURL, "url": u, "where": "here/", "status": "2xx", "not": not})
 		}
-		raw, _ := json.Marshal(conds)
-		task := fmt.Sprintf("wi_pass%d", i)
-		w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
-			VALUES ($1, $2, 'prj_life', $3, 'T', 'G', 'running')`, task, w.org, 50+i)
-		w.exec(`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, wake_all, deadline_at, since_cursor, call_key)
-			VALUES ($1, $2, $3, 'run_parent', 3, $4::jsonb, false, now() + interval '1 hour', 0, $1)`, "cwt_"+task, w.org, task, raw)
-		ids = append(ids, "cwt_"+task)
+		ids = append(ids, w.openWaitOnNewTask(fmt.Sprintf("wi_pass%d", i), 50+i, false, conds))
 	}
 	return ids
+}
+
+// setForTest sets *v to x until the test ends.
+func setForTest[T any](t *testing.T, v *T, x T) {
+	old := *v
+	*v = x
+	t.Cleanup(func() { *v = old })
 }
 
 // 20 due URLs whose server never answers: one pass reads them all at once,
 // so it takes about one read's timeout, not twenty; each stores its own
 // timeout, once.
 func TestAPassReadsItsDueConditionsAtOnce(t *testing.T) {
-	timeout := urlTimeout
-	urlTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { urlTimeout = timeout })
+	setForTest(t, &urlTimeout, 300*time.Millisecond)
 	w := newWaitWorld(t)
 	s := newStatusServer(t, 200)
 	s.sleep.Store(int64(time.Minute))
@@ -89,9 +87,7 @@ func TestAReadThePassCutShortStoresNothing(t *testing.T) {
 			ctx := w.ctx
 			switch how {
 			case "deadline":
-				pass := waitObservePass
-				waitObservePass = 300 * time.Millisecond
-				t.Cleanup(func() { waitObservePass = pass })
+				setForTest(t, &waitObservePass, 300*time.Millisecond)
 			case "shutdown":
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(w.ctx)

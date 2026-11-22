@@ -34,26 +34,63 @@ func (w *childWorld) ageObservations(d time.Duration) {
 // obs is the stored observation of the wait's condition i, "" for none.
 func (w *childWorld) obs(id string, i int) string {
 	w.t.Helper()
-	var raw *string
-	if err := w.owner.QueryRow(w.ctx, `SELECT (conditions->$2::int->'obs')::text FROM conductor_waits WHERE id = $1`, id, i).Scan(&raw); err != nil {
-		w.t.Fatal(err)
-	}
-	if raw == nil {
-		return ""
-	}
-	return *raw
+	return w.textOrEmpty(`SELECT (conditions->$2::int->'obs')::text FROM conductor_waits WHERE id = $1`, id, i)
 }
 
 func (w *childWorld) obsField(id string, i int, field string) string {
 	w.t.Helper()
+	return w.textOrEmpty(`SELECT conditions->$2::int->'obs'->>$3 FROM conductor_waits WHERE id = $1`, id, i, field)
+}
+
+// textOrEmpty is the query's one text value, "" for NULL.
+func (w *childWorld) textOrEmpty(query string, args ...any) string {
+	w.t.Helper()
 	var v *string
-	if err := w.owner.QueryRow(w.ctx, `SELECT conditions->$2::int->'obs'->>$3 FROM conductor_waits WHERE id = $1`, id, i, field).Scan(&v); err != nil {
+	if err := w.owner.QueryRow(w.ctx, query, args...).Scan(&v); err != nil {
 		w.t.Fatal(err)
 	}
 	if v == nil {
 		return ""
 	}
 	return *v
+}
+
+// dueObservations is DueWaitObservationsTx in a system transaction.
+func (w *childWorld) dueObservations() ([]WaitObservation, error) {
+	var due []WaitObservation
+	err := w.s.DB.InSystem(w.ctx, "test", func(tx pgx.Tx) error {
+		var err error
+		due, err = DueWaitObservationsTx(w.ctx, tx)
+		return err
+	})
+	return due, err
+}
+
+// recordObservation is recordObservationTx in the org's transaction:
+// whether it wrote.
+func (w *childWorld) recordObservation(o WaitObservation, obs waitObs) bool {
+	w.t.Helper()
+	var wrote bool
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		var err error
+		wrote, err = recordObservationTx(w.ctx, tx, o, obs)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	return wrote
+}
+
+// openWaitOnNewTask adds a running task of the project and an open wait
+// of it, id "cwt_"+task, on the conditions; returns the wait's id.
+func (w *childWorld) openWaitOnNewTask(task string, number int, wakeAll bool, conds []map[string]any) string {
+	w.t.Helper()
+	raw, _ := json.Marshal(conds)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
+		VALUES ($1, $2, 'prj_life', $3, 'T', 'G', 'running')`, task, w.org, number)
+	w.exec(`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, wake_all, deadline_at, since_cursor, call_key)
+		VALUES ($1, $2, $3, 'run_parent', 3, $4::jsonb, $5, now() + interval '1 hour', 0, $1)`, "cwt_"+task, w.org, task, raw, wakeAll)
+	return "cwt_" + task
 }
 
 // A wait that ends between the observation's select and its write is not
@@ -63,23 +100,13 @@ func TestAnObservationIsNotWrittenToAnEndedWait(t *testing.T) {
 	w.exec(`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, wake_all, deadline_at, since_cursor, call_key)
 		VALUES ('cwt_obs', $1, 'wi_life', 'run_parent', 3, $2::jsonb, true, now() + interval '1 hour', 0, 'c1')`, w.org,
 		`[{"kind": "url", "url": "https://example.com/", "where": "example.com/", "status": "2xx"}]`)
-	var due []WaitObservation
-	if err := w.s.DB.InSystem(w.ctx, "test", func(tx pgx.Tx) error {
-		var err error
-		due, err = DueWaitObservationsTx(w.ctx, tx)
-		return err
-	}); err != nil || len(due) != 1 {
+	due, err := w.dueObservations()
+	if err != nil || len(due) != 1 {
 		t.Fatalf("%d due, %v", len(due), err)
 	}
 	w.exec(`UPDATE conductor_waits SET ended_at = now(), ended_by = 'replaced' WHERE id = 'cwt_obs'`)
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		wrote, err := recordObservationTx(w.ctx, tx, due[0], waitObs{Status: 200})
-		if wrote {
-			t.Error("wrote to an ended wait")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	if w.recordObservation(due[0], waitObs{Status: 200}) {
+		t.Error("wrote to an ended wait")
 	}
 	if w.obs("cwt_obs", 0) != "" {
 		t.Fatal("the ended wait's condition changed")
@@ -89,27 +116,15 @@ func TestAnObservationIsNotWrittenToAnEndedWait(t *testing.T) {
 	// Open, but the condition at the index is not the kind read: not written.
 	other := due[0]
 	other.cond.Kind = condPREnded
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		wrote, err := recordObservationTx(w.ctx, tx, other, waitObs{State: "merged"})
-		if wrote {
-			t.Error("wrote a reading of another kind")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	if w.recordObservation(other, waitObs{State: "merged"}) {
+		t.Error("wrote a reading of another kind")
 	}
 	if w.obs("cwt_obs", 0) != "" {
 		t.Fatalf("a reading of another kind changed the condition: %s", w.obs("cwt_obs", 0))
 	}
 	// Open, and the same kind: written.
-	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
-		wrote, err := recordObservationTx(w.ctx, tx, due[0], waitObs{Status: 200})
-		if !wrote {
-			t.Error("an open wait was not written")
-		}
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	if !w.recordObservation(due[0], waitObs{Status: 200}) {
+		t.Error("an open wait was not written")
 	}
 	if w.obsField("cwt_obs", 0, "status") != "200" || w.obsField("cwt_obs", 0, "at") == "" {
 		t.Fatalf("obs %s", w.obs("cwt_obs", 0))
@@ -126,21 +141,12 @@ func TestDueObservationsAreBoundedOldestFirst(t *testing.T) {
 			conds = append(conds, map[string]any{"kind": condURL, "url": "https://example.com/", "where": "example.com/", "status": "2xx",
 				"obs": map[string]any{"at": time.Now().Add(-time.Duration(10+10*i+j) * time.Minute).UTC()}})
 		}
-		raw, _ := json.Marshal(conds)
-		task := fmt.Sprintf("wi_obs%d", i)
-		w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status)
-			VALUES ($1, $2, 'prj_life', $3, 'T', 'G', 'running')`, task, w.org, 10+i)
-		w.exec(`INSERT INTO conductor_waits (id, organization_id, task_id, conductor_run_id, attempt, conditions, wake_all, deadline_at, since_cursor, call_key)
-			VALUES ($1, $2, $3, 'run_parent', 3, $4::jsonb, true, now() + interval '1 hour', 0, $1)`, "cwt_"+task, w.org, task, raw)
+		w.openWaitOnNewTask(fmt.Sprintf("wi_obs%d", i), 10+i, true, conds)
 	}
 	// The oldest readings are on an ended wait: never selected.
 	w.exec(`UPDATE conductor_waits SET ended_at = now(), ended_by = 'replaced' WHERE id = 'cwt_wi_obs3'`)
-	var due []WaitObservation
-	if err := w.s.DB.InSystem(w.ctx, "test", func(tx pgx.Tx) error {
-		var err error
-		due, err = DueWaitObservationsTx(w.ctx, tx)
-		return err
-	}); err != nil {
+	due, err := w.dueObservations()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(due) != waitObserveBatch || due[0].WaitID != "cwt_wi_obs2" || due[0].Index != 7 || due[waitObserveBatch-1].WaitID != "cwt_wi_obs0" {

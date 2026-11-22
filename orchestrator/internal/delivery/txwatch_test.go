@@ -20,7 +20,11 @@ type txWatch struct {
 
 func (w *childWorld) watchTxs() *txWatch { return &txWatch{w: w} }
 
+// see counts the open transactions now; a nil watch counts nothing.
 func (x *txWatch) see() {
+	if x == nil {
+		return
+	}
 	n, err := x.count()
 	x.mu.Lock()
 	defer x.mu.Unlock()

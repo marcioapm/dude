@@ -226,7 +226,8 @@ func TestAtMostThreeRedirects(t *testing.T) {
 		http.Redirect(w, r, srv.URL+r.URL.Path+"x", http.StatusFound)
 	}))
 	defer srv.Close()
-	// "/" → /x → /xx → /xxx: three redirects, then 200 at /xxxx's? No: /xxxx is a fourth.
+	// From "/": /x, /xx, /xxx, then /xxxx would be a fourth redirect. From
+	// "/x": three redirects reach /xxxx, which answers 200.
 	if _, err := local().Get(context.Background(), srv.URL+"/", 5*time.Second); err == nil {
 		t.Fatal("a fourth redirect was followed")
 	}

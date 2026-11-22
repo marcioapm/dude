@@ -39,9 +39,7 @@ func newFakePulls(t *testing.T) *fakePulls {
 			return
 		}
 		f.reads.Add(1)
-		if x := f.watch.Load(); x != nil {
-			x.see()
-		}
+		f.watch.Load().see()
 		f.mu.Lock()
 		p, ok := f.pulls[fmt.Sprintf("%s/%s#%d", owner, repo, n)]
 		f.mu.Unlock()
@@ -95,6 +93,12 @@ func (w *childWorld) waitForWithReads(f Forges, key string, ask WaitAsk) (WaitOp
 	return w.waitFor(key, ask)
 }
 
+// waitOnPR is waitForWithReads on the one prEnded condition.
+func (w *childWorld) waitOnPR(f Forges, key, pr, how, deadline string) (WaitOpened, error) {
+	w.t.Helper()
+	return w.waitForWithReads(f, key, WaitAsk{Conditions: []WaitCondition{prEndedCond(pr, how)}, Deadline: deadline})
+}
+
 // endPR moves pr_life the way dude's pull request sync does: its row's
 // state, with merged_at or closed_at set as it sets them (prs.go).
 func (w *childWorld) endPR(state string) {
@@ -123,7 +127,7 @@ func TestWaitForPREndedOnATrackedPullRequest(t *testing.T) {
 			// A GitHub that answers nothing: a tracked pull request is
 			// never read from it.
 			pulls := newFakePulls(t)
-			opened, err := w.waitForWithReads(pulls.forges(), "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond("test/repo#7", tc.how)}, Deadline: "1h"})
+			opened, err := w.waitOnPR(pulls.forges(), "c1", "test/repo#7", tc.how, "1h")
 			if err != nil || opened.Holds {
 				t.Fatalf("%+v, %v", opened, err)
 			}
@@ -145,7 +149,7 @@ func TestWaitForPREndedOnATrackedPullRequest(t *testing.T) {
 func TestWaitForPREndedResolvesNamesAgainstTheProject(t *testing.T) {
 	for _, name := range []string{"repo#7", "#7", "7", "test/repo#7"} {
 		w := newWaitWorld(t)
-		opened, err := w.waitForWithReads(nil, "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond(name, "merged")}, Deadline: "1h"})
+		opened, err := w.waitOnPR(nil, "c1", name, "merged", "1h")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -161,20 +165,20 @@ func TestWaitForPREndedUntrackedAtTheCall(t *testing.T) {
 	pulls.set("other/lib#41", openPull(41, "Still open"))
 
 	t.Run("already merged holds at once", func(t *testing.T) {
-		opened, err := w.waitForWithReads(pulls.forges(), "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#40", "merged")}, Deadline: "1h"})
+		opened, err := w.waitOnPR(pulls.forges(), "c1", "other/lib#40", "merged", "1h")
 		if err != nil || !opened.Holds || opened.WaitID != "" {
 			t.Fatalf("%+v, %v", opened, err)
 		}
 	})
 	t.Run("already merged is not closed", func(t *testing.T) {
-		opened, err := w.waitForWithReads(pulls.forges(), "c1b", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#40", "closed")}, Deadline: "1h"})
+		opened, err := w.waitOnPR(pulls.forges(), "c1b", "other/lib#40", "closed", "1h")
 		if err != nil || opened.Holds || opened.WaitID == "" {
 			t.Fatalf("%+v, %v", opened, err)
 		}
 	})
 	t.Run("GitHub cannot see it", func(t *testing.T) {
 		before := w.count("conductor_waits")
-		_, err := w.waitForWithReads(pulls.forges(), "c2", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#99", "")}, Deadline: "1h"})
+		_, err := w.waitOnPR(pulls.forges(), "c2", "other/lib#99", "", "1h")
 		want := fmt.Sprintf(rWaitPRUnread, "other/lib#99", "GitHub does not show it to this organisation's installation (not found)")
 		if !IsRefusal(err) || err.Error() != want {
 			t.Fatalf("%v, want %q", err, want)
@@ -185,7 +189,7 @@ func TestWaitForPREndedUntrackedAtTheCall(t *testing.T) {
 	})
 	t.Run("open opens a wait and spends one read", func(t *testing.T) {
 		reads := w.events(EvGitHubRead)
-		opened, err := w.waitForWithReads(pulls.forges(), "c3", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#41", "")}, Deadline: "1h"})
+		opened, err := w.waitOnPR(pulls.forges(), "c3", "other/lib#41", "", "1h")
 		if err != nil || opened.Holds || opened.WaitID == "" {
 			t.Fatalf("%+v, %v", opened, err)
 		}
@@ -202,7 +206,7 @@ func TestPREndedObservation(t *testing.T) {
 	w := newWaitWorld(t)
 	pulls := newFakePulls(t)
 	pulls.set("other/lib#41", openPull(41, "Still open"))
-	opened, err := w.waitForWithReads(pulls.forges(), "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#41", "merged")}, Deadline: "2h"})
+	opened, err := w.waitOnPR(pulls.forges(), "c1", "other/lib#41", "merged", "2h")
 	if err != nil || opened.WaitID == "" {
 		t.Fatalf("%+v, %v", opened, err)
 	}
@@ -258,7 +262,7 @@ func TestPREndedObservationWithTheBudgetSpent(t *testing.T) {
 	w := newWaitWorld(t)
 	pulls := newFakePulls(t)
 	pulls.set("other/lib#41", openPull(41, "Still open"))
-	opened, err := w.waitForWithReads(pulls.forges(), "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#41", "")}, Deadline: "2h"})
+	opened, err := w.waitOnPR(pulls.forges(), "c1", "other/lib#41", "", "2h")
 	if err != nil || opened.WaitID == "" {
 		t.Fatalf("%+v, %v", opened, err)
 	}
@@ -283,7 +287,7 @@ func TestWaitForPREndedUntrackedWithTheBudgetSpent(t *testing.T) {
 	pulls := newFakePulls(t)
 	pulls.set("other/lib#41", openPull(41, "Still open"))
 	w.spendBudget(GitHubReadsPerHour)
-	_, err := w.waitForWithReads(pulls.forges(), "c1", WaitAsk{Conditions: []WaitCondition{prEndedCond("other/lib#41", "")}, Deadline: "2h"})
+	_, err := w.waitOnPR(pulls.forges(), "c1", "other/lib#41", "", "2h")
 	if !IsRefusal(err) || err.Error() != fmt.Sprintf(rWaitPRBudget, "other/lib#41", GitHubReadsPerHour) || pulls.reads.Load() != 0 {
 		t.Fatalf("%v (%d reads)", err, pulls.reads.Load())
 	}
