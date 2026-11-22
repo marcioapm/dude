@@ -70,6 +70,24 @@ Say what you are waiting on, then end your turn: dude checks it in its own cycle
               "task"
             ],
             "additionalProperties": false
+          },
+          "prEnded": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "pr": {
+                "type": "string"
+              },
+              "how": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pr"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

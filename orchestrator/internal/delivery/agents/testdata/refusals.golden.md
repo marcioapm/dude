@@ -1480,7 +1480,7 @@ the note is at most %d characters
 
 ## refusals/delivery/waits/one-kind-per-condition
 
-each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after or siblingTask
+each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask or prEnded
 
 ## refusals/delivery/waits/runs-count
 
@@ -1869,4 +1869,24 @@ siblingTask names this task: only another task in the same epic is waited on
 ## refusals/delivery/waits/sibling-not-on-this-epic
 
 %s is not on this task's epic: only a task in the same epic is waited on
+
+## refusals/delivery/waits/pr-budget
+
+dude cannot read %s now: this task's GitHub reads (%d an hour) are spent; wait on it once they come back
+
+## refusals/delivery/waits/pr-how-unknown
+
+how %q is not merged, closed or any
+
+## refusals/delivery/waits/pr-repo-ambiguous
+
+%s could be a pull request of more than one of this project's repositories: name it as repo#123 or owner/repo#123
+
+## refusals/delivery/waits/pr-repo-unknown
+
+%s names no repository of this task's project: name another repository's pull request as owner/repo#123
+
+## refusals/delivery/waits/pr-unread
+
+dude cannot wait on %s: %s
 

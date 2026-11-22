@@ -20,6 +20,13 @@
 {{- else if eq .Became "closed"}} was closed at {{.At}} UTC
 {{- else}} moved to {{.Became}} at {{.At}} UTC
 {{- end}}
+{{- else if eq .Kind "prEnded"}}{{.PR}}{{with .Title}} {{.}}{{end}}
+{{- if .Ended}} was {{.State}}{{if and (eq .State "merged") .By}} by {{.By}}{{end}}{{with .At}} at {{.}} UTC{{end}}
+{{- else if eq .Error "budget"}} not read: GitHub read budget spent{{with .Read}} (at {{.}} UTC){{end}}
+{{- else if .Error}} not read ({{.Error}}){{with .Read}} at {{.}} UTC{{end}}
+{{- else if or (eq .State "merged") (eq .State "closed")}} was {{.State}}{{with .At}} at {{.}} UTC{{end}}, not {{.How}} as waited on
+{{- else}} open{{with .Read}}, last read {{.}} UTC{{end}}
+{{- end}}
 {{- else if eq .Kind "after"}}{{.After}} {{if .Ended}}elapsed (since {{.Since}} UTC){{else}}not elapsed (until {{.Until}} UTC){{end}}
 {{- else if eq .State "merged"}}{{.PR}} was merged
 {{- else if eq .State "closed"}}{{.PR}} was closed

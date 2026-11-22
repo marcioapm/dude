@@ -616,6 +616,9 @@ type ghPull struct {
 	} `json:"requested_teams"`
 	// The pull request's author.
 	User *ghUser `json:"user"`
+	// When it closed (merged or not) and who merged it; null until then.
+	ClosedAt *string `json:"closed_at"`
+	MergedBy *ghUser `json:"merged_by"`
 }
 
 type ghUser struct {
@@ -692,6 +695,39 @@ func (g *GitHub) OpenPullRequest(ctx context.Context, in OpenPullRequest) (PullR
 		"title": in.Title, "body": in.Body, "head": in.Head, "base": in.Base, "draft": in.Draft,
 	}, &p)
 	return p.ref(), err
+}
+
+// PullRequestEnd is whether a pull request ended, as one read of it says:
+// its state (StateOpen, StateDraft, StateMerged, StateClosed), its title,
+// who merged it and when it merged or closed, when GitHub says.
+type PullRequestEnd struct {
+	State, Title, MergedBy string
+	MergedAt, ClosedAt     *time.Time
+}
+
+// PullRequestEnded reads a pull request once (GET /pulls/N, no checks or
+// reviews): whether, how, by whom and when it ended.
+func (g *GitHub) PullRequestEnded(ctx context.Context, slug string, number int) (PullRequestEnd, error) {
+	var p ghPull
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d", slug, number), nil, &p); err != nil {
+		return PullRequestEnd{}, err
+	}
+	end := PullRequestEnd{State: p.ref().State, Title: p.Title}
+	if p.MergedBy != nil {
+		end.MergedBy = p.MergedBy.Login
+	}
+	at := func(s *string) *time.Time {
+		if s == nil {
+			return nil
+		}
+		t, err := time.Parse(time.RFC3339, *s)
+		if err != nil {
+			return nil
+		}
+		return &t
+	}
+	end.MergedAt, end.ClosedAt = at(p.MergedAt), at(p.ClosedAt)
+	return end, nil
 }
 
 // PullRequest reads a pull request as a person sees it on GitHub: its

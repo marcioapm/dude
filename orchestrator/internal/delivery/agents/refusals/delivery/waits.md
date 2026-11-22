@@ -10,7 +10,7 @@
 
 {{- define "refusals/delivery/waits/too-many-conditions"}}at most %d conditions to a wait{{end}}
 
-{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after or siblingTask{{end}}
+{{- define "refusals/delivery/waits/one-kind-per-condition"}}each condition is exactly one of runsEnded, prChecksFinal, workflowEnded, after, siblingTask or prEnded{{end}}
 
 {{- define "refusals/delivery/waits/runs-count"}}runsEnded names 1 to %d Runs{{end}}
 
@@ -37,3 +37,14 @@
 {{- define "refusals/delivery/waits/sibling-not-on-this-epic"}}%s is not on this task's epic: only a task in the same epic is waited on{{end}}
 
 {{- define "refusals/delivery/waits/sibling-becomes-unknown"}}becomes %q is not one of %s; leave becomes out for any change{{end}}
+
+{{- define "refusals/delivery/waits/pr-how-unknown"}}how %q is not merged, closed or any{{end}}
+
+{{- define "refusals/delivery/waits/pr-repo-unknown"}}%s names no repository of this task's project: name another repository's pull request as owner/repo#123{{end}}
+
+{{- define "refusals/delivery/waits/pr-repo-ambiguous"}}%s could be a pull request of more than one of this project's repositories: name it as repo#123 or owner/repo#123{{end}}
+
+{{- define "refusals/delivery/waits/pr-unread"}}dude cannot wait on %s: %s{{end}}
+
+{{- define "refusals/delivery/waits/pr-budget"}}dude cannot read %s now: this task's GitHub reads (%d an hour) are spent; wait on it once they come back{{end}}
+

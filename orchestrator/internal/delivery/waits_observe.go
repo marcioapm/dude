@@ -135,6 +135,15 @@ func ObserveWaits(ctx context.Context, d *db.DB, forges Forges) (int, error) {
 // kind that is not read.
 func observe(ctx context.Context, d *db.DB, forges Forges, o WaitObservation) (waitObs, bool, error) {
 	switch o.cond.Kind {
+	case condPREnded:
+		read, err := reservePRReadTx(ctx, d, o)
+		if err != nil {
+			return waitObs{}, false, err
+		}
+		if !read {
+			return waitObs{Error: obsBudget}, true, nil
+		}
+		return observePR(ctx, forges, o), true, nil
 	}
 	return waitObs{}, false, nil
 }

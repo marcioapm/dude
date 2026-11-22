@@ -76,7 +76,25 @@ type WaitCondition struct {
 	// Another task on this task's epic changing: its status moving, or it
 	// being stopped or closed.
 	SiblingTask *SiblingTaskAsk `json:"siblingTask,omitempty"`
+	// Any pull request the organisation's GitHub can read being merged or
+	// closed.
+	PREnded *PREndedAsk `json:"prEnded,omitempty"`
 }
+
+// PREndedAsk names a pull request (owner/repo#123, repo#123 or #123 in this
+// task's project) and how it is waited on to end: merged, closed (without
+// merging) or any (the default).
+type PREndedAsk struct {
+	PR  string `json:"pr"`
+	How string `json:"how,omitempty"`
+}
+
+// How a pull request is waited on to end.
+const (
+	PREndedMerged = "merged"
+	PREndedClosed = "closed"
+	PREndedAny    = "any"
+)
 
 // SiblingTaskAsk names a task on this task's epic (its key or id) and what
 // it is waited on to become (SiblingBecomes); none for any change.
@@ -124,6 +142,10 @@ type WaitAsk struct {
 	Note     string
 	// The tool call's id: a retried call is the same wait.
 	CallKey string
+	// The reads of pull requests dude does not track that prEnded
+	// conditions name, made before the call's transaction
+	// (PrereadWaitPRs), by prReadKey.
+	PRReads map[string]PRRead
 }
 
 // WaitOpened is what a wait_for call did: opened (or found, for a retried
@@ -161,13 +183,18 @@ type waitCond struct {
 	TaskKey string   `json:"taskKey,omitempty"`
 	Becomes []string `json:"becomes,omitempty"`
 	Pinned  string   `json:"pinned,omitempty"`
+	// pr_ended: how it is waited on to end, and its name (owner/repo#N).
+	// One dude tracks is its pull_requests row (PR); any other is its
+	// repository (Slug) and Number, its Title as read at the call, and
+	// what the last read of it saw (Obs).
+	How    string `json:"how,omitempty"`
+	Slug   string `json:"slug,omitempty"`
+	Number int    `json:"number,omitempty"`
+	Title  string `json:"title,omitempty"`
 	// An observation (pr_ended untracked, url): the last read, which the
 	// sweep's ObserveWaits makes outside any evaluation and the evaluation
 	// reads from here.
 	Obs *waitObs `json:"obs,omitempty"`
-	// pr_ended: an untracked pull request's repository (owner/repo); one
-	// with none is tracked, read from its row, and never observed.
-	Slug string `json:"slug,omitempty"`
 }
 
 // waitObs is one read of a condition outside dude (ObserveWaits), at At by
@@ -258,9 +285,26 @@ func OpenConductorWaitTx(ctx context.Context, tx pgx.Tx, ref RunRef, ask WaitAsk
 	if utf8.RuneCountInString(ask.Note) > WaitNoteMax {
 		return out, refusef(rWaitNoteTooLong, WaitNoteMax)
 	}
-	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, deadline.Sub(now), ask.Conditions)
+	conds, err := normalizeWaitTx(ctx, tx, ref.TaskID, deadline.Sub(now), ask.Conditions, ask.PRReads)
 	if err != nil {
 		return out, err
+	}
+	// The reads made for it (PrereadWaitPRs) spend the task's GitHub
+	// reads, counted under the budget's lock.
+	locked := false
+	for _, c := range conds {
+		if c.Kind != condPREnded || c.Slug == "" {
+			continue
+		}
+		if !locked {
+			if err := LockGitHubReadsTx(ctx, tx, "task:"+ref.TaskID); err != nil {
+				return out, err
+			}
+			locked = true
+		}
+		if err := spendGitHubRead(ctx, tx, ref.Event, c, ""); err != nil {
+			return out, err
+		}
 	}
 	// The org's ledger cursor at the call (since_cursor): a sibling task's
 	// events count after it, and only those.
@@ -325,14 +369,14 @@ func decisionWaitingTx(ctx context.Context, tx pgx.Tx, taskID string) (string, e
 // reads them: Runs of this task, a pull request of this task by its row,
 // its head pinned, a time as when it comes (before the deadline, ahead of
 // the call).
-func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.Duration, in []WaitCondition) ([]waitCond, error) {
+func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.Duration, in []WaitCondition, reads map[string]PRRead) ([]waitCond, error) {
 	if len(in) > WaitMaxConditions {
 		return nil, refusef(rWaitTooManyConditions, WaitMaxConditions)
 	}
 	out := make([]waitCond, 0, len(in))
 	for _, c := range in {
 		kinds := 0
-		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != "", c.SiblingTask != nil} {
+		for _, set := range []bool{c.RunsEnded != nil, c.PRChecksFinal != nil, c.WorkflowEnded != "", c.After != "", c.SiblingTask != nil, c.PREnded != nil} {
 			if set {
 				kinds++
 			}
@@ -340,6 +384,12 @@ func normalizeWaitTx(ctx context.Context, tx pgx.Tx, taskID string, ahead time.D
 		switch {
 		case kinds != 1:
 			return nil, refuseText(rWaitOneKindPerCondition)
+		case c.PREnded != nil:
+			pc, err := prEndedCondTx(ctx, tx, taskID, *c.PREnded, reads)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, pc)
 		case c.SiblingTask != nil:
 			sc, err := siblingCondTx(ctx, tx, taskID, *c.SiblingTask)
 			if err != nil {
@@ -510,7 +560,12 @@ type waitItem struct {
 	// what it is waited on to become.
 	TaskKey, Title, Became, At string
 	Becomes                    []string
-	rank                       int
+	// A pull request ending (Kind "prEnded"): PR, Title and State, as
+	// above; who merged it (By) and when it ended (At); how it is waited on
+	// (How); when it was last read (Read, HH:MM UTC, "" for one dude
+	// tracks) and why it was not (Error).
+	How, By, Read string
+	rank          int
 }
 
 // waitEval is a wait's conditions as they read now.
@@ -570,6 +625,13 @@ func evaluateConditionsTx(ctx context.Context, tx pgx.Tx, conds []waitCond, all 
 			ev.items = append(ev.items, it)
 		case condSiblingTask:
 			it, err := siblingItemTx(ctx, tx, c, since)
+			if err != nil {
+				return ev, err
+			}
+			held = it.Ended
+			ev.items = append(ev.items, it)
+		case condPREnded:
+			it, err := prEndedItemTx(ctx, tx, c)
 			if err != nil {
 				return ev, err
 			}

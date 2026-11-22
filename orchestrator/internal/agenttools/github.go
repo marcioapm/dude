@@ -33,13 +33,13 @@ import (
 // external text (delivery.ExternalText), within the byte caps below.
 
 // EvGitHubRead is one read an agent's tool made on GitHub.
-const EvGitHubRead = "github.read"
+const EvGitHubRead = delivery.EvGitHubRead
 
 // Bounds of one read. A body, comment or review's text and a file's diff
 // are cut to their cap, and the whole result to resultCap; each cut says
 // "…cut".
 const (
-	githubReadsPerHour = 60
+	githubReadsPerHour = delivery.GitHubReadsPerHour
 	textCap            = 8 << 10
 	diffCap            = 16 << 10
 	resultCap          = 64 << 10
@@ -177,12 +177,12 @@ func readableRepos(ctx context.Context, tx pgx.Tx, c Caller) ([]string, error) {
 
 // A session's and a task's GitHub reads in the last hour: the GitHub read
 // tools' and refresh_pull_requests' attempts (a refresh records one per pull
-// request it syncs). The scope and time are served by the tool-agnostic
+// request it syncs), and a conductor's waits' reads of a pull request
+// (delivery.GitHubReadsInHour). The scope and time are served by the tool-agnostic
 // partial indexes of counted attempts (migrations 197-199); the tool list
 // is a filter over those few rows, so a new read tool needs no index.
 const (
-	githubReadsInHour = ` AND event_type = 'agent.tool.attempted' AND payload->>'tool' IN ('github_search', 'github_issue', 'github_pull_request', 'github_check_log', 'github_run_jobs', 'github_branch_runs', 'refresh_pull_requests', 'pull_requests')
-		AND occurred_at > now() - interval '1 hour'`
+	githubReadsInHour    = delivery.GitHubReadsInHour
 	githubReadsBySession = `SELECT count(*) FROM events WHERE session_id = $1` + githubReadsInHour
 	githubReadsByTask    = `SELECT count(*) FROM events WHERE task_id = $1` + githubReadsInHour
 	// `payload ? 'automationId'` is 199's index predicate, which the
@@ -224,7 +224,7 @@ func checkGitHubRead(ctx context.Context, tx pgx.Tx, c Caller, read githubRead) 
 // c's budget shares than are left, under its lock until tx ends.
 func checkGitHubBudget(ctx context.Context, tx pgx.Tx, c Caller, need int) error {
 	key := githubReadKey(c)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('github_reads:' || $1))`, key); err != nil {
+	if err := delivery.LockGitHubReadsTx(ctx, tx, key); err != nil {
 		return err
 	}
 	reads, err := githubReadsThisHour(ctx, tx, c)

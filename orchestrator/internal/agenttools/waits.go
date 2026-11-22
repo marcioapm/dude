@@ -2,6 +2,7 @@ package agenttools
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,12 +28,26 @@ type waitForOut struct {
 	Next   string `json:"next"`
 }
 
+// prereadWaitPRs is wait_for's step before its transaction: each pull
+// request a prEnded condition names that dude does not track is read once
+// from GitHub, with no transaction open (delivery.PrereadWaitPRs); the
+// call's transaction checks and records those reads.
+func prereadWaitPRs(ctx context.Context, c Caller, args json.RawMessage) any {
+	var in waitForIn
+	if json.Unmarshal(args, &in) != nil || c.env.db == nil {
+		return nil
+	}
+	return delivery.PrereadWaitPRs(ctx, c.env.db, c.env.forges, c.run(), in.Conditions)
+}
+
 // waitFor is wait_for (capabilities.Wait): the conductor says what it waits
 // on (delivery.OpenConductorWaitTx), keyed by the tool call so a retried
 // call is the same wait.
 func waitFor(ctx context.Context, tx pgx.Tx, c Caller, in waitForIn) (waitForOut, error) {
+	reads, _ := c.env.prepared.(map[string]delivery.PRRead)
 	opened, err := conducted(delivery.OpenConductorWaitTx(ctx, tx, c.run(), delivery.WaitAsk{
-		Conditions: in.Conditions, Wake: in.Wake, Deadline: in.Deadline, Note: in.Note, CallKey: "tool:" + c.CallID}))
+		Conditions: in.Conditions, Wake: in.Wake, Deadline: in.Deadline, Note: in.Note, CallKey: "tool:" + c.CallID,
+		PRReads: reads}))
 	if err != nil {
 		return waitForOut{}, err
 	}

@@ -50,7 +50,7 @@ const EventType = "agent.tool.dude"
 // AttemptEventType is the ledger event for a call of a countingAttempts
 // tool that passed its checks, written before its outside work; its
 // result's EventType event is marked attempted and not counted again.
-const AttemptEventType = "agent.tool.attempted"
+const AttemptEventType = delivery.EvToolAttempted
 
 // githubReader is a checked call spending more than one GitHub read: its
 // attempt is recorded once per read, which the hourly count counts.
