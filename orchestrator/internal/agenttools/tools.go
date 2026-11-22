@@ -60,7 +60,7 @@ var tools = []tool{
 	define("restart_run", restartRun),
 	define("stop_run", stopRun),
 	define("recover_run", recoverRun),
-	define("wait_for", waitFor),
+	define("wait_for", waitFor).before(prereadWaitPRs),
 	define("decide", decide),
 	define("dismiss_finding", dismissFinding),
 	define("answer_review_question", answerReviewQuestion),

@@ -279,6 +279,13 @@ rWaitSiblingNotFound                   refusals/delivery/waits/sibling-not-found
 rWaitSiblingIsThisTask                 refusals/delivery/waits/sibling-is-this-task
 rWaitSiblingNotOnThisEpic              refusals/delivery/waits/sibling-not-on-this-epic
 rWaitSiblingBecomesUnknown             refusals/delivery/waits/sibling-becomes-unknown
+rWaitPRHowUnknown                       refusals/delivery/waits/pr-how-unknown
+rWaitPRRepoUnknown                      refusals/delivery/waits/pr-repo-unknown
+rWaitPRRepoAmbiguous                    refusals/delivery/waits/pr-repo-ambiguous
+rWaitPRUnread                           refusals/delivery/waits/pr-unread
+rWaitPRBudget                           refusals/delivery/waits/pr-budget
+rWaitURLStatusUnknown                   refusals/delivery/waits/url-status-unknown
+rWaitURLRefused                         refusals/delivery/waits/url-refused
 rReviewOnlyNoWriter                     refusals/delivery/review-only/no-writer
 rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
 rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds
