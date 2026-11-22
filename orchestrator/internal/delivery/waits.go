@@ -161,6 +161,27 @@ type waitCond struct {
 	TaskKey string   `json:"taskKey,omitempty"`
 	Becomes []string `json:"becomes,omitempty"`
 	Pinned  string   `json:"pinned,omitempty"`
+	// An observation (pr_ended untracked, url): the last read, which the
+	// sweep's ObserveWaits makes outside any evaluation and the evaluation
+	// reads from here.
+	Obs *waitObs `json:"obs,omitempty"`
+	// pr_ended: an untracked pull request's repository (owner/repo); one
+	// with none is tracked, read from its row, and never observed.
+	Slug string `json:"slug,omitempty"`
+}
+
+// waitObs is one read of a condition outside dude (ObserveWaits), at At by
+// Postgres's clock. A pull request: its state, who merged it and when it
+// ended. A URL: its final response's status; nothing of the URL itself
+// (its query may hold a token). Error is why there is no reading: "budget"
+// (the task's GitHub reads are spent), "refused address", "timeout", ...
+type waitObs struct {
+	At       time.Time  `json:"at"`
+	State    string     `json:"state,omitempty"`
+	MergedBy string     `json:"merged_by,omitempty"`
+	EndedAt  *time.Time `json:"ended_at,omitempty"`
+	Status   int        `json:"status,omitempty"`
+	Error    string     `json:"error,omitempty"`
 }
 
 const (
@@ -169,6 +190,8 @@ const (
 	condWorkflowEnded = "workflow_ended"
 	condAfter         = "after"
 	condSiblingTask   = "sibling_task"
+	condPREnded       = "pr_ended"
+	condURL           = "url"
 )
 
 // parseWaitDeadline reads a deadline: a Go duration, or an RFC 3339 time,

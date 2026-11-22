@@ -927,6 +927,11 @@ func (s *Syncer) beforeDue(ctx context.Context) error {
 	// Before the wakes too: a wait that holds joins the note due with it.
 	if p.waits || ran {
 		ran = true
+		// What its conditions on things outside dude read first, so the
+		// evaluation reads that from the database alone.
+		if err := s.observeWaits(ctx); err != nil {
+			s.Log.Warn("observing conductors' waits failed", "error", err)
+		}
 		if err := s.evaluateWaits(ctx); err != nil {
 			s.Log.Warn("evaluating conductors' waits failed", "error", err)
 		}
@@ -1483,6 +1488,15 @@ func (s *Syncer) handOverQuestions(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// observeWaits reads what open waits' conditions on things outside dude
+// are due to read — a pull request dude does not track, a URL — each with
+// no transaction open, and stores each reading on its condition
+// (delivery.ObserveWaits), before evaluateWaits reads them.
+func (s *Syncer) observeWaits(ctx context.Context) error {
+	_, err := delivery.ObserveWaits(ctx, s.DB, s.Forges)
+	return err
 }
 
 // evaluateWaits evaluates conductors' open waits, nearest deadline first,
