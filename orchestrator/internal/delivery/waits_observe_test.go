@@ -86,6 +86,22 @@ func TestAnObservationIsNotWrittenToAnEndedWait(t *testing.T) {
 	}
 	// Open, it is written.
 	w.exec(`UPDATE conductor_waits SET ended_at = NULL, ended_by = NULL WHERE id = 'cwt_obs'`)
+	// Open, but the condition at the index is not the kind read: not written.
+	other := due[0]
+	other.cond.Kind = condPREnded
+	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
+		wrote, err := recordObservationTx(w.ctx, tx, other, waitObs{State: "merged"})
+		if wrote {
+			t.Error("wrote a reading of another kind")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w.obs("cwt_obs", 0) != "" {
+		t.Fatalf("a reading of another kind changed the condition: %s", w.obs("cwt_obs", 0))
+	}
+	// Open, and the same kind: written.
 	if err := w.s.DB.InOrg(w.ctx, w.org, func(tx pgx.Tx) error {
 		wrote, err := recordObservationTx(w.ctx, tx, due[0], waitObs{Status: 200})
 		if !wrote {

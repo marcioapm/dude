@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -200,9 +201,19 @@ func TestWaitForSiblingTaskOverTheTool(t *testing.T) {
 // once before the call's transaction, counted as one GitHub read of the
 // task; one GitHub cannot see is refused, writing nothing.
 func TestWaitForPREndedOverTheTool(t *testing.T) {
+	// While GitHub answers the pre-read, no transaction is open: counted
+	// from a connection of its own, as chat's notices test does.
+	var openTxs func() (int, error)
+	var watched, open atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/other/lib/pulls/41":
+			n, err := openTxs()
+			if err != nil {
+				n = 1
+			}
+			watched.Add(1)
+			open.Add(int32(n))
 			_, _ = w.Write([]byte(`{"number":41,"state":"open","title":"Bump","head":{"sha":"abc"}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -211,6 +222,17 @@ func TestWaitForPREndedOverTheTool(t *testing.T) {
 	}))
 	defer srv.Close()
 	f := setupWith(t, &agenttools.Server{Forges: forgesOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: "ghp", APIBaseURL: srv.URL})}})
+	openTxs = func() (int, error) {
+		conn, err := pgx.Connect(context.Background(), f.owner.Config().ConnString())
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		var n int
+		err = conn.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+			AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`).Scan(&n)
+		return n, err
+	}
 	token := f.conductor(t)
 	var out map[string]any
 	if status := f.postAs(t, token, "wait_for", `{"deadline":"1h","conditions":[{"prEnded":{"pr":"other/lib#99"}}]}`, &out); status != 422 {
@@ -226,5 +248,8 @@ func TestWaitForPREndedOverTheTool(t *testing.T) {
 	}
 	if n := f.count(t, `SELECT count(*) FROM events WHERE event_type = 'github.read' AND payload->>'tool' = 'wait_for' AND payload->>'repo' = 'other/lib'`); n != 1 {
 		t.Fatalf("%d github.read events", n)
+	}
+	if watched.Load() == 0 || open.Load() != 0 {
+		t.Fatalf("%d transactions open over %d pre-reads of the pull request", open.Load(), watched.Load())
 	}
 }

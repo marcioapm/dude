@@ -198,15 +198,7 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 // pinned (DialContext), no proxy, no cookies, at most MaxRedirects
 // redirects, each checked before it is followed, and timeout overall.
 func (g *Guard) Client(timeout time.Duration) *http.Client {
-	tr := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           g.DialContext,
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		DisableKeepAlives:     true,
-	}
-	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	return &http.Client{Transport: g.transport(timeout), Timeout: timeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		// net/http set Referer to the previous URL, query included (it may
 		// hold a token): never send it on.
 		req.Header.Del("Referer")
@@ -221,6 +213,19 @@ func (g *Guard) Client(timeout time.Duration) *http.Client {
 		}
 		return nil
 	}}
+}
+
+// transport is a Client's: every dial through DialContext, no proxy
+// (never the environment's), no connection kept.
+func (g *Guard) transport(timeout time.Duration) *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           g.DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		DisableKeepAlives:     true,
+	}
 }
 
 // UserAgent is what a Get says it is.

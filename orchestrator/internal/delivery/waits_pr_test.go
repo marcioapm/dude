@@ -25,6 +25,8 @@ type fakePulls struct {
 	pulls map[string]map[string]any
 	reads atomic.Int32
 	srv   *httptest.Server
+	// When set, what transactions are open during each read.
+	watch atomic.Pointer[txWatch]
 }
 
 func newFakePulls(t *testing.T) *fakePulls {
@@ -37,6 +39,9 @@ func newFakePulls(t *testing.T) *fakePulls {
 			return
 		}
 		f.reads.Add(1)
+		if x := f.watch.Load(); x != nil {
+			x.see()
+		}
 		f.mu.Lock()
 		p, ok := f.pulls[fmt.Sprintf("%s/%s#%d", owner, repo, n)]
 		f.mu.Unlock()
@@ -214,9 +219,13 @@ func TestPREndedObservation(t *testing.T) {
 	}
 	w.ageObservations(time.Minute)
 	spent := w.events(EvGitHubRead)
+	watch := w.watchTxs()
+	pulls.watch.Store(watch)
 	if n := w.observe(pulls.forges()); n != 1 || pulls.reads.Load() != read+1 {
 		t.Fatalf("at 5 minutes: %d stored, %d reads", n, pulls.reads.Load()-read)
 	}
+	pulls.watch.Store(nil)
+	watch.mustSeeNone("the observation's read of the pull request")
 	if w.events(EvGitHubRead) != spent+1 {
 		t.Fatal("the observation's read was not counted")
 	}

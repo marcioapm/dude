@@ -254,7 +254,73 @@ func TestATimeoutIsAnError(t *testing.T) {
 	}
 }
 
+// smallBuffers is a listener whose connections send through a small
+// socket buffer, so what a server wrote is close to what was read.
+type smallBuffers struct{ net.Listener }
+
+func (l smallBuffers) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteBuffer(16 << 10)
+	}
+	return c, err
+}
+
+// A body that never ends: Get reads BodyMax of it, closes the connection
+// and returns the status at once, long before its timeout; the server is
+// stopped after about BodyMax and the sockets' buffers.
+func TestABodyIsReadToBodyMaxOnly(t *testing.T) {
+	var written atomic.Int64
+	done := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(done)
+		w.WriteHeader(http.StatusOK)
+		chunk := make([]byte, 4<<10)
+		for {
+			n, err := w.Write(chunk)
+			written.Add(int64(n))
+			if err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			if written.Load() > 1<<30 {
+				return
+			}
+		}
+	}))
+	srv.Listener = smallBuffers{srv.Listener}
+	srv.Start()
+	defer srv.Close()
+	start := time.Now()
+	status, err := local().Get(context.Background(), srv.URL, 10*time.Second)
+	took := time.Since(start)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("status %d, %v", status, err)
+	}
+	if took > 2*time.Second {
+		t.Fatalf("Get took %s on an endless body", took)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server was never stopped writing")
+	}
+	const slack = 1 << 20 // the sockets' buffers, both ends, on loopback
+	t.Logf("the server wrote %d bytes (BodyMax %d)", written.Load(), BodyMax)
+	if written.Load() > BodyMax+slack {
+		t.Fatalf("the server wrote %d bytes, BodyMax is %d", written.Load(), BodyMax)
+	}
+}
+
 func TestNoProxy(t *testing.T) {
+	// The transport itself: http.ProxyFromEnvironment reads the environment
+	// once a process, so the request below alone could pass with it.
+	if tr := local().transport(time.Second); tr.Proxy != nil {
+		t.Fatal("the transport has a proxy")
+	}
+	if c := local().Client(time.Second); c.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("the client's transport has a proxy")
+	}
 	t.Setenv("HTTP_PROXY", "http://10.0.0.1:3128")
 	t.Setenv("HTTPS_PROXY", "http://10.0.0.1:3128")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

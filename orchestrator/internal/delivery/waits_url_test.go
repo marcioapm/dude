@@ -26,6 +26,8 @@ type statusServer struct {
 	sleep  atomic.Int64
 	hits   atomic.Int32
 	srv    *httptest.Server
+	// When set, what transactions are open during each request.
+	watch atomic.Pointer[txWatch]
 }
 
 func newStatusServer(t *testing.T, status int) *statusServer {
@@ -33,6 +35,9 @@ func newStatusServer(t *testing.T, status int) *statusServer {
 	s.status.Store(int32(status))
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.hits.Add(1)
+		if x := s.watch.Load(); x != nil {
+			x.see()
+		}
 		if d := time.Duration(s.sleep.Load()); d > 0 {
 			select {
 			case <-time.After(d):
@@ -61,7 +66,10 @@ func TestWaitForURL2xxHolds(t *testing.T) {
 		t.Fatal("wait_for fetched the URL")
 	}
 	w.mustStillWait(opened.WaitID, "not read yet")
+	watch := w.watchTxs()
+	s.watch.Store(watch)
 	w.observe(nil)
+	watch.mustSeeNone("the observation's read of the URL")
 	w.mustHold(opened.WaitID, "204 is 2xx")
 }
 
