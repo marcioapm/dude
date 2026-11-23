@@ -418,18 +418,14 @@ func withBuilderRoleLock(ctx context.Context, fn func(admin *pgx.Conn) error) er
 // alterBuilderRole sets dude_builder's password, retrying XX000 ("tuple
 // concurrently updated") for writers outside withBuilderRoleLock.
 func alterBuilderRole(ctx context.Context, admin *pgx.Conn, password string) error {
-	var err error
-	for retry := 0; retry <= 3; retry++ {
-		if retry > 0 {
-			time.Sleep(time.Duration(retry) * 50 * time.Millisecond)
-		}
-		_, err = admin.Exec(ctx, "ALTER ROLE dude_builder PASSWORD '"+password+"'")
+	for attempt := 1; ; attempt++ {
+		_, err := admin.Exec(ctx, "ALTER ROLE dude_builder PASSWORD '"+password+"'")
 		var pg *pgconn.PgError
-		if !errors.As(err, &pg) || pg.Code != "XX000" {
-			break
+		if attempt > 3 || !errors.As(err, &pg) || pg.Code != "XX000" {
+			return err
 		}
+		time.Sleep(time.Duration(attempt) * 50 * time.Millisecond)
 	}
-	return err
 }
 
 // refusedLogin is whether the server refused err's login.
