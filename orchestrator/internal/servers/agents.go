@@ -33,20 +33,13 @@ func (a AgentPreviews) StartPreview(ctx context.Context, org, taskID, actor stri
 			return agenttools.Preview{}, agentError(err)
 		}
 	}
-	out := agenttools.Preview{ID: view.Run.ID, State: view.Run.State, Servers: []agenttools.PreviewServer{}}
-	if view.Run.Branch != nil {
-		out.Branch = *view.Run.Branch
-	}
+	out := agenttools.Preview{ID: view.Run.ID, State: view.Run.State, Branch: deref(view.Run.Branch), Servers: []agenttools.PreviewServer{}}
 	for _, sv := range view.Servers {
 		var raw struct {
 			URL *string `json:"url"`
 		}
 		_ = json.Unmarshal(sv.Raw, &raw)
-		ps := agenttools.PreviewServer{Name: sv.Name, State: sv.State}
-		if raw.URL != nil {
-			ps.URL = *raw.URL
-		}
-		out.Servers = append(out.Servers, ps)
+		out.Servers = append(out.Servers, agenttools.PreviewServer{Name: sv.Name, URL: deref(raw.URL), State: sv.State})
 	}
 	return out, nil
 }
@@ -59,11 +52,7 @@ func (a AgentPreviews) StartBranchPreview(ctx context.Context, gh *forge.GitHub,
 	}
 	out := agenttools.Preview{ID: b.ID, State: b.Status, Branch: b.Branch, Servers: []agenttools.PreviewServer{}}
 	for _, sv := range b.Servers {
-		ps := agenttools.PreviewServer{Name: sv.Name}
-		if sv.URL != nil {
-			ps.URL = *sv.URL
-		}
-		out.Servers = append(out.Servers, ps)
+		out.Servers = append(out.Servers, agenttools.PreviewServer{Name: sv.Name, URL: deref(sv.URL)})
 	}
 	return out, nil
 }
