@@ -379,9 +379,9 @@ func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	ctx := context.Background()
 	url := fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database)
 	b, err := db.Open(ctx, url)
-	if err != nil && refusedLogin(err) {
+	if refusedLogin(err) {
 		err = withBuilderRoleLock(ctx, func(admin *pgx.Conn) error {
-			if b, err = db.Open(ctx, url); err == nil || !refusedLogin(err) {
+			if b, err = db.Open(ctx, url); !refusedLogin(err) {
 				return err
 			}
 			if err := alterBuilderRole(ctx, admin, "dude_builder"); err != nil {
