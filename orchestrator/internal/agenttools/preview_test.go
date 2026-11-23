@@ -212,6 +212,59 @@ func TestABrainstormStartsALinkedProjectsBranchPreviewAndAConductorCannot(t *tes
 	}
 }
 
+// agentLux is previewLux with an implementer's lux Run at work: its Run
+// and its own server "api", which is not the preview's.
+type agentLux struct{ previewLux }
+
+func (agentLux) Get(_ context.Context, runID string) (lux.Run, error) {
+	return lux.Run{ID: runID, State: "running", Host: "host-1"}, nil
+}
+
+func (agentLux) Servers(context.Context, string) ([]lux.Server, error) {
+	var s lux.Server
+	if err := json.Unmarshal([]byte(`{"name":"api","port":8080,"state":"ready","url":"https://api-impl.example"}`), &s); err != nil {
+		return nil, err
+	}
+	return []lux.Server{s}, nil
+}
+
+// With an implementer at work on the task the task's Servers tab shows its
+// Run, and the preview behind it: the conductor's start_preview still
+// answers with the preview, its id and servers, not the implementer's, and
+// starts one preview however often it is called.
+func TestStartPreviewBehindAWorkingAgentAnswersWithThePreview(t *testing.T) {
+	svc := &servers.Service{PreviewDomain: "preview.example", Lux: agentLux{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	f := setupWith(t, &agenttools.Server{Previews: servers.AgentPreviews{Service: svc}})
+	svc.DB = f.app
+	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command, autostart_in_previews)
+		VALUES ($1, $2, 'web', 3000, 'npm start', true)`, f.project, f.org)
+	f.run(t, "run_impl", "implementer", "running")
+	mustExec(t, f.owner, `UPDATE runs SET lux_run_id = 'lux_impl' WHERE id = 'run_impl'`)
+	token := f.conductor(t)
+
+	for i := range 2 {
+		status, out := f.post(t, token, "start_preview", `{}`)
+		var preview string
+		if err := f.owner.QueryRow(context.Background(), `SELECT id FROM runs WHERE kind = 'preview' AND task_id = $1`, f.item).Scan(&preview); err != nil {
+			t.Fatal(err)
+		}
+		if status != 200 || out["id"] != preview || out["id"] == "run_impl" {
+			t.Fatalf("call %d: %d %v; want the preview %s", i+1, status, out, preview)
+		}
+		sv, _ := out["servers"].([]any)
+		if len(sv) != 1 || sv[0].(map[string]any)["name"] != "web" || sv[0].(map[string]any)["url"] != "https://web-text-p.preview.example" {
+			t.Errorf("call %d servers: %v; want the preview's web", i+1, out["servers"])
+		}
+	}
+	var previews int
+	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM runs WHERE kind = 'preview' AND organization_id = $1`, f.org).Scan(&previews); err != nil {
+		t.Fatal(err)
+	}
+	if previews != 1 {
+		t.Errorf("%d preview rows; want 1", previews)
+	}
+}
+
 // recordingPreviews is a preview service that records what it is asked.
 type recordingPreviews struct {
 	mu    sync.Mutex
