@@ -51,6 +51,8 @@ const (
 	Verify          Key = "verify"
 	ChecksDecide    Key = "checks.decide"
 	SettingsRead    Key = "settings.read"
+	PreviewTask     Key = "preview.task"
+	PreviewBranch   Key = "preview.branch"
 	WebSearch       Key = "web_search"
 	WebFetch        Key = "web_fetch"
 )
@@ -142,6 +144,10 @@ var All = []Capability{
 		Tools: []string{"verify"}},
 	{Key: SettingsRead, Description: "Read dude's settings as they apply here — delivery policy, agent roles, GitHub, network, capabilities — and where each is set.",
 		Tools: []string{"settings"}},
+	{Key: PreviewTask, Description: "Start a preview of your own task's branch for a person to look at, or be given the one already live; no other task, no other branch.",
+		Tools: []string{"start_preview"}},
+	{Key: PreviewBranch, Description: "Start a preview of a branch of a project linked to the session, or be given the one already live; never a task's preview.",
+		Tools: []string{"preview_branch"}},
 	{Key: WebSearch, Description: "Search the web with the coding agent's own search tool.",
 		Native: []string{NativeWebSearch}},
 	{Key: WebFetch, Description: "Read web pages with the coding agent's own fetch tool.",
@@ -152,9 +158,9 @@ var All = []Capability{
 // "" is any role not listed (a Run whose role is unknown).
 var Defaults = map[string][]Key{
 	"conductor": {TasksRead, TasksCreate, Memory, RunBasics, Ask, Machines, Coordination, FeedbackHandle, PRAct,
-		BaseSync, GitHubRead, DeliveryRead, Conduct, AsksHeld, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, ChecksDecide, SettingsRead, WebSearch, WebFetch},
+		BaseSync, GitHubRead, DeliveryRead, Conduct, AsksHeld, Cohorts, ChildInspect, RunStop, Wait, RunRecover, RunsRead, PRRefresh, LimitsRead, LimitsRequest, Verify, ChecksDecide, SettingsRead, PreviewTask, WebSearch, WebFetch},
 	"brainstorm": {TasksRead, Memory, Ask, Machines, GitHubRead, DeliveryRead, Session, SessionName, SessionAgents, SessionCheckout, ChatRead, RunsRead,
-		PRRefresh, SettingsRead, WebSearch, WebFetch},
+		PRRefresh, SettingsRead, PreviewBranch, WebSearch, WebFetch},
 	"implementer": {TasksRead, TasksCreate, Memory, RunBasics, AskConductor, Machines, Coordination, FeedbackHandle,
 		FeedbackResolve, PRAct, BaseSync, WebSearch, WebFetch},
 	"reviewer":     {TasksRead, Memory, RunBasics, Machines, WebSearch, WebFetch},

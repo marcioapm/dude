@@ -427,6 +427,7 @@ func run(log *slog.Logger) error {
 		tools = &http.Server{Addr: addr, Handler: (&agenttools.Server{DB: database, Log: log, Embedder: embedder,
 			Kick: serverService.Kick, Forges: forges, Lux: luxClient, SyncPullRequest: pullRequests.Sync, SyncBase: syncer.SyncBase,
 			PublicURL: set.PublicURL, Chat: chatService, ChatProviders: chatService.Providers,
+			Previews: servers.AgentPreviews{Service: serverService},
 			ValidateMachine: func(ctx context.Context, runID string, recorded, target *delivery.Machine, before lux.Run) error {
 				return phases.ValidateResize(ctx, luxClient, runID, phases.PlanResize(ctx, luxClient, recorded, target, before))
 			}}).Handler(),

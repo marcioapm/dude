@@ -13,17 +13,18 @@ import (
 // lists gave them before capabilities existed, plus the conductor's and
 // brainstorm's runs.read, pr.refresh and limits.read tools, the
 // conductor's limits.request, verify, conduct.stop, wait_for and recover_run, the brainstorm's
-// session.checkout, and both's settings.read. A grant changed in
+// session.checkout, both's settings.read, the conductor's preview.task and the
+// brainstorm's preview.branch. A grant changed in
 // capabilities.Defaults shows here as a diff to read.
 var toolsBeforeCapabilities = map[string]string{
 	"conductor": "list_machine_sizes request_machine list_tasks list_epics ask_person emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff findings pull_requests start_phase start_agent start_agents read_run steer restart_run stop_run decide " +
 		"dismiss_finding answer_question answer_review_question forward_review_question decide_repository_request decide_escalation update_task reply_on_pull_request publish request_review resolve_thread mark_ready " +
 		"rerun_failed_checks run_workflow pull_request_note sync_base github_search github_issue github_pull_request github_check_log github_run_jobs github_branch_runs message wait_for_reply note " +
-		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify decide_checks run_calls settings wait_for recover_run",
+		"feedback feedback_reply limits run_chat refresh_pull_requests request_limit verify decide_checks run_calls settings wait_for recover_run start_preview",
 	"brainstorm": "list_machine_sizes request_machine github_search github_issue github_pull_request github_check_log github_run_jobs github_branch_runs list_tasks " +
 		"list_epics list_repositories pull_requests findings search_memory get_memory remember propose relate ask_person name_session " +
-		"start_agent run_chat refresh_pull_requests refresh_checkout settings chat_history",
+		"start_agent run_chat refresh_pull_requests refresh_checkout settings chat_history preview_branch",
 	"implementer": "list_machine_sizes request_machine list_tasks list_epics ask_conductor emit_event list_repositories request_repository " +
 		"create_task search_memory get_memory remember run_diff reply_on_pull_request resolve_thread sync_base message wait_for_reply " +
 		"note feedback feedback_reply feedback_resolve",

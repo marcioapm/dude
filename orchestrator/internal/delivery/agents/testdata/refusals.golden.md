@@ -722,6 +722,18 @@ your task's current attempt has no implementer, fixer or simplifier Run yet
 
 dude cannot read that Run's commit: its container is not running, and no checks ask read it there
 
+## refusals/tools/preview/needs-own-task
+
+start_preview previews your own task, and this Run has none
+
+## refusals/tools/preview/previews-unavailable
+
+previews are not available here: this dude starts none for agents
+
+## refusals/tools/preview/refused
+
+the preview was not started: %s
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

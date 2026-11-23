@@ -37,3 +37,7 @@ var RecoverNext = recoverNext
 
 // RecoverEndedNext is recover_run's next step for a recovery that ended.
 var RecoverEndedNext = recoverEndedNext
+
+// Golden compares got with delivery/agents/testdata/<name>.golden.md, or
+// rewrites it under -update.
+var Golden = golden
