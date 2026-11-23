@@ -3,6 +3,7 @@ package agenttools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -121,9 +122,7 @@ func bounded(p Preview) Preview {
 func previewRefused(err error) error {
 	var r *PreviewRefusal
 	if errors.As(err, &r) {
-		return refusal{msg: renderRefusal(rPreviewRefused, r.Message), code: r.Code}
+		return refusal{msg: fmt.Sprintf(rPreviewRefused, r.Message), code: r.Code}
 	}
 	return err
 }
-
-func renderRefusal(format string, a ...any) string { return refuse(format, a...).Error() }
