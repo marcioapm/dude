@@ -71,7 +71,11 @@ def test_a_project_defines_its_servers_and_a_preview_serves_them(client: ApiClie
     assert started.status_code == 201, started.text
     run = started.json()["run"]
     assert run["kind"] == "preview" and run["label"] == "Branch preview" and run["parksAfterMinutes"] == 30
-    assert client.post(f"/v1/tasks/{task['id']}/preview").status_code == 409
+    again = client.post(f"/v1/tasks/{task['id']}/preview")
+    assert again.status_code == 201, again.text
+    assert again.json()["run"]["id"] == run["id"], again.text
+    previews = [r for r in client.task_runs(task["id"]) if r["kind"] == "preview"]
+    assert [r["id"] for r in previews] == [run["id"]], previews
 
     # Declared: its server exists in lux, at one label under the preview
     # domain, <server>-<task key>-<project slug>, asleep; nothing runs.
