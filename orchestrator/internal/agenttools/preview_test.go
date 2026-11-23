@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -31,11 +32,15 @@ import (
 type previewFixture struct {
 	*fixture
 	conductor, brainstorm string
+	// The requests the fake GitHub has been sent.
+	githubReads *atomic.Int64
 }
 
 func setupPreviews(t *testing.T) *previewFixture {
 	t.Helper()
+	reads := &atomic.Int64{}
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
 		if r.URL.Path == "/repos/acme/web/git/ref/heads/feature" {
 			_, _ = w.Write([]byte(`{"object":{"sha":"0123456789abcdef0123456789abcdef01234567"}}`))
 			return
@@ -56,7 +61,7 @@ func setupPreviews(t *testing.T) *previewFixture {
 		f.org, f.project)
 	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command, autostart_in_previews)
 		VALUES ($1, $2, 'web', 3000, 'npm start', true)`, f.project, f.org)
-	p := &previewFixture{fixture: f, conductor: f.conductor(t), brainstorm: f.session(t, "ssn_preview", "", "")}
+	p := &previewFixture{fixture: f, conductor: f.conductor(t), brainstorm: f.session(t, "ssn_preview", "", ""), githubReads: reads}
 	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_preview', $1, $2)`, f.project, f.org)
 	return p
 }
@@ -209,6 +214,37 @@ func TestABrainstormStartsALinkedProjectsBranchPreviewAndAConductorCannot(t *tes
 	}
 	if _, refused := f.mcpCall(t, f.conductor, "preview_branch", map[string]any{"branch": "feature"}); refused == "" {
 		t.Error("conductor MCP tools/call preview_branch succeeded")
+	}
+}
+
+// A brainstorm asking again and again for a branch GitHub does not have is
+// refused each time, and each refusal spends its calls of the minute: once
+// they are spent it is refused before GitHub is asked, so the reads stop.
+func TestRefusedBranchPreviewsSpendTheMinutesCalls(t *testing.T) {
+	f := setupPreviews(t)
+	var limited int
+	var readsAtLimit int64
+	for i := range 70 {
+		status, out := f.post(t, f.brainstorm, "preview_branch", `{"branch":"gone"}`)
+		switch {
+		case status == 422 && out["code"] == "branch_not_found":
+			if limited > 0 {
+				t.Fatalf("call %d reached GitHub after the budget was spent: %v", i+1, out)
+			}
+		case strings.HasPrefix(fmt.Sprint(out["error"]), "too many calls"):
+			if limited == 0 {
+				readsAtLimit = f.githubReads.Load()
+			}
+			limited++
+		default:
+			t.Fatalf("call %d: %d %v", i+1, status, out)
+		}
+	}
+	if limited == 0 {
+		t.Fatalf("70 refused calls in a minute were never limited; GitHub was asked %d times", f.githubReads.Load())
+	}
+	if reads := f.githubReads.Load(); reads != readsAtLimit {
+		t.Errorf("GitHub reads grew from %d to %d after the budget was spent", readsAtLimit, reads)
 	}
 }
 

@@ -51,7 +51,7 @@ const maxPreviewServers = 20
 // branch (capabilities.PreviewBranch).
 var previewTools = []tool{
 	around(define("start_preview", checkTaskPreview), startTaskPreview, recordPreview),
-	around(defineSession("preview_branch", checkBranchPreview).before(forgeFor), startBranchPreview, recordPreview),
+	around(defineSession("preview_branch", checkBranchPreview).before(forgeFor).countingAttempts(), startBranchPreview, recordPreview),
 }
 
 // start_preview has no input: it is always the calling Run's task.
