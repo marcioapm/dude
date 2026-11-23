@@ -2,7 +2,6 @@ package dbtest
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 
@@ -11,16 +10,13 @@ import (
 
 // breakBuilderPassword gives dude_builder a password Builder does not use,
 // under Builder's lock, and the right one back when the test ends.
-func breakBuilderPassword(t *testing.T, owner *pgx.Conn) {
+func breakBuilderPassword(t *testing.T) {
 	t.Helper()
 	set := func(password string) error {
 		ctx := context.Background()
-		if _, err := owner.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_builder_role'))"); err != nil {
-			return err
-		}
-		defer func() { _, _ = owner.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_builder_role'))") }()
-		_, err := owner.Exec(ctx, "ALTER ROLE dude_builder PASSWORD '"+password+"'")
-		return err
+		return withBuilderRoleLock(ctx, func(admin *pgx.Conn) error {
+			return alterBuilderRole(ctx, admin, password)
+		})
 	}
 	if err := set("other"); err != nil {
 		t.Fatal(err)
@@ -45,27 +41,28 @@ func selectOne(t *testing.T, b interface {
 // A wrong password, as a deploy or another tool may leave it, is repaired.
 func TestBuilderRepairsTheRolesPassword(t *testing.T) {
 	_, owner := Open(t)
-	breakBuilderPassword(t, owner)
+	breakBuilderPassword(t)
 	selectOne(t, Builder(t, owner).Pool)
 }
 
-// Sixteen Builders at once, on owner connections of their own, all connect,
-// with the role's password wrong when they start: the race of #458, where
-// each ALTER ROLE'd it and some failed with "tuple concurrently updated".
+// Sixteen Builders at once, each on a database of its own as test binaries
+// running side by side are, all connect, with the role's password wrong
+// when they start: the race of #458, where each ALTER ROLE'd it and some
+// failed with "tuple concurrently updated". A lock taken on a test's own
+// database would not keep them apart: advisory locks are per database.
 func TestBuildersAtOnceAllConnect(t *testing.T) {
-	_, owner := Open(t)
-	breakBuilderPassword(t, owner)
-	ctx := context.Background()
 	const n = 16
 	owners := make([]*pgx.Conn, n)
 	for i := range owners {
-		c, err := pgx.Connect(ctx, fmt.Sprintf("postgres://dude:dude@%s/%s", host(), owner.Config().Database))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { c.Close(context.Background()) })
-		owners[i] = c
+		app, owner := Open(t)
+		// Builder needs owner's database, not its connection: holding none
+		// keeps sixteen of these, and their waiters on Builder's lock, well
+		// inside the cluster's connection limit beside other test binaries.
+		app.Close()
+		owner.Close(context.Background())
+		owners[i] = owner
 	}
+	breakBuilderPassword(t)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, o := range owners {
@@ -73,7 +70,9 @@ func TestBuildersAtOnceAllConnect(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			selectOne(t, Builder(t, o).Pool)
+			b := Builder(t, o)
+			selectOne(t, b.Pool)
+			b.Close()
 		}()
 	}
 	close(start)

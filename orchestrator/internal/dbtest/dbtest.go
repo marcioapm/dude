@@ -370,14 +370,6 @@ func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 	}
 }
 
-// builderRole guards giving dude_builder its test password: one goroutine
-// of a process sets it per failed login (gen counts the times it was set),
-// the others wait for it.
-var builderRole struct {
-	sync.Mutex
-	gen int
-}
-
 // Builder connects to owner's database as dude-image-builder's role
 // (migration 068), which aiverse gives a password in production and
 // migration 068 none. It connects as dude_builder:dude_builder and, only
@@ -385,21 +377,26 @@ var builderRole struct {
 //
 // Roles are cluster-wide: two ALTER ROLEs at once, from two test binaries
 // or two tests, fail with "tuple concurrently updated" (#458). So a Builder
-// whose login works alters nothing, and one whose login is refused sets the
-// password at most once per process for that refusal, under an advisory
-// lock every test binary takes.
+// whose login works alters nothing, and one whose login is refused takes
+// withBuilderRoleLock, tries the login again under it (another lane may
+// have set the password while it waited), and sets the password only if
+// that login is refused too.
 func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	t.Helper()
 	ctx := context.Background()
 	url := fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database)
-	builderRole.Lock()
-	gen := builderRole.gen
-	builderRole.Unlock()
 	b, err := db.Open(ctx, url)
 	if err != nil && refusedLogin(err) {
-		if err = setBuilderPassword(ctx, owner, gen); err == nil {
+		err = withBuilderRoleLock(ctx, func(admin *pgx.Conn) error {
+			if b, err = db.Open(ctx, url); err == nil || !refusedLogin(err) {
+				return err
+			}
+			if err := alterBuilderRole(ctx, admin, "dude_builder"); err != nil {
+				return err
+			}
 			b, err = db.Open(ctx, url)
-		}
+			return err
+		})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -408,42 +405,49 @@ func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	return b
 }
 
-// refusedLogin is whether err is the server refusing a login, as against
-// not reaching it at all.
-func refusedLogin(err error) bool {
-	var pg *pgconn.PgError
-	return errors.As(err, &pg) && (pg.Code == "28P01" || pg.Code == "28000")
-}
-
-// setBuilderPassword gives dude_builder its test password, unless another
-// goroutine of this process has since the failed login that saw gen.
-func setBuilderPassword(ctx context.Context, owner *pgx.Conn, gen int) error {
-	builderRole.Lock()
-	defer builderRole.Unlock()
-	if builderRole.gen != gen {
-		return nil
-	}
-	if _, err := owner.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_builder_role'))"); err != nil {
+// withBuilderRoleLock runs fn holding the advisory lock every writer of
+// dude_builder's password in dbtest takes, with fn given the connection
+// that holds it. Advisory locks are per database, so the lock is taken on
+// a connection to the postgres database (adminConn), the one database
+// every test binary shares, as migrateTemplate's is: taken on a test's own
+// clone it would serialize nothing.
+func withBuilderRoleLock(ctx context.Context, fn func(admin *pgx.Conn) error) error {
+	admin, err := adminConn(ctx)
+	if err != nil {
 		return err
 	}
-	defer func() { _, _ = owner.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_builder_role'))") }()
-	// The lock serializes dbtest; the retries cover anything else altering
-	// the role at the same moment.
+	// Closing the session releases the lock on every path, too.
+	defer admin.Close(ctx)
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_builder_role'))"); err != nil {
+		return err
+	}
+	defer func() { _, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_builder_role'))") }()
+	return fn(admin)
+}
+
+// alterBuilderRole gives dude_builder password, on admin under
+// withBuilderRoleLock. The lock serializes dbtest; the retries cover
+// anything else altering the role at the same moment.
+func alterBuilderRole(ctx context.Context, admin *pgx.Conn, password string) error {
 	var err error
 	for retry := 0; retry <= 3; retry++ {
 		if retry > 0 {
 			time.Sleep(time.Duration(retry) * 50 * time.Millisecond)
 		}
-		_, err = owner.Exec(ctx, `ALTER ROLE dude_builder PASSWORD 'dude_builder'`)
+		_, err = admin.Exec(ctx, "ALTER ROLE dude_builder PASSWORD '"+password+"'")
 		var pg *pgconn.PgError
 		if !errors.As(err, &pg) || pg.Code != "XX000" {
 			break
 		}
 	}
-	if err == nil {
-		builderRole.gen++
-	}
 	return err
+}
+
+// refusedLogin is whether err is the server refusing a login, as against
+// not reaching it at all.
+func refusedLogin(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (pg.Code == "28P01" || pg.Code == "28000")
 }
 
 // Org inserts an organization and returns its id.
