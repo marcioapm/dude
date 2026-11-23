@@ -101,16 +101,45 @@ func TestIncompleteVerdictDoesNotCallUncheckedFindingsOpen(t *testing.T) {
 	}
 }
 
-// The review's body: findings on the base listed, never inline; blocking
-// ones inline when they name a line; non-blocking ones marked nits.
+func TestUncheckedFindingBlocksOnlyWhenRelevant(t *testing.T) {
+	yes, no := true, false
+	for _, c := range []struct {
+		name string
+		f    verdictFinding
+		want bool
+	}{
+		{"introduced medium", verdictFinding{Severity: "medium", Introduced: &yes}, true},
+		{"unknown medium", verdictFinding{Severity: "medium"}, true},
+		{"on base medium", verdictFinding{Severity: "medium", Introduced: &no}, false},
+		{"low", verdictFinding{Severity: "low", Introduced: &yes}, false},
+		{"note", verdictFinding{Severity: "note", Introduced: &yes}, false},
+		{"fixed", verdictFinding{Severity: "medium", Introduced: &yes, Judgement: "fixed"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.f.uncheckedBlocks(); got != c.want {
+				t.Fatalf("uncheckedBlocks() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestUncheckedFindingsAreNeutralOnACompleteVerdict(t *testing.T) {
+	d := decideVerdict(verdictInput{Gate: gateAt()})
+	body, inline, _ := verdictReviewOf(d, "a8f3e1c0ffee", "main", nil, []verdictFinding{{
+		Title: "Old claim", Severity: "medium", Introduced: func() *bool { v := true; return &v }(), Checked: false,
+	}}, "")
+	if d.Event != forge.EventApprove || len(inline) != 0 || !strings.Contains(body, "**Not re-checked at a8f3e1c**") || strings.Contains(body, "did not finish") || strings.Contains(body, "(medium)") {
+		t.Fatalf("unchecked finding was presented as current evidence:\n%s\ninline=%+v", body, inline)
+	}
+}
 func TestVerdictReviewPlacesFindings(t *testing.T) {
 	no, yes := false, true
 	body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},
 		[]verdictFinding{
-			{Title: "Off by one", Severity: "high", File: "a.go", Line: 3, Introduced: &yes},
-			{Title: "Old typo", Severity: "medium", File: "b.go", Line: 9, Introduced: &no},
-			{Title: "Naming", Severity: "low", File: "a.go", Line: 5},
-			{Title: "No place", Severity: "medium"},
+			{Checked: true, Title: "Off by one", Severity: "high", File: "a.go", Line: 3, Introduced: &yes},
+			{Checked: true, Title: "Old typo", Severity: "medium", File: "b.go", Line: 9, Introduced: &no},
+			{Checked: true, Title: "Naming", Severity: "low", File: "a.go", Line: 5},
+			{Checked: true, Title: "No place", Severity: "medium"},
 		}, "https://dude.test/t")
 	if len(inline) != 2 || inline[0].Path != "a.go" || strings.HasPrefix(inline[0].Body, "nit") || !strings.HasPrefix(inline[1].Body, "nit: ") {
 		t.Fatalf("inline %+v", inline)

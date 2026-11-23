@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,60 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/fakelux"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
+
+func TestAReviewOnlyUnscheduledFindingUsesItsAsFiledBar(t *testing.T) {
+	for _, c := range []struct {
+		name, severity, introduced, file, state string
+		checkedMedium                           bool
+	}{
+		{"optional low", "low", "true", "", "APPROVED", false},
+		{"optional low with checked blocker", "low", "true", "", "CHANGES_REQUESTED", true},
+		{"unchecked introduced medium", "medium", "true", "", "COMMENTED", false},
+		{"unchecked unknown medium", "medium", "NULL", "", "COMMENTED", false},
+		{"unchecked base medium", "medium", "false", "", "APPROVED", false},
+		{"unchecked own line medium", "medium", "false", "FACTORY.md", "COMMENTED", false},
+		{"unchecked new reachability off diff", "medium", "true", "shared.go", "COMMENTED", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.gh.SetChecks("success")
+			w.hangingReviews(taskCall)
+			n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+			w.gh.CommitFiles("feature/greet", "changed line", map[string]string{"FACTORY.md": "changed\n"})
+			wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+			w.startDelivery(wi)
+			w.until("required lens running", func() bool {
+				w.quietConductorDecides(wi)
+				return w.count(`SELECT count(*) FROM runs WHERE task_id=$1 AND phase='review' AND status='running'`, wi) > 0
+			})
+			run := w.ids(`SELECT id FROM runs WHERE task_id=$1 AND phase='review' ORDER BY created_at`, wi)[0]
+			// The optional quality lens ran at an earlier head, not this round.
+			mustExec(t, w.owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, role, kind, status, category, base_refs)
+				SELECT 'quality_'||id, organization_id, project_id, task_id, attempt, phase, role, kind, 'completed', 'quality', '{}'::jsonb FROM runs WHERE id=$1`, run)
+			mustExec(t, w.owner, fmt.Sprintf(`INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status, introduced, trivial, file, line)
+				SELECT 'unchecked_'||id, organization_id, task_id, 'quality_'||id, 'quality', $2::finding_severity, 'Historical suggestion', 'open', %s, true, NULLIF($3,''), 1 FROM runs WHERE id=$1`, c.introduced), run, c.severity, c.file)
+			if c.checkedMedium {
+				mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, status, introduced)
+					SELECT 'current_'||id, organization_id, task_id, id, category, 'medium', 'Current supported failure', 'open', true FROM runs WHERE id=$1`, run)
+			}
+			mustExec(t, w.owner, `UPDATE runs SET status='completed', ended_at=now() WHERE task_id=$1 AND phase='review' AND status='running'`, wi)
+			w.until("verdict", func() bool { w.quietConductorDecides(wi); return w.waitingOnPR(wi) })
+			reviews := w.dudeReviews(wi, n)
+			if len(reviews) != 1 || reviews[0].State != c.state {
+				t.Fatalf("reviews=%+v, want %s", reviews, c.state)
+			}
+			before, unchecked, ok := strings.Cut(reviews[0].Body, "**Not re-checked at ")
+			if !ok || strings.Contains(before, "Historical suggestion") || !strings.Contains(unchecked, "Historical suggestion") || strings.Contains(unchecked, "("+c.severity+")") || strings.Contains(reviews[0].Body, "did not finish") {
+				t.Fatalf("historical claim not neutral:\n%s", reviews[0].Body)
+			}
+			for _, comment := range w.dudeLineComments(n) {
+				if strings.Contains(comment.Body, "Historical suggestion") {
+					t.Fatalf("unchecked inline claim: %+v", comment)
+				}
+			}
+		})
+	}
+}
 
 // Infrastructure failures get one fresh lens, not a missing review.
 func TestAReviewOnlyFailedLensRetriesOnce(t *testing.T) {

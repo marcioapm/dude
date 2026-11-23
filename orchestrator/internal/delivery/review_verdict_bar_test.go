@@ -86,8 +86,8 @@ func TestStillOpenListsOnlyBlockingFindings(t *testing.T) {
 	yes := true
 	body, _, _ := verdictReviewOf(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", nil,
 		[]verdictFinding{
-			{Title: "Unbounded query", Severity: "medium", File: "a.go", Line: 3, Introduced: &yes, earlier: &inlinePost{Head: "1111111aaaa", URL: "u1"}},
-			{Title: "Dup helper", Severity: "low", Trivial: true, File: "a.go", Line: 5, earlier: &inlinePost{Head: "1111111aaaa", URL: "u2"}},
+			{Checked: true, Title: "Unbounded query", Severity: "medium", File: "a.go", Line: 3, Introduced: &yes, earlier: &inlinePost{Head: "1111111aaaa", URL: "u1"}},
+			{Checked: true, Title: "Dup helper", Severity: "low", Trivial: true, File: "a.go", Line: 5, earlier: &inlinePost{Head: "1111111aaaa", URL: "u2"}},
 		}, "")
 	open, sugg, ok := strings.Cut(body, "**Suggestions (not blocking)**")
 	if !ok || !strings.Contains(open, "**Still open from 1111111**\n- Unbounded query (medium)") || strings.Contains(open, "Dup helper") ||
