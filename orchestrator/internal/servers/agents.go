@@ -9,11 +9,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 )
 
-// AgentPreviews is the Service as the agent tools start previews with it
-// (agenttools.Previews): start_preview's task preview and preview_branch's
-// branch preview, answered as the preview itself, its servers' names, URLs
-// and states alone. agenttools cannot import this package (servers →
-// phases → agenttools), so cmd/dude-orchestrator wires this in.
+// AgentPreviews is the Service as agenttools.Previews: each preview answered
+// as its id, state, branch and its servers' names, URLs and states alone.
 type AgentPreviews struct{ Service *Service }
 
 var _ agenttools.Previews = AgentPreviews{}
