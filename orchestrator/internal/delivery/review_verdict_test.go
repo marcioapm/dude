@@ -124,14 +124,18 @@ func TestUncheckedFindingBlocksOnlyWhenRelevant(t *testing.T) {
 }
 
 func TestUncheckedFindingsAreNeutralOnACompleteVerdict(t *testing.T) {
+	yes := true
 	d := decideVerdict(verdictInput{Gate: gateAt()})
 	body, inline, _ := verdictReviewOf(d, "a8f3e1c0ffee", "main", nil, []verdictFinding{{
-		Title: "Old claim", Severity: "medium", Introduced: func() *bool { v := true; return &v }(), Checked: false,
+		Title: "Old claim", Severity: "medium", Introduced: &yes,
 	}}, "")
 	if d.Event != forge.EventApprove || len(inline) != 0 || !strings.Contains(body, "**Not re-checked at a8f3e1c**") || strings.Contains(body, "did not finish") || strings.Contains(body, "(medium)") {
 		t.Fatalf("unchecked finding was presented as current evidence:\n%s\ninline=%+v", body, inline)
 	}
 }
+
+// The review's body: findings on the base listed, never inline; blocking
+// ones inline when they name a line; non-blocking ones marked nits.
 func TestVerdictReviewPlacesFindings(t *testing.T) {
 	no, yes := false, true
 	body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Changes requested"}, "a8f3e1c0ffee", "main", []string{"correctness"},

@@ -339,18 +339,19 @@ func (f verdictFinding) blocks() bool {
 	return (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
 }
 
+// uncheckedBlocks says the finding would hold APPROVE back (blocks) but no
+// lens judged it at the head: the review is incomplete, never approved.
 func (f verdictFinding) uncheckedBlocks() bool {
 	return !f.Checked && f.Judgement != "fixed" && f.blocks()
 }
 
-// verdictFindingsItem uses the review-only blocking bar after ownLines.
+// verdictFindingsItem is the verdict's findings item: the checked findings
+// that block, their introduced read after ownLines. Unchecked ones are
+// uncheckedBlocks', not evidence at the head.
 func verdictFindingsItem(findings []verdictFinding) GateItem {
 	var blocking []string
 	for _, f := range findings {
-		if !f.Checked || f.Judgement == "fixed" {
-			continue
-		}
-		if f.blocks() {
+		if f.Checked && f.Judgement != "fixed" && f.blocks() {
 			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, f.Severity, f.Title))
 		}
 	}
