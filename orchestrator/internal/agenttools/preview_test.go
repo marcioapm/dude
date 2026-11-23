@@ -130,6 +130,12 @@ func (f *fixture) mcpCall(t *testing.T, token, tool string, args map[string]any)
 // caller's task's, created by the agent.
 func TestAConductorStartsItsTasksPreviewAndABrainstormCannot(t *testing.T) {
 	f := setupPreviews(t)
+	// The binding decision: the brainstorm's role is not granted the
+	// conductor's preview.task.
+	if g := capabilities.Default("brainstorm"); g.Has(capabilities.PreviewTask) || !capabilities.Default("conductor").Has(capabilities.PreviewTask) {
+		t.Errorf("preview.task granted: conductor %v, brainstorm %v; want conductor only",
+			capabilities.Default("conductor").Has(capabilities.PreviewTask), g.Has(capabilities.PreviewTask))
+	}
 	jsonAPI, mcpList := f.listed(t, f.conductor)
 	if !jsonAPI["start_preview"] || !mcpList["start_preview"] {
 		t.Fatalf("conductor: GET /tools %v, MCP tools/list %v; want start_preview on both", jsonAPI["start_preview"], mcpList["start_preview"])
@@ -177,6 +183,12 @@ func TestAConductorStartsItsTasksPreviewAndABrainstormCannot(t *testing.T) {
 // agent with no task; a conductor is given none of it.
 func TestABrainstormStartsALinkedProjectsBranchPreviewAndAConductorCannot(t *testing.T) {
 	f := setupPreviews(t)
+	// The binding decision: the conductor's role is not granted the
+	// brainstorm's preview.branch.
+	if g := capabilities.Default("conductor"); g.Has(capabilities.PreviewBranch) || !capabilities.Default("brainstorm").Has(capabilities.PreviewBranch) {
+		t.Errorf("preview.branch granted: brainstorm %v, conductor %v; want brainstorm only",
+			capabilities.Default("brainstorm").Has(capabilities.PreviewBranch), g.Has(capabilities.PreviewBranch))
+	}
 	jsonAPI, mcpList := f.listed(t, f.brainstorm)
 	if !jsonAPI["preview_branch"] || !mcpList["preview_branch"] {
 		t.Fatalf("brainstorm: GET /tools %v, MCP tools/list %v; want preview_branch on both", jsonAPI["preview_branch"], mcpList["preview_branch"])
@@ -301,22 +313,50 @@ func TestStartPreviewBehindAWorkingAgentAnswersWithThePreview(t *testing.T) {
 	}
 }
 
-// recordingPreviews is a preview service that records what it is asked.
+// recordingPreviews is a preview service that records what it is asked,
+// and whether the tool's transaction had committed when it was asked
+// (hooked to the Server by serve).
 type recordingPreviews struct {
 	mu    sync.Mutex
 	calls []string
+	// committed: the call's tool transaction is over (AfterTransaction ran
+	// since BeforeCall); afterCommit, its value at each call.
+	committed   bool
+	afterCommit []bool
+}
+
+// serve hooks r to srv's transaction and returns srv.
+func (r *recordingPreviews) serve(srv *agenttools.Server) *agenttools.Server {
+	srv.Previews = r
+	srv.BeforeCall = func(string) { r.mu.Lock(); r.committed = false; r.mu.Unlock() }
+	srv.AfterTransaction = func(context.Context, string) { r.mu.Lock(); r.committed = true; r.mu.Unlock() }
+	return srv
 }
 
 func (r *recordingPreviews) record(call string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
+	r.afterCommit = append(r.afterCommit, r.committed)
 }
 
 func (r *recordingPreviews) seen() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.calls...)
+}
+
+// outsideTx fails t for a call the service was given inside the tool's
+// transaction.
+func (r *recordingPreviews) outsideTx(t *testing.T) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, after := range r.afterCommit {
+		if !after {
+			t.Errorf("call %d (%s) reached the service inside the tool's transaction", i+1, r.calls[i])
+		}
+	}
 }
 
 func (r *recordingPreviews) StartPreview(_ context.Context, org, taskID, actor string, identity ...string) (agenttools.Preview, error) {
@@ -334,7 +374,7 @@ func (r *recordingPreviews) StartBranchPreview(_ context.Context, _ *forge.GitHu
 // the agent as actor.
 func TestPreviewBranchRefusesAnUnlinkedProjectBeforeTheService(t *testing.T) {
 	rec := &recordingPreviews{}
-	f := setupWith(t, &agenttools.Server{Previews: rec})
+	f := setupWith(t, rec.serve(&agenttools.Server{}))
 	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_other_'||$1, $1, 'Other', 'other_'||$1, 'OTH')`, f.org)
 	token := f.session(t, "ssn_unlinked", "", "")
 	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_unlinked', $1, $2)`, f.project, f.org)
@@ -356,6 +396,7 @@ func TestPreviewBranchRefusesAnUnlinkedProjectBeforeTheService(t *testing.T) {
 	if calls := rec.seen(); len(calls) != 1 || calls[0] != "branch "+f.project+":feature by run_ssn_unlinked as agent," {
 		t.Errorf("calls %q", calls)
 	}
+	rec.outsideTx(t)
 }
 
 // start_preview has no input for a task: one named is refused as an
@@ -363,7 +404,7 @@ func TestPreviewBranchRefusesAnUnlinkedProjectBeforeTheService(t *testing.T) {
 // caller's own task, whichever task exists beside it.
 func TestStartPreviewReachesOnlyTheCallersTask(t *testing.T) {
 	rec := &recordingPreviews{}
-	f := setupWith(t, &agenttools.Server{Previews: rec})
+	f := setupWith(t, rec.serve(&agenttools.Server{}))
 	mustExec(t, f.owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, status)
 		VALUES ('wi_other_'||$1, $1, $2, 2, 'Other', 'running')`, f.org, f.project)
 	token := f.conductor(t)
@@ -385,6 +426,7 @@ func TestStartPreviewReachesOnlyTheCallersTask(t *testing.T) {
 	if calls := rec.seen(); len(calls) != 1 || calls[0] != "task "+f.item+" by run_cond as agent," {
 		t.Errorf("calls %q", calls)
 	}
+	rec.outsideTx(t)
 }
 
 // Taken away, preview.task and preview.branch take their tools off every

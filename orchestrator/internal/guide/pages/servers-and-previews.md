@@ -59,4 +59,4 @@ Agents read a project's server definitions and preview settings with `settings`,
 
 ## Previews agents start
 
-A task's conductor can start its own task's preview with `start_preview`, before there is a pull request; it names no task and reaches no other. A session's agent can preview a branch of a project linked to the session with `preview_branch`, before there is any task; it never starts a task's preview. Either gives back the preview already live rather than a second one, and the preview shows as started by the agent. People stop them as any other.
+A task's conductor can start its own task's preview with `start_preview`, before there is a pull request; it names no task and reaches no other. A session's agent can preview a branch of a project linked to the session with `preview_branch`, before there is any task; it never starts a task's preview. Either gives back the preview already live rather than a second one, and the preview is recorded as started by the agent. People stop them as any other.
