@@ -339,16 +339,19 @@ func (f verdictFinding) blocks() bool {
 	return (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
 }
 
-// verdictFindingsItem is the verdict's findings item, from the findings as
-// the review shows them (blocks): the gate's, its introduced read again
-// against the pull request's own lines (ownLines).
+// uncheckedBlocks says the finding would hold APPROVE back (blocks) but no
+// lens judged it at the head: the review is incomplete, never approved.
+func (f verdictFinding) uncheckedBlocks() bool {
+	return !f.Checked && f.Judgement != "fixed" && f.blocks()
+}
+
+// verdictFindingsItem is the verdict's findings item: the checked findings
+// that block, their introduced read after ownLines. Unchecked ones are
+// uncheckedBlocks', not evidence at the head.
 func verdictFindingsItem(findings []verdictFinding) GateItem {
 	var blocking []string
 	for _, f := range findings {
-		if !f.Checked || f.Judgement == "fixed" {
-			continue
-		}
-		if f.blocks() {
+		if f.Checked && f.Judgement != "fixed" && f.blocks() {
 			blocking = append(blocking, fmt.Sprintf("%s (%s) %s", f.ID, f.Severity, f.Title))
 		}
 	}
@@ -427,9 +430,8 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 	var comments []forge.ReviewComment
 	var ids []string
 	var onBase, stillOpen, suggestions, unchecked, fixed []string
-	incomplete := d.Reason == reasonLensFailed || d.Reason == reasonNotReviewed
 	for _, f := range findings {
-		if incomplete && !f.Checked {
+		if !f.Checked {
 			unchecked = append(unchecked, "- "+f.Title+where(f))
 			continue
 		}
@@ -472,7 +474,7 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 		b.WriteString("\n" + stillOpen[i+1])
 	}
 	if len(unchecked) > 0 {
-		fmt.Fprintf(&b, "\n\n**Not re-checked at %s** (the lens that would judge them did not finish)\n%s", short(head), strings.Join(unchecked, "\n"))
+		fmt.Fprintf(&b, "\n\n**Not re-checked at %s**\n%s", short(head), strings.Join(unchecked, "\n"))
 	}
 	if len(fixed) > 0 {
 		fmt.Fprintf(&b, "\n\n**Fixed at %s**\n%s", short(head), strings.Join(fixed, "\n"))
@@ -635,14 +637,6 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 	if len(gates) == 0 {
 		return workflow.Result{}, fmt.Errorf("no gate read for %s", prID)
 	}
-	if len(in.Unfinished) == 0 && slices.ContainsFunc(findings, func(f verdictFinding) bool { return !f.Checked }) {
-		for i := range gates[0].Items {
-			if gates[0].Items[i].Key == ReadyReviewed {
-				gates[0].Items[i].OK = false
-				gates[0].Items[i].Detail = "not every finding was authoritatively judged at " + short(head)
-			}
-		}
-	}
 	// A finding filed on the base at a line the pull request wrote is the
 	// pull request's (ownLines): its diff, read once for this verdict at
 	// the head the gate just read, decides it, and the findings item is
@@ -667,6 +661,16 @@ func (w *steps) verdict(ctx context.Context, sc workflow.StepContext) (workflow.
 		// Refused (no such pull request, a diff too large): no line is
 		// known to be the pull request's; each finding stays as filed.
 		ownLines(findings, diff, st.Source.ReviewOnly())
+	}
+	// Scope must be effective before judging unchecked findings. Never turn
+	// a missing required lens's failing item into a passing one.
+	if st.Source.ReviewOnly() && slices.ContainsFunc(findings, verdictFinding.uncheckedBlocks) {
+		for i := range gates[0].Items {
+			if gates[0].Items[i].Key == ReadyReviewed && gates[0].Items[i].OK {
+				gates[0].Items[i].OK = false
+				gates[0].Items[i].Detail = "not every blocking finding was authoritatively judged at " + short(head)
+			}
+		}
 	}
 	if gates[0].Err == nil {
 		for i, it := range gates[0].Items {

@@ -159,7 +159,7 @@ This task only reviews: the pull request's author fixes what dude's review asks 
 - A test that still passes with the behaviour it tests broken (vacuous or inverted) is at least `medium`.
 - Missing tests for behaviour that is correct, style, naming, file layout, duplication, comments, log wording, or a project convention with no effect on behaviour is `low` at most, whatever a contributor guide says. Name the rule in the finding, but do not block on it.
 
-`introduced: no` only for a problem in lines this pull request did not write. A problem in a line it added or changed, a test file it rewrote included, is `introduced: yes`. A finding at `medium` or above states its `acceptance`.
+`introduced: no` only for a problem in lines this pull request did not write. A problem in a line it added or changed, a test file it rewrote included, is `introduced: yes`. An untouched shared component is not automatically a PR defect because a new caller uses it: verify changed/new reachability or worsening. A new call is introduced when it creates a supported failing path that was previously unreachable; never mechanically classify off-diff findings as pre-existing, since unchanged callees can contain introduced failures. On carried findings, recheck the causal scenario at the current head and current dependency facts; explicitly report fixed/still from evidence, not an earlier result or a promise. From round 2 onward, only supported-path wrong outcomes, tests that pass with the fix deleted, or red gates block; other observations are follow-ups. Do not weaken tests to fit product errors. A finding at `medium` or above states its `acceptance`.
 
 End your reply with a summary of the review, as one more YAML document; it is not a finding:
 
