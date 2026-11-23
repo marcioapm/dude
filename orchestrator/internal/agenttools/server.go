@@ -85,6 +85,9 @@ type Server struct {
 	Chat ChatReader
 	// ChatProviders are the chat providers post_to_chat posts through.
 	ChatProviders chat.Registry
+	// Previews starts the preview tools' previews (servers.Service, wired
+	// by cmd/dude-orchestrator); nil, they are refused.
+	Previews Previews
 	// Test hook: called with the tool's name after the caller is
 	// authenticated, before the tool's transaction opens.
 	BeforeCall func(tool string)
@@ -135,6 +138,7 @@ type env struct {
 	publicURL       string
 	chat            ChatReader
 	chatProviders   chat.Registry
+	previews        Previews
 	db              *db.DB
 	prepared        any
 }
@@ -609,7 +613,7 @@ func find(name, role string, grants capabilities.Grants) (tool, bool) {
 // allTools are every role's tools: the task agents', then the session
 // agent's.
 func allTools() []tool {
-	return slices.Concat(tools, prActionTools, dispatchTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, brainstormTools)
+	return slices.Concat(tools, prActionTools, dispatchTools, baseSyncTools, githubReadTools, refreshTools, coordinationTools, feedbackTools, previewTools, brainstormTools)
 }
 
 // hasSessionDefinition says a session agent has its own tool called name.
@@ -821,7 +825,7 @@ func (s *Server) call(ctx context.Context, c Caller, t tool, args json.RawMessag
 	var out json.RawMessage
 	c.env = env{embedder: s.Embedder, kick: s.Kick, forges: s.Forges, lux: s.Lux, validateMachine: s.ValidateMachine,
 		syncBase: s.SyncBase, syncBaseWait: cmp.Or(s.SyncBaseWait, syncBaseWait), syncPR: s.SyncPullRequest, publicURL: s.PublicURL,
-		chat: s.Chat, chatProviders: s.ChatProviders, db: s.DB}
+		chat: s.Chat, chatProviders: s.ChatProviders, previews: s.Previews, db: s.DB}
 	if t.prepare != nil {
 		c.env.prepared = t.prepare(ctx, c, args)
 		// A prepare step may refuse the call before its arguments are redacted or counted.

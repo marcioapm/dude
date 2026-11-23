@@ -181,3 +181,6 @@ rRunCallsNotWriter                     refusals/tools/runcalls/not-writer
 rRunCallsNoWriter                      refusals/tools/runcalls/no-writer
 rRunCallsNoSuchCommit                  refusals/tools/runcalls/no-such-commit
 rRunCallsUnread                        refusals/tools/runcalls/unread
+rPreviewsUnavailable                   refusals/tools/preview/previews-unavailable
+rPreviewNeedsOwnTask                   refusals/tools/preview/needs-own-task
+rPreviewRefused                        refusals/tools/preview/refused

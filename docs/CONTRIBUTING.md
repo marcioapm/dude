@@ -733,6 +733,14 @@ row held by a follower. Keep the lock order.
   (`CheckBranches`) ends it only when GitHub definitely has no such branch.
   Unused 30 days, it is reaped (a task's preview: 7). It carries no comment
   overlay: feedback belongs to a task.
+- **Agents start previews by role** (`agenttools/preview.go`, wired to
+  `servers.AgentPreviews` in `cmd/dude-orchestrator`, since `agenttools`
+  cannot import `servers`): a conductor's `start_preview`
+  (`preview.task`) is `StartPreview` of its own task, with no task input;
+  a session agent's `preview_branch` (`preview.branch`) is
+  `StartBranchPreview` of a project linked to its session, refused before
+  the service is asked for any other. Both record the agent's Run as actor
+  (`run.created`, actor type `agent`), and a repeat returns the live preview.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label

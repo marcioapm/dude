@@ -185,4 +185,7 @@ const (
 	rRunCallsNoWriter                      = "your task's current attempt has no implementer, fixer or simplifier Run yet"
 	rRunCallsNoSuchCommit                  = "the Run's checkouts have no commit %s"
 	rRunCallsUnread                        = "dude cannot read that Run's commit: its container is not running, and no checks ask read it there"
+	rPreviewsUnavailable                   = "previews are not available here: this dude starts none for agents"
+	rPreviewNeedsOwnTask                   = "start_preview previews your own task, and this Run has none"
+	rPreviewRefused                        = "the preview was not started: %s"
 )

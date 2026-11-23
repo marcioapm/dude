@@ -97,6 +97,8 @@ definition answers it where there is one.
 | `limits.read` | `limits` |
 | `limits.request` | `request_limit` |
 | `verify` | `verify` |
+| `preview.task` | `start_preview` (a conductor's: its own task's preview, no task input; a live one is returned) |
+| `preview.branch` | `preview_branch` (a brainstorm's: a branch of a project linked to its session, refused before anything starts for any other; one live per project branch is returned) |
 | `web_search` | the harness's web search: OpenCode's `websearch` (`OPENCODE_ENABLE_EXA=1` and `mcp.exa.ai` on the egress list), Claude Code's `WebSearch`, Codex's `web_search` (pinned `live`) |
 | `web_fetch` | the harness's web fetch: OpenCode's `webfetch`, Claude Code's `WebFetch` (Codex has none) |
 
@@ -120,8 +122,8 @@ role none of these is):
 
 | role | capabilities |
 |---|---|
-| conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `runs.read`, `pr.refresh`, `limits.read`, `limits.request`, `verify`, `web_search`, `web_fetch` |
-| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.name`, `session.agents`, `session.checkout`, `runs.read`, `pr.refresh`, `web_search`, `web_fetch` |
+| conductor | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `pr.act`, `base.sync`, `github.read`, `delivery.read`, `conduct`, `runs.read`, `pr.refresh`, `limits.read`, `limits.request`, `verify`, `preview.task`, `web_search`, `web_fetch` |
+| brainstorm | `tasks.read`, `memory`, `ask`, `machines`, `github.read`, `delivery.read`, `session`, `session.name`, `session.agents`, `session.checkout`, `runs.read`, `pr.refresh`, `preview.branch`, `web_search`, `web_fetch` |
 | implementer | `tasks.read`, `tasks.create`, `memory`, `run.basics`, `ask`, `machines`, `coordination`, `feedback.handle`, `feedback.resolve`, `pr.act`, `base.sync`, `web_search`, `web_fetch` |
 | reviewer, fixer, qa_browser | `tasks.read`, `memory`, `run.basics`, `machines`, `web_search`, `web_fetch` |
 | simplifier | `tasks.read`, `memory`, `run.basics`, `machines`, `base.sync`, `web_search`, `web_fetch` |

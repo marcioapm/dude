@@ -1,6 +1,6 @@
 ---
 title: Servers and previews
-covers: [settings:servers]
+covers: [settings:servers, tool:start_preview, tool:preview_branch]
 ---
 A server is a port an agent's container exposes at its own URL, with the command that starts it. This page covers defining servers, starting one in a task, branch previews, and commenting on a preview.
 
@@ -56,3 +56,7 @@ Commenting needs the deployment's public URL configured. A server started before
 ## What agents can read
 
 Agents read a project's server definitions and preview settings with `settings`, section `servers`. Commands and setup lines are shown as typed but never run by the read. Secret values are never shown; only variable names.
+
+## Previews agents start
+
+A task's conductor can start its own task's preview with `start_preview`, before there is a pull request; it names no task and reaches no other. A session's agent can preview a branch of a project linked to the session with `preview_branch`, before there is any task; it never starts a task's preview. Either gives back the preview already live rather than a second one, and the preview is recorded as started by the agent. People stop them as any other.
