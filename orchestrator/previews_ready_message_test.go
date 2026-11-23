@@ -163,6 +163,8 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	w.gh.Branch("feature/look", "main", "a look")
 	session, agent := w.brainstormer()
+	// A task of the project with its conductor: not where the message goes.
+	w.conductorOf(w.task())
 	gh, err := w.previews.Forges.For(context.Background(), w.org)
 	if err != nil {
 		t.Fatal(err)

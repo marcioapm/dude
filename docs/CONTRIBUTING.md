@@ -741,6 +741,14 @@ row held by a follower. Keep the lock order.
   `StartBranchPreview` of a project linked to its session, refused before
   the service is asked for any other. Both record the agent's Run as actor
   (`run.created`, actor type `agent`), and a repeat returns the live preview.
+  Its first ready (`Feed.Apply`'s `server.state` ready, setting
+  `runs.preview_ready_at` from NULL under the Run's row lock) also posts one
+  `agent.message` `{text, previewReady}` "Ready for your look" with each
+  server's name and URL (`servers/announce.go`): on the task's latest
+  conductor for a task preview, on the starting session agent's Run for a
+  branch preview. `preview_ready_at` is the once-only record, so replays,
+  two followers and park→wake never repeat it; a new preview Run has its
+  own. A preview whose `run.created` actor is not an agent says nothing.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
