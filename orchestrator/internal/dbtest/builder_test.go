@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
 // breakBuilderPassword gives dude_builder a password Builder does not use,
@@ -28,12 +30,10 @@ func breakBuilderPassword(t *testing.T) {
 	})
 }
 
-func selectOne(t *testing.T, b interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}) {
+func selectOne(t *testing.T, b *db.DB) {
 	t.Helper()
 	var one int
-	if err := b.QueryRow(context.Background(), "SELECT 1").Scan(&one); err != nil || one != 1 {
+	if err := b.Pool.QueryRow(context.Background(), "SELECT 1").Scan(&one); err != nil || one != 1 {
 		t.Errorf("SELECT 1 as dude_builder: %d, %v", one, err)
 	}
 }
@@ -42,7 +42,7 @@ func selectOne(t *testing.T, b interface {
 func TestBuilderRepairsTheRolesPassword(t *testing.T) {
 	_, owner := Open(t)
 	breakBuilderPassword(t)
-	selectOne(t, Builder(t, owner).Pool)
+	selectOne(t, Builder(t, owner))
 }
 
 // Sixteen Builders at once, each on a database of its own as test binaries
@@ -66,14 +66,12 @@ func TestBuildersAtOnceAllConnect(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, o := range owners {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			b := Builder(t, o)
-			selectOne(t, b.Pool)
+			selectOne(t, b)
 			b.Close()
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
