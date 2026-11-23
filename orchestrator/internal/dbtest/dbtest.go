@@ -12,6 +12,7 @@ package dbtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
@@ -369,19 +371,67 @@ func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 }
 
 // Builder connects to owner's database as dude-image-builder's role
-// (migration 068), which aiverse gives a password in production.
+// (migration 068), as dude_builder:dude_builder. Roles are cluster-wide and
+// concurrent ALTER ROLEs fail (#458), so only a refused login sets that
+// password, under withBuilderRoleLock and if a retry there is refused too.
 func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := owner.Exec(ctx, `ALTER ROLE dude_builder PASSWORD 'dude_builder'`); err != nil {
-		t.Fatal(err)
+	url := fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database)
+	b, err := db.Open(ctx, url)
+	if refusedLogin(err) {
+		err = withBuilderRoleLock(ctx, func(admin *pgx.Conn) error {
+			if b, err = db.Open(ctx, url); !refusedLogin(err) {
+				return err
+			}
+			if err := alterBuilderRole(ctx, admin, "dude_builder"); err != nil {
+				return err
+			}
+			b, err = db.Open(ctx, url)
+			return err
+		})
 	}
-	b, err := db.Open(ctx, fmt.Sprintf("postgres://dude_builder:dude_builder@%s/%s", host(), owner.Config().Database))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(b.Close)
 	return b
+}
+
+// withBuilderRoleLock runs fn on an adminConn holding the lock that
+// serializes dbtest's writes of dude_builder's password. Advisory locks are
+// per database, so it is taken on postgres, which every test binary shares.
+func withBuilderRoleLock(ctx context.Context, fn func(admin *pgx.Conn) error) error {
+	admin, err := adminConn(ctx)
+	if err != nil {
+		return err
+	}
+	// Closing the session releases the lock on every path, too.
+	defer admin.Close(ctx)
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(hashtext('dude_gotest_builder_role'))"); err != nil {
+		return err
+	}
+	defer func() { _, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(hashtext('dude_gotest_builder_role'))") }()
+	return fn(admin)
+}
+
+// alterBuilderRole sets dude_builder's password, retrying XX000 ("tuple
+// concurrently updated") for writers outside withBuilderRoleLock.
+func alterBuilderRole(ctx context.Context, admin *pgx.Conn, password string) error {
+	for attempt := 1; ; attempt++ {
+		_, err := admin.Exec(ctx, "ALTER ROLE dude_builder PASSWORD '"+password+"'")
+		var pg *pgconn.PgError
+		if attempt > 3 || !errors.As(err, &pg) || pg.Code != "XX000" {
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * 50 * time.Millisecond)
+	}
+}
+
+// refusedLogin is whether the server refused err's login.
+func refusedLogin(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (pg.Code == "28P01" || pg.Code == "28000")
 }
 
 // Org inserts an organization and returns its id.
