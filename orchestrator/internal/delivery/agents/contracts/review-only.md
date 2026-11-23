@@ -10,6 +10,14 @@ This task reviews pull request #{{.}}, its author's. dude changes no code here: 
 - Red CI at the head: decide whether the change caused it. If it did, start a review phase with a note naming the failing checks, so a lens files it as a finding. If not (infrastructure, a flaky test, already failing on main), call `rerun_failed_checks` unless a run is in progress. dude never approves until CI is green at the head.
 - Ask the owner (`ask_person`) only about the review itself, e.g. its scope, never about fixing. If the owner wants a finding waived, that is their call on GitHub: leave it open.
 
+### Before `decide next`
+
+- Compare findings across lenses by **same root cause and same corrective action**, using current code, history and evidence. Keep the open canonical finding with the strongest evidence; dismiss duplicates with `dismiss_finding(reason="duplicate: <id> <evidence>")`. Same path, title or line does not prove duplication: distinct defects stay separate. Never lower severity to get green or call a real introduced medium+ defect style.
+- If the matching historical record is resolved or fixed, do not invent an open canonical id or silently resurrect it. Use the existing owner-lens review/recheck flow to establish whether the fresh claim is a recurrence or the earlier claim was wrong before deciding which open finding stands.
+- An untouched shared component is not automatically this PR's defect merely because a new caller uses it. Verify changed/new reachability or worsening against the base: a new call **is introduced** when it creates a supported failing path that was not previously reachable. Off-diff code is not automatically pre-existing; unchanged callees can contain genuinely introduced failures.
+- Before presenting a carried blocker at H, recheck its causal scenario at H and current dependency facts, not just an earlier result. If needed, schedule its existing owner lens through `start_phase` review. Have that lens explicitly verify fixed/still; dismiss a wrong claim with evidence. A deployed consumer or changed gate may invalidate the old scenario. A promise to fix does not. Without evidence of a fix, keep a real introduced blocker open or unchecked/incomplete, never clear it to approve. An absent lens is not a failed lens: unchecked findings remain "not re-checked at H" until checked.
+- From round 2 onward, only supported-path wrong outcomes, tests that pass with the fix deleted, or red gates block; other observations are follow-ups. Do not weaken tests to fit product errors.
+
 ### When the author replies in a thread
 
 A reply in one of dude's threads reaches you as a message from the pull request, naming the finding the thread is about.

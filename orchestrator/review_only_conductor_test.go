@@ -171,6 +171,46 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 	}
 }
 
+func TestAReviewOnlyDuplicateDismissalKeepsDistinctSameLineDefects(t *testing.T) {
+	w := conducting(t)
+	w.gh.SetChecks("success")
+	w.cleanLenses()
+	w.requireReviewers(`{"requiredReviewers":["correctness","tests"]}`)
+	wi, n := w.adoptedConducted(delivery.ModeReviewOnly)
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness","tests"]}`)
+	w.untilDecision(wi, delivery.PointReviewed)
+	// Two lenses file the same defect; another failure at the exact same
+	// file/line remains distinct. Identity comes from model evidence, not location.
+	for _, c := range []struct{ id, category, title string }{
+		{"canonical", "correctness", "Nil input panics"},
+		{"duplicate", "tests", "Nil input panics"},
+		{"distinct", "tests", "Empty input loses the write"},
+	} {
+		mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, suggested_fix, status, introduced, file, line)
+			SELECT $2, organization_id, task_id, id, category, 'medium', $4, $4, 'Correct the supported path', 'open', true, 'FACTORY.md', 1
+			FROM runs WHERE task_id=$1 AND phase='review' AND category=$3 AND status='completed' ORDER BY created_at DESC LIMIT 1`, wi, c.id, c.category, c.title)
+	}
+	w.must(wi, "dismiss_finding", `{"id":"duplicate","reason":"duplicate: canonical same nil-input panic and nil-check correction; canonical has the reproducer"}`)
+	if got := w.openFindings(wi, 2); len(got) != 2 || !slices.Contains(got, "canonical") || !slices.Contains(got, "distinct") {
+		t.Fatalf("canonical and distinct findings not preserved: %v", got)
+	}
+	if w.dismissedWith(wi, "duplicateOf", "canonical") != 1 {
+		t.Fatal("duplicate linkage was not retained")
+	}
+	w.must(wi, "decide", `{"action":"next"}`)
+	w.agentsDone(wi, "canonical verdict", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
+	review := w.dudeReviews(wi, n)[0]
+	if review.State != "CHANGES_REQUESTED" || !strings.Contains(review.Body, "2 open finding(s)") || strings.Contains(review.Body, "**Fixed at ") || strings.Contains(review.Body, "**Already on ") {
+		t.Fatalf("conflicting or collapsed verdict: %+v", review)
+	}
+	if strings.Count(review.Body, "**Nil input panics**") != 1 || strings.Count(review.Body, "**Empty input loses the write**") != 1 {
+		t.Fatalf("current assertions missing or duplicated: %+v", review)
+	}
+	if w.count(`SELECT count(*) FROM review_findings WHERE task_id=$1`, wi) != 3 {
+		t.Fatal("historical duplicate was deleted")
+	}
+}
+
 // T3 in a later round: the author pushes a path a conditional required
 // lens matches (database on migrations/**). The conductor's directed round
 // at the new head still runs it: the round's lenses are the verdict gate's,
