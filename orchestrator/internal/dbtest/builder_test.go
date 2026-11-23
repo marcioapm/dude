@@ -10,8 +10,8 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 )
 
-// breakBuilderPassword gives dude_builder a password Builder does not use,
-// under Builder's lock, and the right one back when the test ends.
+// breakBuilderPassword gives dude_builder a wrong password, under Builder's
+// lock, until the test ends.
 func breakBuilderPassword(t *testing.T) {
 	t.Helper()
 	set := func(password string) error {
@@ -45,19 +45,16 @@ func TestBuilderRepairsTheRolesPassword(t *testing.T) {
 	selectOne(t, Builder(t, owner))
 }
 
-// Sixteen Builders at once, each on a database of its own as test binaries
-// running side by side are, all connect, with the role's password wrong
-// when they start: the race of #458, where each ALTER ROLE'd it and some
-// failed with "tuple concurrently updated". A lock taken on a test's own
-// database would not keep them apart: advisory locks are per database.
+// Sixteen Builders at once, each on its own database like parallel test
+// binaries, all connect with the password wrong when they start: the race
+// of #458. A lock on each test's own database would not serialize them.
 func TestBuildersAtOnceAllConnect(t *testing.T) {
 	const n = 16
 	owners := make([]*pgx.Conn, n)
 	for i := range owners {
 		app, owner := Open(t)
-		// Builder needs owner's database, not its connection: holding none
-		// keeps sixteen of these, and their waiters on Builder's lock, well
-		// inside the cluster's connection limit beside other test binaries.
+		// Builder needs only owner's database name; closing the connections
+		// keeps sixteen lanes inside the cluster's connection limit.
 		app.Close()
 		owner.Close(context.Background())
 		owners[i] = owner
