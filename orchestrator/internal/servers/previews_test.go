@@ -132,6 +132,37 @@ func TestAPreviewEndsWithItsTaskAndALostOneIsCancelled(t *testing.T) {
 	}
 }
 
+func TestRepeatedTaskPreviewStartReturnsOneLiveIdentity(t *testing.T) {
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal, status) VALUES ('wi_'||$1, $1, 'prj_'||$1, 1, 'T', 'G', 'running')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Service{DB: app}
+	first, err := s.StartPreview(ctx, org, "wi_"+org, "agent_run", "agent", "")
+	if err != nil || first.Run == nil {
+		t.Fatalf("first start: %+v %v", first, err)
+	}
+	second, err := s.StartPreview(ctx, org, "wi_"+org, "agent_run", "agent", "")
+	if err != nil || second.Run == nil || second.Run.ID != first.Run.ID {
+		t.Fatalf("repeat start: %+v %v; first %+v", second, err, first.Run)
+	}
+	var previews, created int
+	if err := owner.QueryRow(ctx, `SELECT count(*), (SELECT count(*) FROM events WHERE event_type = 'run.created' AND task_id = 'wi_'||$1)
+		FROM runs WHERE task_id = 'wi_'||$1 AND kind = 'preview'`, org).Scan(&previews, &created); err != nil {
+		t.Fatal(err)
+	}
+	if previews != 1 || created != 1 {
+		t.Fatalf("previews=%d creation events=%d; want one each", previews, created)
+	}
+}
+
 func isRefusal(err error, status int, code string) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Status == status && e.Code == code

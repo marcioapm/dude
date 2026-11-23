@@ -411,9 +411,9 @@ func TestABranchPreviewServesTheTasksBranchAndIsParkedWhenUnused(t *testing.T) {
 		t.Fatalf("start = %d %v", code, out)
 	}
 	runID := run["id"].(string)
-	if code, body := w.do("POST", "/internal/tasks/"+wi+"/preview", nil); code != 409 ||
-		body["error"].(map[string]any)["code"] != "preview_running" {
-		t.Errorf("a second preview = %d %v", code, body)
+	if code, body := w.do("POST", "/internal/tasks/"+wi+"/preview", nil); code != 201 ||
+		body["run"].(map[string]any)["id"] != runID {
+		t.Errorf("a repeated preview = %d %v", code, body)
 	}
 	// A preview has no agent: not to be steered, paused or aborted.
 	if code, body := w.call("/internal/runs/"+runID+"/abort", map[string]any{}); code != 409 {

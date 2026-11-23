@@ -1125,8 +1125,8 @@ func (p *Previews) waitForLogin(ctx context.Context, r previewRun, cause error) 
 	})
 }
 
-// StartPreview starts a branch preview of a task, on behalf of the key
-// actor: 409 if the task has one live already, or is over.
+// StartPreview starts a task preview on behalf of actor, or returns the
+// task's existing live preview. A task that is over cannot start a preview.
 func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, identity ...string) (TaskServers, error) {
 	actorType, personID := ledger.ActorHuman, ""
 	if len(identity) == 2 {
@@ -1156,7 +1156,7 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 			return err
 		}
 		if live {
-			return refuse(http.StatusConflict, "preview_running", "task %s already has a branch preview", taskID)
+			return nil
 		}
 		id := ids.New(ids.Run)
 		wakeable, err := s.wakeable(ctx, tx, projectID)
