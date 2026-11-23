@@ -52,18 +52,52 @@ func setupPreviews(t *testing.T) *previewFixture {
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(gh.Close)
-	svc := &servers.Service{PreviewDomain: "preview.example", Lux: previewLux{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	srv := &agenttools.Server{Previews: servers.AgentPreviews{Service: svc},
-		Forges: forgesOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: gh.URL})}}
-	f := setupWith(t, srv)
-	svc.DB = f.app
+	f := setupWithPreviews(t, previewLux{}, &agenttools.Server{
+		Forges: forgesOf{forge.NewGitHub(forge.Credential{Auth: "pat", Secret: t.Name(), APIBaseURL: gh.URL})}})
 	mustExec(t, f.owner, `INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('repo_'||$1, $1, $2, 'web', 'https://github.com/acme/web')`,
 		f.org, f.project)
+	return &previewFixture{fixture: f, conductor: f.conductor(t), brainstorm: f.linkedSession(t, "ssn_preview"), githubReads: reads}
+}
+
+// setupWithPreviews serves srv with the real preview service, on lx, and
+// gives the fixture's project a server "web" that starts in previews.
+func setupWithPreviews(t *testing.T, lx lux.Client, srv *agenttools.Server) *fixture {
+	t.Helper()
+	svc := &servers.Service{PreviewDomain: "preview.example", Lux: lx, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv.Previews = servers.AgentPreviews{Service: svc}
+	f := setupWith(t, srv)
+	svc.DB = f.app
 	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command, autostart_in_previews)
 		VALUES ($1, $2, 'web', 3000, 'npm start', true)`, f.project, f.org)
-	p := &previewFixture{fixture: f, conductor: f.conductor(t), brainstorm: f.session(t, "ssn_preview", "", ""), githubReads: reads}
-	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_preview', $1, $2)`, f.project, f.org)
-	return p
+	return f
+}
+
+// linkedSession is a brainstorm's token in a new session id, linked to the
+// fixture's project.
+func (f *fixture) linkedSession(t *testing.T, id string) string {
+	t.Helper()
+	token := f.session(t, id, "", "")
+	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ($1, $2, $3)`, id, f.project, f.org)
+	return token
+}
+
+// notGiven fails t unless token's Run neither lists tool, on GET /tools or
+// MCP tools/list, nor can call it over POST or MCP. It returns the MCP list.
+func (f *fixture) notGiven(t *testing.T, who, token, tool, args string) (mcpList map[string]bool) {
+	t.Helper()
+	jsonAPI, mcpList := f.listed(t, token)
+	if jsonAPI[tool] || mcpList[tool] {
+		t.Errorf("%s lists %s: GET /tools %v, MCP %v", who, tool, jsonAPI[tool], mcpList[tool])
+	}
+	if status, out := f.post(t, token, tool, args); status != 404 || out["error"] != "no tool "+tool+" for this Run" {
+		t.Errorf("%s POST %s: %d %v", who, tool, status, out)
+	}
+	var mcpArgs map[string]any
+	_ = json.Unmarshal([]byte(args), &mcpArgs)
+	if _, refused := f.mcpCall(t, token, tool, mcpArgs); refused == "" {
+		t.Errorf("%s MCP tools/call %s succeeded", who, tool)
+	}
+	return mcpList
 }
 
 // previewLux answers a preview's server read: its one server, asleep, at
@@ -165,17 +199,7 @@ func TestAConductorStartsItsTasksPreviewAndABrainstormCannot(t *testing.T) {
 	if previews != 1 || task != f.item || actorType != "agent" || actorID != "run_cond" || first["id"] == "" {
 		t.Errorf("previews %d on %s, created by %s %s; want one on %s by agent run_cond", previews, task, actorType, actorID, f.item)
 	}
-
-	jsonAPI, mcpList = f.listed(t, f.brainstorm)
-	if jsonAPI["start_preview"] || mcpList["start_preview"] {
-		t.Errorf("brainstorm lists start_preview: GET /tools %v, MCP %v", jsonAPI["start_preview"], mcpList["start_preview"])
-	}
-	if status, out := f.post(t, f.brainstorm, "start_preview", `{}`); status != 404 || out["error"] != "no tool start_preview for this Run" {
-		t.Errorf("brainstorm POST start_preview: %d %v", status, out)
-	}
-	if _, refused := f.mcpCall(t, f.brainstorm, "start_preview", map[string]any{}); refused == "" {
-		t.Error("brainstorm MCP tools/call start_preview succeeded")
-	}
+	f.notGiven(t, "brainstorm", f.brainstorm, "start_preview", `{}`)
 }
 
 // The brainstorm lists and calls preview_branch, on every surface, and a
@@ -216,17 +240,7 @@ func TestABrainstormStartsALinkedProjectsBranchPreviewAndAConductorCannot(t *tes
 	if status, out := f.post(t, f.brainstorm, "preview_branch", `{"branch":"gone"}`); status != 422 || out["code"] != "branch_not_found" {
 		t.Errorf("a branch GitHub does not have: %d %v", status, out)
 	}
-
-	jsonAPI, mcpList = f.listed(t, f.conductor)
-	if jsonAPI["preview_branch"] || mcpList["preview_branch"] {
-		t.Errorf("conductor lists preview_branch: GET /tools %v, MCP %v", jsonAPI["preview_branch"], mcpList["preview_branch"])
-	}
-	if status, out := f.post(t, f.conductor, "preview_branch", `{"branch":"feature"}`); status != 404 || out["error"] != "no tool preview_branch for this Run" {
-		t.Errorf("conductor POST preview_branch: %d %v", status, out)
-	}
-	if _, refused := f.mcpCall(t, f.conductor, "preview_branch", map[string]any{"branch": "feature"}); refused == "" {
-		t.Error("conductor MCP tools/call preview_branch succeeded")
-	}
+	f.notGiven(t, "conductor", f.conductor, "preview_branch", `{"branch":"feature"}`)
 }
 
 // A brainstorm asking again and again for a branch GitHub does not have is
@@ -281,11 +295,7 @@ func (agentLux) Servers(context.Context, string) ([]lux.Server, error) {
 // answers with the preview, its id and servers, not the implementer's, and
 // starts one preview however often it is called.
 func TestStartPreviewBehindAWorkingAgentAnswersWithThePreview(t *testing.T) {
-	svc := &servers.Service{PreviewDomain: "preview.example", Lux: agentLux{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	f := setupWith(t, &agenttools.Server{Previews: servers.AgentPreviews{Service: svc}})
-	svc.DB = f.app
-	mustExec(t, f.owner, `INSERT INTO project_servers (project_id, organization_id, name, port, command, autostart_in_previews)
-		VALUES ($1, $2, 'web', 3000, 'npm start', true)`, f.project, f.org)
+	f := setupWithPreviews(t, agentLux{}, &agenttools.Server{})
 	f.run(t, "run_impl", "implementer", "running")
 	mustExec(t, f.owner, `UPDATE runs SET lux_run_id = 'lux_impl' WHERE id = 'run_impl'`)
 	token := f.conductor(t)
@@ -376,8 +386,7 @@ func TestPreviewBranchRefusesAnUnlinkedProjectBeforeTheService(t *testing.T) {
 	rec := &recordingPreviews{}
 	f := setupWith(t, rec.serve(&agenttools.Server{}))
 	mustExec(t, f.owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_other_'||$1, $1, 'Other', 'other_'||$1, 'OTH')`, f.org)
-	token := f.session(t, "ssn_unlinked", "", "")
-	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_unlinked', $1, $2)`, f.project, f.org)
+	token := f.linkedSession(t, "ssn_unlinked")
 	for _, project := range []string{"OTH", "Other"} {
 		status, out := f.post(t, token, "preview_branch", `{"project":"`+project+`","branch":"feature"}`)
 		if status != 422 || out["error"] != "project "+project+" is not linked to this session" {
@@ -440,22 +449,12 @@ func TestARunWithoutAPreviewGrantIsNotGivenItsPreviewTool(t *testing.T) {
 		return capabilities.Default(a.Role).Without(capabilities.PreviewTask, capabilities.PreviewBranch), nil
 	})
 	f := setupWith(t, srv)
-	tokens := map[string]string{"conductor": f.conductor(t), "brainstorm": f.session(t, "ssn_less", "", "")}
-	mustExec(t, f.owner, `INSERT INTO session_projects (session_id, project_id, organization_id) VALUES ('ssn_less', $1, $2)`, f.project, f.org)
+	tokens := map[string]string{"conductor": f.conductor(t), "brainstorm": f.linkedSession(t, "ssn_less")}
 	calls := map[string]string{"conductor": "start_preview", "brainstorm": "preview_branch"}
 	var b strings.Builder
 	for _, role := range []string{"conductor", "brainstorm"} {
 		token, tool := tokens[role], calls[role]
-		jsonAPI, mcpList := f.listed(t, token)
-		if jsonAPI[tool] || mcpList[tool] {
-			t.Errorf("%s without its preview grant lists %s: GET /tools %v, MCP %v", role, tool, jsonAPI[tool], mcpList[tool])
-		}
-		if status, out := f.post(t, token, tool, `{"branch":"feature"}`); status != 404 || out["error"] != "no tool "+tool+" for this Run" {
-			t.Errorf("%s POST %s: %d %v", role, tool, status, out)
-		}
-		if _, refused := f.mcpCall(t, token, tool, map[string]any{"branch": "feature"}); refused == "" {
-			t.Errorf("%s MCP tools/call %s succeeded", role, tool)
-		}
+		mcpList := f.notGiven(t, role+" without its preview grant", token, tool, `{"branch":"feature"}`)
 		names := make([]string, 0, len(mcpList))
 		for name := range mcpList {
 			names = append(names, name)
