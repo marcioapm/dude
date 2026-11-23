@@ -114,7 +114,7 @@ var All = []Capability{
 	{Key: ChildInspect, Description: "Inspect own in-task child Runs' stored results and bounded reports.", Tools: []string{"read_run"}},
 	{Key: RunStop, Description: "Stop a child agent you started that is stuck or no longer needed; its result comes back as aborted.",
 		Tools: []string{"stop_run"}},
-	{Key: Wait, Description: "Declare what you are waiting on — Runs ending, a pull request's checks finishing, a time — and be woken once when it holds or the deadline passes.",
+	{Key: Wait, Description: "Declare what you are waiting on: Runs ending, a pull request's checks or merge, a workflow ending, a time, another task on the epic moving, a URL's status. Be woken once when it holds or at the deadline.",
 		Tools: []string{"wait_for"}},
 	{Key: RunRecover, Description: "Push the committed work of one of the task's ended Runs, from lux's checkpoint, to a branch of its own; it moves no task branch.",
 		Tools: []string{"recover_run"}},

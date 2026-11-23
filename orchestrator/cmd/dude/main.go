@@ -48,7 +48,9 @@
 //	dude stop RUN --reason R              a conductor's: stop a child agent it started
 //	dude recover RUN [--branch B] [--note N]
 //	                                      a conductor's: push an ended Run's commits to a branch
-//	dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
+//	dude wait-for [--run R]... [--pr P[@HEAD]]... [--workflow D]... [--after DUR]
+//	        [--sibling TASK[=B1,B2]]... [--pr-ended PR[=how]]... [--url [!][STATUS,]URL]...
+//	        --deadline D [--any] [--note N]
 //	                                      a conductor's: be woken once when it holds or at D
 //	dude decide ACTION [--note N]         a conductor's: the decision waited on
 //	dude finding dismiss ID --reason R    a conductor's: leave a finding as it is
@@ -90,6 +92,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -785,9 +788,16 @@ func run(args []string, out io.Writer) error {
 		}
 		return show(out, *asJSON, call("recover_run", body))
 	case "wait-for":
-		var runs, prs many
+		var runs, prs, workflows, after, siblings, prsEnded, urls many
 		fs.Var(&runs, "run", "a Run of this task to wait on to end (repeatable)")
 		fs.Var(&prs, "pr", "a pull request (12 or repo#12) whose checks to wait on, @HEAD to pin a head (repeatable)")
+		fs.Var(&workflows, "workflow", "a run_workflow dispatch id to wait on to end (repeatable)")
+		fs.Var(&after, "after", "a time to pass since the wait opened (45m, 2h): at least 30m, before the deadline (at most once)")
+		fs.Var(&siblings, "sibling", "TASK[=B1,B2]: another task on this epic to change, or to become one of B1, B2 "+
+			"(started, stopped, review, ready_to_merge, awaiting_human, done, failed, aborted, closed) (repeatable)")
+		fs.Var(&prsEnded, "pr-ended", "PR[=how]: a pull request (owner/repo#123, repo#123, #123) to end, how merged, closed or any (repeatable)")
+		fs.Var(&urls, "url", "[!][STATUS,]URL: a URL to answer STATUS (200, 2xx, 5xx; 2xx by default), ! for not to; "+
+			"split on the first comma, e.g. '5xx,https://status.example.com/health' or '!2xx,https://x' (repeatable)")
 		deadline := fs.String("deadline", "", "required: a duration (45m, 2h) or a time, at most 24 hours ahead")
 		anyOne := fs.Bool("any", false, "wake on the first condition that holds, not all")
 		note := fs.String("note", "", "what you mean to do then, told back to you")
@@ -795,8 +805,8 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if len(args) != 0 || *deadline == "" {
-			return errors.New("usage: dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]")
+		if len(args) != 0 || *deadline == "" || len(after) > 1 {
+			return errors.New(waitForUsage)
 		}
 		body := map[string]any{"deadline": *deadline}
 		var conditions []any
@@ -810,6 +820,11 @@ func run(args []string, out io.Writer) error {
 			}
 			conditions = append(conditions, map[string]any{"prChecksFinal": pr})
 		}
+		more, ok := waitForConditions(workflows, after, siblings, prsEnded, urls)
+		if !ok {
+			return errors.New(waitForUsage)
+		}
+		conditions = append(conditions, more...)
 		if len(conditions) > 0 {
 			body["conditions"] = conditions
 		}
@@ -1215,6 +1230,83 @@ func show(out io.Writer, _ bool, do func() (json.RawMessage, error)) error {
 // prsUsage is dude prs's usage error: --feedback repeats, one ID each.
 const prsUsage = "usage: dude prs [--refresh | [--feedback ID]...]"
 
+// waitForUsage is dude wait-for's usage error.
+const waitForUsage = "usage: dude wait-for [--run R]... [--pr P[@HEAD]]... [--workflow D]... [--after DUR]" +
+	" [--sibling TASK[=B1,B2]]... [--pr-ended PR[=how]]... [--url [!][STATUS,]URL]... --deadline D [--any] [--note N]" +
+	" (--url splits on the first comma: '5xx,https://status.example.com/health', '!2xx,https://x')"
+
+// urlStatus is what --url takes for a status before its first comma: a
+// code (200) or a class (2xx, 5xx). Anything else is part of the URL.
+var urlStatus = regexp.MustCompile(`^[0-9]([0-9]{2}|xx)$`)
+
+// waitForConditions turns dude wait-for's other flags into wait_for
+// conditions, in this order: workflows, after, siblings, pull requests
+// ending, URLs. It only parses the flags' syntax (false for a malformed
+// one); the tool judges the values.
+func waitForConditions(workflows, after, siblings, prsEnded, urls []string) ([]any, bool) {
+	var conditions []any
+	for _, w := range workflows {
+		if w == "" {
+			return nil, false
+		}
+		conditions = append(conditions, map[string]any{"workflowEnded": w})
+	}
+	for _, a := range after {
+		if a == "" {
+			return nil, false
+		}
+		conditions = append(conditions, map[string]any{"after": a})
+	}
+	for _, s := range siblings {
+		task, becomes, ok := cutNameValue(s)
+		if !ok {
+			return nil, false
+		}
+		sibling := map[string]any{"task": task}
+		if becomes != "" {
+			list := strings.Split(becomes, ",")
+			if slices.Contains(list, "") {
+				return nil, false
+			}
+			sibling["becomes"] = list
+		}
+		conditions = append(conditions, map[string]any{"siblingTask": sibling})
+	}
+	for _, p := range prsEnded {
+		pr, how, ok := cutNameValue(p)
+		if !ok {
+			return nil, false
+		}
+		ended := map[string]any{"pr": pr}
+		if how != "" {
+			ended["how"] = how
+		}
+		conditions = append(conditions, map[string]any{"prEnded": ended})
+	}
+	for _, u := range urls {
+		rest, not := strings.CutPrefix(u, "!")
+		ask := map[string]any{"url": rest}
+		if status, url, ok := strings.Cut(rest, ","); ok && urlStatus.MatchString(status) {
+			ask["url"], ask["status"] = url, status
+		}
+		if ask["url"] == "" {
+			return nil, false
+		}
+		if not {
+			ask["not"] = true
+		}
+		conditions = append(conditions, map[string]any{"url": ask})
+	}
+	return conditions, true
+}
+
+// cutNameValue splits a NAME[=VALUE] flag on its first "=", value "" when
+// absent; false for no NAME, or for an "=" with no VALUE.
+func cutNameValue(flag string) (name, value string, ok bool) {
+	name, value, hasValue := strings.Cut(flag, "=")
+	return name, value, name != "" && (!hasValue || value != "")
+}
+
 const settingsUsage = "usage: dude settings [--project P] [--task T] [--section S] [--limit N] [--cursor C]"
 
 const usage = `dude — the work you are part of, and dude's tools, from the shell.
@@ -1308,9 +1400,16 @@ const usage = `dude — the work you are part of, and dude's tools, from the she
   dude recover RUN [--branch B] [--note N]   a conductor's: push the commits an ended Run never published,
                                              from lux's checkpoint, to dude/<task>/recovered-<run> (or B
                                              under it); uncommitted work is lost; you are woken after
-  dude wait-for [--run R]... [--pr P[@HEAD]]... --deadline D [--any] [--note N]
-                                             a conductor's: be woken once, when the Runs have ended or
-                                             the pull request's checks are final (or at D, at most 24h);
+  dude wait-for [--run R]... [--pr P[@HEAD]]... [--workflow D]... [--after DUR]
+                [--sibling TASK[=B1,B2]]... [--pr-ended PR[=how]]... [--url [!][STATUS,]URL]...
+                --deadline D [--any] [--note N]
+                                             a conductor's: be woken once, when the Runs have ended,
+                                             the pull request's checks are final, a workflow ended,
+                                             DUR passed, the sibling task moved (to B1 or B2), the
+                                             pull request ended (how: merged, closed, any), or the
+                                             URL answers STATUS (200, 2xx, 5xx; ! for not; split on
+                                             the first comma: '5xx,https://status.example.com/health',
+                                             '!2xx,https://x') (or at D, at most 24h);
                                              no conditions is a timer; end your turn after
   dude decide ACTION [--note N]              a conductor's: next, ask_person, wait or
                                              open_pull_request (after the person answered Open
