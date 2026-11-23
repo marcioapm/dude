@@ -252,9 +252,14 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 			}
 			// Its first ready: the preview has served once, and its servers
 			// take the later wake timeout (the sweep's timeouts_due).
+			// The Run row is held: of two followers, or a replay, one
+			// sets it, and only that one announces it (announceReady).
 			tag, err := tx.Exec(ctx, `UPDATE runs SET preview_ready_at = now() WHERE id = $1 AND preview_ready_at IS NULL`, runID)
-			kick = err == nil && tag.RowsAffected() > 0
-			return err
+			if err != nil || tag.RowsAffected() == 0 {
+				return err
+			}
+			kick = true
+			return announceReady(ctx, tx, org, runID)
 		case "server.deleted", "server.expired":
 			// Gone in lux, by dude's own delete or lux's expiry: a preview
 			// still live ends with it (its Run cancelled by the sweep).
