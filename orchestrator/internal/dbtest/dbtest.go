@@ -371,16 +371,9 @@ func Upgrade(t *testing.T, version string) (owner *pgx.Conn, apply func()) {
 }
 
 // Builder connects to owner's database as dude-image-builder's role
-// (migration 068), which aiverse gives a password in production and
-// migration 068 none. It connects as dude_builder:dude_builder and, only
-// when that login is refused, gives the role that password first.
-//
-// Roles are cluster-wide: two ALTER ROLEs at once, from two test binaries
-// or two tests, fail with "tuple concurrently updated" (#458). So a Builder
-// whose login works alters nothing, and one whose login is refused takes
-// withBuilderRoleLock, tries the login again under it (another lane may
-// have set the password while it waited), and sets the password only if
-// that login is refused too.
+// (migration 068), as dude_builder:dude_builder. Roles are cluster-wide and
+// concurrent ALTER ROLEs fail (#458), so only a refused login sets that
+// password, under withBuilderRoleLock and if a retry there is refused too.
 func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	t.Helper()
 	ctx := context.Background()
@@ -405,12 +398,9 @@ func Builder(t *testing.T, owner *pgx.Conn) *db.DB {
 	return b
 }
 
-// withBuilderRoleLock runs fn holding the advisory lock every writer of
-// dude_builder's password in dbtest takes, with fn given the connection
-// that holds it. Advisory locks are per database, so the lock is taken on
-// a connection to the postgres database (adminConn), the one database
-// every test binary shares, as migrateTemplate's is: taken on a test's own
-// clone it would serialize nothing.
+// withBuilderRoleLock runs fn on an adminConn holding the lock that
+// serializes dbtest's writes of dude_builder's password. Advisory locks are
+// per database, so it is taken on postgres, which every test binary shares.
 func withBuilderRoleLock(ctx context.Context, fn func(admin *pgx.Conn) error) error {
 	admin, err := adminConn(ctx)
 	if err != nil {
@@ -425,9 +415,8 @@ func withBuilderRoleLock(ctx context.Context, fn func(admin *pgx.Conn) error) er
 	return fn(admin)
 }
 
-// alterBuilderRole gives dude_builder password, on admin under
-// withBuilderRoleLock. The lock serializes dbtest; the retries cover
-// anything else altering the role at the same moment.
+// alterBuilderRole sets dude_builder's password, retrying XX000 ("tuple
+// concurrently updated") for writers outside withBuilderRoleLock.
 func alterBuilderRole(ctx context.Context, admin *pgx.Conn, password string) error {
 	var err error
 	for retry := 0; retry <= 3; retry++ {
@@ -443,8 +432,7 @@ func alterBuilderRole(ctx context.Context, admin *pgx.Conn, password string) err
 	return err
 }
 
-// refusedLogin is whether err is the server refusing a login, as against
-// not reaching it at all.
+// refusedLogin is whether the server refused err's login.
 func refusedLogin(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && (pg.Code == "28P01" || pg.Code == "28000")
