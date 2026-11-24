@@ -192,6 +192,29 @@ export function escalationJson(alias = "tasks"): string {
   ORDER BY e.cursor DESC LIMIT 1)) AS escalation`;
 }
 
+/**
+ * What a task's pull request waits on a person's credential for: the
+ * latest question.asked of kind credential (owner_github) while its latest
+ * delivery still waits on github.authorized for it. It clears as the step
+ * goes on: the person connected, or the task passed to someone who had.
+ * `person` is who it waits on, `askedAt` when they were told.
+ */
+export function credentialWaitJson(alias = "tasks"): string {
+  return `(SELECT json_build_object('reason', e.payload->>'reason', 'person', (SELECT person_ref(p) FROM people p WHERE p.id = e.payload->>'personId'),
+      'branch', e.payload->>'branch', 'reconnect', COALESCE((e.payload->>'reconnect')::boolean, false),
+      'askedAt', (SELECT min(f.occurred_at) FROM events f WHERE f.task_id = e.task_id AND f.event_type = 'question.asked'
+        AND f.payload->>'kind' = 'credential' AND f.payload->>'key' = e.payload->>'key'))
+    FROM events e
+    JOIN workflow_runs delivery ON delivery.id = (SELECT latest.id FROM workflow_runs latest WHERE latest.task_id = ${alias}.id
+      AND latest.workflow_type = 'task.delivery' ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
+    WHERE e.task_id = ${alias}.id AND e.event_type = 'question.asked' AND e.payload->>'kind' = 'credential'
+      AND delivery.status = 'waiting' AND delivery.awaiting_signals ? 'github.authorized'
+      AND e.payload->>'personId' = (SELECT pub.owner_person_id FROM pr_publications pub
+        WHERE pub.task_id = ${alias}.id AND pub.branch = delivery.state->>'branch')
+      AND e.occurred_at >= delivery.created_at
+    ORDER BY e.cursor DESC LIMIT 1) AS "credentialWait"`;
+}
+
 // ---------------------------------------------------------------------------
 // Tasks
 // ---------------------------------------------------------------------------
@@ -548,7 +571,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     const id = await taskIdOf(scope, ref);
     if (!id) return null;
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}
+      SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}, ${scope.sql.unsafe(credentialWaitJson())}
       FROM tasks WHERE id = ${id}`) as Array<
       Record<string, unknown>
     >;

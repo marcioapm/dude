@@ -18,7 +18,7 @@
  */
 
 import { peopleJson } from "./people.ts";
-import { escalationJson } from "./work.ts";
+import { credentialWaitJson, escalationJson } from "./work.ts";
 import { DEFAULT_RUN_ROLE, NOT_STARTED_STATUSES, TERMINAL_RUN_STATUSES, isConductor, runLabel } from "@dude/domain";
 import type { Escalation, PersonRef, RunStatus, SessionStatus, TaskResolution, TaskStatus } from "@dude/domain";
 import { withOrg } from "../../db/client.ts";
@@ -58,6 +58,8 @@ interface TaskRow {
   people: PersonRef[];
   statusSince: string;
   escalation: Escalation | null;
+  /** Its pull request waits on a person connecting GitHub (work.ts's credentialWaitJson). */
+  credentialWait: { person: PersonRef | null; reconnect: boolean } | null;
   merged: boolean;
   decider: "policy" | "conductor";
   conductorLive: boolean;
@@ -233,7 +235,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
     const tasks = (await sql`
       SELECT w.id, p.key_prefix || '-' || w.number AS key,
              w.project_id AS "projectId", w.epic_id AS "epicId", w.title, w.status, w.resolution, CASE WHEN w.origin->>'via' IS NOT NULL THEN NULL ELSE w.origin->>'provider' END AS "originProvider",
-             ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))},
+             ${sql.unsafe(peopleJson("w"))}, ${sql.unsafe(escalationJson("w"))}, ${sql.unsafe(credentialWaitJson("w"))},
              COALESCE(
                (SELECT max(e.occurred_at) FROM events e
                 WHERE e.task_id = w.id AND e.event_type = 'task.status_changed'),
@@ -407,6 +409,7 @@ export async function getNavigation(ctx: RequestContext): Promise<Response> {
         people: w.people,
         // Why delivery stopped for a person, so "Needs you" can say it.
         escalation: w.escalation,
+        ...(w.credentialWait ? { credentialWait: { person: w.credentialWait.person, reconnect: w.credentialWait.reconnect } } : {}),
         merged: w.merged,
         // Who decides, and whether a conductor is live: the board's driver mark.
         decider: w.decider,

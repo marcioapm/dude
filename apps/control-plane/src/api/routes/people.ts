@@ -128,7 +128,8 @@ async function openAsNewOwner(scope: OrgScope, taskId: string, owner: string): P
 }
 
 const PERSON_DETAIL = `person_ref(p)::jsonb || jsonb_build_object('email', p.email, 'role', p.role,
-  'lastSeenAt', p.last_seen_at, 'lastSeenWhere', p.last_seen_where) AS person`;
+  'lastSeenAt', p.last_seen_at, 'lastSeenWhere', p.last_seen_where, 'githubConnected',
+  CASE WHEN EXISTS (SELECT 1 FROM forge_credentials WHERE auth = 'github_app') THEN ${GITHUB_CONNECTED} END) AS person`;
 
 async function personDetail(scope: OrgScope, id: string) {
   const rows = (await scope.sql`

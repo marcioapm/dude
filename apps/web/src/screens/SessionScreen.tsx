@@ -40,6 +40,7 @@ import { LinkDialog, MakeOwnerDialog, ShareDialog } from "./SessionDialogs.tsx";
 import { useAccount } from "../accounts/context.tsx";
 import { mentionables } from "../mentions.ts";
 import { OriginLine, SessionOrigin } from "../chatOrigin.tsx";
+import { OwnerGithubWarning } from "../ownerGitHub.tsx";
 
 /** How often the page says it is open: the API counts it open for 90 seconds. */
 const OPEN_EVERY_MS = 60_000;
@@ -685,6 +686,7 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
   onOpenImage: (attachments: AttachmentInfo[], index: number) => void;
   onFiled: () => void;
 }) {
+  const people = usePeople();
   const fileable = proposal.items.flatMap((_, i) => (proposal.status[i]?.canFile && !proposal.status[i]?.filed ? [i] : []));
   const [selected, setSelected] = useState<Set<number>>(() => new Set(fileable));
   const [busy, setBusy] = useState(false);
@@ -730,6 +732,8 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
           }
           return n;
         })} />
+      {/* Filed as you, you own what it files: warned now if its pull requests would wait on your GitHub. */}
+      {!readOnly && fileable.length > 0 ? <OwnerGithubWarning client={client} owner={people.byId.get(you) ?? null} people={people} /> : null}
       {problem ? <Callout tone="danger" data-testid="proposal-problem">{problem}</Callout> : null}
     </div>
   );

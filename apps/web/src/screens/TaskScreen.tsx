@@ -73,6 +73,7 @@ import { useTaskImages } from "../hooks/useTaskImages.tsx";
 import { firstName } from "@dude/design-system";
 import { usePeople, type People } from "../people.tsx";
 import { FilesSection } from "./FilesSection.tsx";
+import { CredentialWaitPanel, OwnerGithubWarning, credentialLabel } from "../ownerGitHub.tsx";
 import { VerificationSection } from "./VerificationSection.tsx";
 import { inFacet, withCounts } from "./facets.ts";
 import { EscalationPanel } from "./EscalationPanel.tsx";
@@ -665,9 +666,12 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
       retry={yours ? () => client.retryConductor(item.id) : undefined} onRetried={() => void load()} />
   ) : null;
   // Every notice the task has now, in one place: above the tabs, and on Overview above its figures.
-  const notices = needsYou || item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
+  // The pull request waits on a person's GitHub: their card, where an escalation's panel is.
+  const credentialWait = !earlier ? item.credentialWait ?? null : null;
+  const notices = needsYou || credentialWait || item.escalation || stop || aside || problem || blocked || held || heldByQuestions || commentingNotices || lifecycle.notice || lifecycle.problem || (!earlier && stalledForOwner(item.runs).length > 0) ? (
     <div className="taskNotices" data-testid="task-notices">
       {needsYou}
+      {credentialWait ? <CredentialWaitPanel client={client} taskId={taskId} wait={credentialWait} people={people} onChanged={() => void load()} /> : null}
       {aside ? <EarlierBar attempt={shown} current={current} aside={aside} onCurrent={() => pickAttempt(current)} /> : null}
       {!earlier ? lifecycle.notice : null}
       {lifecycle.problem ? <Callout tone="danger" data-testid="lifecycle-problem">{lifecycle.problem}</Callout> : null}
@@ -724,6 +728,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         description="Nothing starts until what it waits on is merged. A person can start it anyway; an agent can't." />
     </div>
   ) : startable ? (
+    <>
+    <OwnerGithubWarning client={client} owner={owner} people={people} />
     <StartChoice data-testid="start-choice" options={[
       { id: "talk", icon: "message", title: "Talk it through",
         description: "The conductor reads the task and the code, asks what it needs, proposes a plan, and starts the agents when you agree.",
@@ -736,6 +742,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
         foot: "The project's pipeline",
         action: <Button size="sm" onClick={() => void deliver()} disabled={delivering} data-testid="start-deliver">Deliver</Button> },
     ]} />
+    </>
   ) : item.decider === "conductor" && !earlier ? (
     sessions.some((r) => isConductor(r) && !TERMINAL_RUN_STATUSES.includes(r.status)) ? null : (
       <EmptyState compact icon="conductor" title="Planning with the conductor"
@@ -848,6 +855,9 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           // A task never started over names no attempt anywhere.
           ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
         ]} />
+        {/* Under the owner: a task whose pull request would wait on them, until it has one or already waits. */}
+        {!earlier && !credentialWait && prs.length === 0 && !["done", "failed", "aborted"].includes(item.status)
+          ? <OwnerGithubWarning client={client} owner={owner} people={people} /> : null}
         {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
         {!earlier ? <AutoPreviewControl client={client} task={item} onChanged={() => void load()} /> : null}
       </section>
@@ -899,7 +909,8 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           <h1 className="taskTitle">{item.title}</h1>
           <div className="taskMeta">
             {/* The task's status, or on an earlier attempt how that attempt ended. */}
-            <StatusMark {...attemptMark(item, shown, current)} size="sm" data-testid="header-status" />
+            <StatusMark {...attemptMark(item, shown, current)} {...(credentialWait && shown === current ? { label: credentialLabel(credentialWait, people.you) } : {})}
+              size="sm" data-testid="header-status" />
             {!earlier ? lifecycle.marks : null}
             {driver}
             {!earlier ? <MergeHoldChip count={feedback.blocking} beforePR={held} onOpen={() => pickTab("feedback")} /> : null}

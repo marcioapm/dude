@@ -200,3 +200,48 @@ test("callback signals only live publications of the person's current frozen bra
     { run: "wfr_held", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null },
     { run: "wfr_racing", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null }]);
 });
+
+test("githubConnected is a live authorization at the App's version: connected, never connected, reconnect required", async () => {
+  const { registerPeopleRoutes } = await import("../src/api/routes/people.ts");
+  const people = new Router(async () => ({ credentialKind: "person", organizationId: "org_owner", personId: "per_owner", kind: "user", name: "Owner", role: "admin", resolved: true }));
+  registerPeopleRoutes(people);
+  await owner`INSERT INTO people (id,organization_id,name,email) VALUES ('per_never','org_owner','Never','never@example.com'),
+    ('per_reconnect','org_owner','Reconnect','reconnect@example.com'),('per_lapsed','org_owner','Lapsed','lapsed@example.com')`;
+  await owner`DELETE FROM github_user_authorizations WHERE organization_id = 'org_owner'`;
+  await owner`INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,github_login,
+      access_token,refresh_token,expires_at,refresh_expires_at,reconnect_required)
+    SELECT 'org_owner', p, 'fc_owner', c.oauth_version, n, p, 'a', 'r', now() + interval '1 hour', now() + r, x
+    FROM forge_credentials c, (VALUES ('per_owner', 1, interval '1 day', false), ('per_reconnect', 2, interval '1 day', true),
+      ('per_lapsed', 3, interval '-1 minute', false)) v(p, n, r, x) WHERE c.id = 'fc_owner'`;
+  const listed = await (await people.handle(new Request("https://dude.example/v1/people"))).json() as { people: Array<{ id: string; githubConnected: boolean }> };
+  const connected = Object.fromEntries(listed.people.map((p) => [p.id, p.githubConnected]));
+  expect([connected.per_owner, connected.per_never, connected.per_reconnect, connected.per_lapsed]).toEqual([true, false, false, false]);
+  // A replaced App (a new OAuth version) is no longer a connection.
+  await owner`UPDATE forge_credentials SET oauth_version = oauth_version + 1 WHERE id = 'fc_owner'`;
+  const after = await (await people.handle(new Request("https://dude.example/v1/people"))).json() as { people: Array<{ id: string; githubConnected: boolean }> };
+  expect(after.people.find((p) => p.id === "per_owner")?.githubConnected).toBe(false);
+});
+
+test("a task's credentialWait shows while its delivery waits on the frozen owner, and clears as the step goes on", async () => {
+  const { credentialWaitJson } = await import("../src/api/routes/work.ts");
+  await owner`INSERT INTO projects (id,organization_id,name,slug,key_prefix) VALUES ('prj_cw','org_owner','CW','cw','CW')`;
+  await owner`INSERT INTO tasks (id,organization_id,project_id,title,number,status) VALUES ('tsk_cw','org_owner','prj_cw','Waits',1,'awaiting_input')`;
+  await owner`INSERT INTO pr_publications (organization_id,task_id,branch,owner_person_id) VALUES ('org_owner','tsk_cw','dude/cw-1-1','per_owner')`;
+  await owner`INSERT INTO workflow_runs (id,organization_id,workflow_type,idempotency_key,status,step,state,awaiting_signals,task_id,created_at) VALUES
+    ('wfr_cw','org_owner','task.delivery','cw','waiting','openPullRequest','{"branch":"dude/cw-1-1"}','["github.authorized"]','tsk_cw', now() - interval '1 hour')`;
+  await owner`INSERT INTO events (id,organization_id,event_type,project_id,task_id,actor_type,actor_id,source,payload) VALUES
+    ('evt_cw','org_owner','question.asked','prj_cw','tsk_cw','system','workflow','control-plane',
+     ${{ kind: "credential", reason: "owner_github", personId: "per_owner", branch: "dude/cw-1-1", reconnect: false, key: "wfr_cw:0:per_owner" }}::jsonb)`;
+  const read = async () => (await owner.unsafe(`SELECT ${credentialWaitJson()} FROM tasks WHERE id = 'tsk_cw'`))[0].credentialWait;
+  const shown = await read();
+  expect({ ...shown, askedAt: undefined, person: shown.person.id }).toEqual({ reason: "owner_github", person: "per_owner", branch: "dude/cw-1-1",
+    reconnect: false, askedAt: undefined });
+  // Passed to someone else: the wait is no longer the frozen owner's.
+  await owner`UPDATE pr_publications SET owner_person_id = 'per_other' WHERE task_id = 'tsk_cw'`;
+  expect(await read()).toBeNull();
+  await owner`UPDATE pr_publications SET owner_person_id = 'per_owner' WHERE task_id = 'tsk_cw'`;
+  expect(await read()).not.toBeNull();
+  // The step went on (connected): nothing waits.
+  await owner`UPDATE workflow_runs SET status = 'running', awaiting_signals = '[]' WHERE id = 'wfr_cw'`;
+  expect(await read()).toBeNull();
+});
