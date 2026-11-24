@@ -1163,11 +1163,14 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by, wakeable)
+		// An agent's wakeable preview wakes as it is made (agentWakes).
+		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by, wakeable,
+				wake_wanted_at)
 			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', COALESCE(NULLIF($7, ''),
 				(SELECT k.person_id FROM api_keys k JOIN people p ON p.id = k.person_id
-				 WHERE k.id = $6 AND k.organization_id = $2 AND p.organization_id = $2 AND k.revoked_at IS NULL AND p.removed_at IS NULL)), $8)`,
-			id, org, projectID, taskID, attempt, actor, personID, wakeable); err != nil {
+				 WHERE k.id = $6 AND k.organization_id = $2 AND p.organization_id = $2 AND k.revoked_at IS NULL AND p.removed_at IS NULL)), $8,
+				CASE WHEN $8 AND $9 THEN now() END)`,
+			id, org, projectID, taskID, attempt, actor, personID, wakeable, agentWakes(actorType)); err != nil {
 			return err
 		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{Type: "run.created", OrganizationID: org, ProjectID: projectID,

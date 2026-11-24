@@ -319,8 +319,16 @@ func (p *Previews) previewServers(ctx context.Context, org, runID string) ([]pre
 	return out, err
 }
 
+// agentWakes says whether a preview started by actorType wakes as it is
+// made (wake_wanted_at set in its insert): an agent's does, to be looked
+// at (announceReady); a person's sleeps until opened. Only that first
+// start is automatic.
+func agentWakes(actorType string) bool { return actorType == ledger.ActorAgent }
+
 // createServers makes the preview's lux servers, one per project server
-// marked to start in previews (reconcileServers), then leaves it asleep.
+// marked to start in previews (reconcileServers), then leaves it asleep, or
+// waking when a wake was asked for meanwhile (agentWakes, a URL's request):
+// wake_wanted_at is kept, and the next sweep wakes it.
 func (p *Previews) createServers(ctx context.Context, r wakeRun) error {
 	if done, err := p.reconcileServers(ctx, r); err != nil || done {
 		return err

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
@@ -102,5 +104,29 @@ func TestAStallReportReachesTheConductorInTheSamePass(t *testing.T) {
 	}
 	if n := count(`SELECT count(*) FROM directives WHERE run_id = 'run_cond' AND text LIKE '%run_rev%no progress%'`); n != 1 {
 		t.Fatalf("the conductor has %d notes naming the stalled Run, want 1", n)
+	}
+}
+
+// A Run's last message in its stall facts is its own, not a preview's
+// "Ready for your look" dude said for it after.
+func TestAStallsLastMessageIsNotAPreviewReady(t *testing.T) {
+	ctx := context.Background()
+	w := newWakeSweepWorld(t)
+	org, exec := w.org, w.exec
+	exec(`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_r', $1, 'prj_'||$1, 1, 'T', 'G')`, org)
+	exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status)
+		VALUES ('run_cond', $1, 'prj_'||$1, 'wi_r', 1, 'conductor', 'agent', 'running')`, org)
+	exec(`INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_r1', $1, 'agent.message', 'run_cond', 'wi_r', 'agent', 'run_cond', 'test', '{"text":"Started the preview."}'),
+			('ev_r2', $1, 'agent.message', 'run_cond', 'wi_r', 'agent', 'run_cond', 'orchestrator',
+				'{"text":"Ready for your look:\n- web","previewReady":"run_p"}')`, org)
+	var s delivery.Stall
+	if err := w.s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		return codeFacts(ctx, tx, stallRow{ID: "run_cond", WindowSecs: 1800}, &s)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if s.LastMessage != "Started the preview." {
+		t.Fatalf("last message %q, want the Run's own", s.LastMessage)
 	}
 }

@@ -261,11 +261,12 @@ func briefRuns(ctx context.Context, tx pgx.Tx, taskID, self string) (briefLines,
 		return out, err
 	}
 	// The newest, then shown oldest first; each with its outcome in a line:
-	// its error, or the first line of its last message.
+	// its error, or the first line of its last message (not a preview's
+	// "Ready for your look", which dude said for it).
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(phase::text, ''), COALESCE(role::text, ''), COALESCE(category, ''),
 			status::text, COALESCE(error, ''),
 			COALESCE((SELECT e.payload->>'text' FROM events e WHERE e.run_id = r.id AND e.event_type = 'agent.message'
-				ORDER BY e.cursor DESC LIMIT 1), '')
+				AND NOT e.payload ? 'previewReady' ORDER BY e.cursor DESC LIMIT 1), '')
 		FROM (SELECT * FROM runs WHERE task_id = $1 AND kind = 'agent' AND id <> $2 ORDER BY created_at DESC LIMIT $3) r
 		ORDER BY created_at`, taskID, self, briefRunsMax)
 	if err != nil {

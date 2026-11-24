@@ -245,6 +245,26 @@ func TestChatASessionChildsOutputSettlesNothing(t *testing.T) {
 	}
 }
 
+// dude's "Ready for your look" of a preview the session's agent started is
+// recorded as that agent's message, but it is no reply: the mark waits for
+// the agent's own.
+func TestChatAPreviewReadyMessageSettlesNothing(t *testing.T) {
+	w := setup(t)
+	ts, session := w.sessionMention()
+	w.agentIs(session, "running", "running")
+	w.exec(`INSERT INTO events (id, organization_id, event_type, run_id, session_id, actor_type, actor_id, source, payload)
+		SELECT 'evt_' || md5(random()::text), $1, 'agent.message', r.id, $2, 'agent', r.id, 'orchestrator',
+			'{"text":"Ready for your look:\\n- web","previewReady":"run_preview"}'
+		FROM runs r WHERE r.session_id = $2 AND r.role = 'brainstorm' ORDER BY r.created_at DESC LIMIT 1`, w.org, session)
+	if n := w.settle(); n != 0 || w.marks("C1", ts) != "eyes" {
+		t.Fatalf("settled %d on a preview's ready: %s", n, w.marks("C1", ts))
+	}
+	w.agentSays(session, "agent.message")
+	if n := w.settle(); n != 1 || w.marks("C1", ts) != "white_check_mark" {
+		t.Fatalf("settled %d on the agent's reply: %s", n, w.marks("C1", ts))
+	}
+}
+
 // A session agent that ends holding the mention's message unread is not
 // the end: the syncer hands the message to a successor, whose answer is ✅.
 func TestChatAMessageHandedToASuccessorWaitsForItsAnswer(t *testing.T) {

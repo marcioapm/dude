@@ -171,6 +171,33 @@ func TestTheBriefingIsBoundedAndCarriesNoDiffOrFindingText(t *testing.T) {
 	}
 }
 
+// A conductor's last message is a preview's "Ready for your look", which
+// dude said for it: its outcome is the message before, its own.
+func TestABriefingsRunOutcomeIsNotAPreviewReady(t *testing.T) {
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	ctx := context.Background()
+	exec(t, owner, `INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_r', $1, 'P', 'p', 'RDY')`, org)
+	exec(t, owner, `INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+		VALUES ('wi_r', $1, 'prj_r', 1, 'Ready', 'A goal long enough for a task.')`, org)
+	exec(t, owner, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, role, kind, status)
+		VALUES ('run_c1', $1, 'prj_r', 'wi_r', 1, 'conductor', 'agent', 'completed')`, org)
+	exec(t, owner, `INSERT INTO events (id, organization_id, event_type, run_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ('ev_r1', $1, 'agent.message', 'run_c1', 'wi_r', 'agent', 'run_c1', 'test', '{"text":"Started the preview."}'),
+			('ev_r2', $1, 'agent.message', 'run_c1', 'wi_r', 'agent', 'run_c1', 'orchestrator',
+				'{"text":"Ready for your look:\n- web","previewReady":"run_p"}')`, org)
+	var note string
+	if err := app.InOrg(ctx, org, func(tx pgx.Tx) (err error) {
+		note, err = delivery.Briefing(ctx, tx, "wi_r", "run_c2", "", "is it up?")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note, "\n- run_c1 · agent · conductor · completed · Started the preview.\n") {
+		t.Errorf("run_c1's outcome is not its own last message:\n%s", note)
+	}
+}
+
 // A task nothing has happened on yet briefs as such: no Runs, no
 // findings, no pull request, its repository at the default branch.
 func TestTheBriefingOfATaskNotStarted(t *testing.T) {

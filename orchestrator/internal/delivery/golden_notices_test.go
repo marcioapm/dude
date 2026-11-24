@@ -366,3 +366,19 @@ func TestGoldenDomainRefusals(t *testing.T) {
 
 // goldenEpicMerge is a merged pull request on an epic, for its wake lines.
 var goldenEpicMerge = epicMerge{TaskKey: "GLD-8", Repo: "api", Base: "main", Number: 14, MergeSHA: headA}
+
+// What an agent says when a preview it started first serves.
+func TestGoldenPreviewReady(t *testing.T) {
+	two := []PreviewReadyServer{{Name: "api", URL: "https://api-dude-7-shop.preview.example"},
+		{Name: "web", URL: "https://web-dude-7-shop.preview.example"}}
+	var b strings.Builder
+	for _, l := range [][2]string{
+		{"task", PreviewReady(two, true, "")},
+		{"branch", PreviewReady(two[1:], false, "feature/look")},
+		{"no-url", PreviewReady([]PreviewReadyServer{{Name: "web"}}, true, "")},
+	} {
+		b.WriteString("## " + l[0] + "\n\n" + l[1] + "\n\n")
+	}
+	// One newline at its end: no blank line for git to flag.
+	golden(t, "notices-preview-ready", strings.TrimSuffix(b.String(), "\n"))
+}

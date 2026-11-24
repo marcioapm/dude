@@ -60,3 +60,7 @@ Agents read a project's server definitions and preview settings with `settings`,
 ## Previews agents start
 
 A task's conductor can start its own task's preview with `start_preview`, before there is a pull request; it names no task and reaches no other. A session's agent can preview a branch of a project linked to the session with `preview_branch`, before there is any task; it never starts a task's preview. Either gives back the preview already live rather than a second one, and the preview is recorded as started by the agent. People stop them as any other.
+
+A preview an agent starts starts by itself as soon as its servers exist, with nobody opening it, so it is ready for its first look. A preview a person starts sleeps until someone opens its URL. Either sleeps when unused and wakes when opened, like any other.
+
+When a preview an agent started first becomes ready, a message says so in the conversation it belongs to: "Ready for your look", with each server's name and URL and what to check. For a task's preview the task's latest conductor says it in the task's Chat, even if an earlier conductor started the preview. For a branch preview the session's agent that started it says it in the session. It comes once per preview, when the preview first becomes ready, however often it sleeps and wakes afterwards; a new preview, after the last one ended, gets its own. A preview a person started gets no message.
