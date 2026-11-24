@@ -60,6 +60,8 @@ export type { ChatThreadProps } from "./ChatThread.tsx";
 export { ChatTranscript, SessionHeader } from "./ChatTranscript.tsx";
 export type { ChatTranscriptProps, ChatTranscriptSession, SessionHeaderProps } from "./ChatTranscript.tsx";
 export { QuestionCard } from "./QuestionCard.tsx";
+export { CredentialCard, CredentialWarning, credentialWords } from "./CredentialCard.tsx";
+export type { CredentialCardProps, CredentialWarningProps } from "./CredentialCard.tsx";
 export type { QuestionCardProps, QuestionState, QuestionKind, QuestionItem, QuestionChoice, QuestionAnswer, QuestionDraft, QuestionSubmission } from "./QuestionCard.tsx";
 export { ChatComposer } from "./ChatComposer.tsx";
 export type { ChatComposerProps, ComposerMode, ComposerSubmission } from "./ChatComposer.tsx";

@@ -16,6 +16,7 @@ import { roleWord, untilWords } from "../accounts/words.ts";
 import { useSave } from "../hooks/useSave.tsx";
 import { pushState, showTestNotification, turnPushOff, turnPushOn, type PushState } from "../push.ts";
 import { ChatConnections } from "./ChatConnections.tsx";
+import { takeGithubReturn } from "../ownerGitHub.tsx";
 
 // Notifications are on or off per organisation: the card speaks of the one this tab is in.
 const PUSH_TEXT: Record<PushState, string> = {
@@ -181,8 +182,12 @@ export function MySettingsScreen({ client, me, onChanged }: {
   useEffect(() => {
     const url = new URL(window.location.href);
     if (!url.searchParams.has("github")) return;
+    const outcome = url.searchParams.get("github");
     url.searchParams.delete("github");
-    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    // Started on a task (its pull request waiting on you): back to it.
+    const back = takeGithubReturn(outcome);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${back ?? url.hash}`);
+    if (back) window.dispatchEvent(new HashChangeEvent("hashchange"));
   }, []);
 
   return (

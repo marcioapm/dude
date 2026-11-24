@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -63,5 +64,24 @@ func TestHeldByReadsEmptyAsPerson(t *testing.T) {
 	e := (&Escalation{Reason: "stuck"}).heldBy(HolderPerson)
 	if e.Holder != HolderPerson || e.RaisedAt == nil || e.RaisedAt.IsZero() {
 		t.Fatalf("heldBy: %+v", e)
+	}
+}
+
+// The conductor's line names the owner by their first name, and the task's
+// owner when they have none; reconnect says so.
+func TestOwnerGitHubLineNamesTheOwner(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		reconnect bool
+		want      string
+	}{
+		{"Ana Lima", false, "until Ana connects GitHub"},
+		{"Ana Lima", true, "until Ana reconnects GitHub"},
+		{"", false, "until the task's owner connects GitHub"},
+		{"  ", true, "until the task's owner reconnects GitHub"},
+	} {
+		if got := ownerGitHubLine(c.name, "dude/x-1-1", c.reconnect); !strings.Contains(got, c.want) || !strings.Contains(got, "dude/x-1-1") {
+			t.Errorf("ownerGitHubLine(%q, %v) = %q, want %q", c.name, c.reconnect, got, c.want)
+		}
 	}
 }

@@ -1,0 +1,1 @@
+The pull request can't open until {{.Owner}} {{if .Reconnect}}reconnects{{else}}connects{{end}} GitHub in their dude settings (dude opens PRs as the task's owner). The branch {{.Branch}} is pushed; nothing is redone when they connect. Tell them so if they ask what's next.

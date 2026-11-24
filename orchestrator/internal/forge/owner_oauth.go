@@ -14,7 +14,9 @@ import (
 )
 
 // OwnerAuthorizationError means the frozen task owner must connect GitHub.
-type OwnerAuthorizationError struct{}
+// Reconnect: they had connected, and that authorization no longer serves
+// (reconnect_required, its refresh token expired, GitHub refused it).
+type OwnerAuthorizationError struct{ Reconnect bool }
 
 func (OwnerAuthorizationError) Error() string {
 	return "The task owner needs Connect GitHub in their profile before this pull request can be opened"
@@ -22,8 +24,8 @@ func (OwnerAuthorizationError) Error() string {
 
 // OwnerToken never changes installation credentials or the shared App cache.
 func OwnerToken(ctx context.Context, database *db.DB, org, person string) (string, error) {
-	reconnect := OwnerAuthorizationError{}
 	for {
+		reconnect := OwnerAuthorizationError{}
 		var token, refresh, clientID, clientSecret, credential, claim string
 		var version int64
 		var expires, refreshExpires time.Time
@@ -39,6 +41,7 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
 				return err
 			}
 			if required || !refreshExpires.After(time.Now()) {
+				reconnect.Reconnect = true
 				return reconnect
 			}
 			if expires.After(time.Now().Add(time.Minute)) {
@@ -104,7 +107,7 @@ func OwnerToken(ctx context.Context, database *db.DB, org, person string) (strin
 			continue
 		}
 		if invalid {
-			return "", reconnect
+			return "", OwnerAuthorizationError{Reconnect: true}
 		}
 		if exchangeErr != nil {
 			if expires.After(time.Now()) {

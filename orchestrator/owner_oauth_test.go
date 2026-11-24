@@ -314,6 +314,9 @@ func TestARevokedOwnerTokenRequiresReconnectThenOpensOnce(t *testing.T) {
 	if w.attempts(task) != 0 || len(w.gh.Pulls()) != 0 {
 		t.Fatalf("revocation spent retries or opened: attempt=%d pulls=%d", w.attempts(task), len(w.gh.Pulls()))
 	}
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" true" {
+		t.Fatalf("credential asks %q, want one to reconnect for Ana", got)
+	}
 	mustExec(t, w.owner, `UPDATE github_user_authorizations SET access_token = 'fresh-token', reconnect_required = false WHERE person_id = $1`, ana)
 	w.authorizeAgain(task, ana)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -440,5 +443,285 @@ func TestAnOwnersRepositoryRefusalIsShownWithoutFallback(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 0 {
 		t.Fatal("refused owner opened a pull request")
+	}
+}
+
+// credentialAsks are the task's question.asked of kind credential, each
+// as "personId reconnect".
+func (w *world) credentialAsks(task string) []string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT payload->>'personId' || ' ' || (payload->>'reconnect')
+		FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'credential'
+		  AND payload->>'reason' = 'owner_github' ORDER BY cursor`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	asks, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return asks
+}
+
+// waitingOnAuthorization: the delivery is parked at openPullRequest for
+// github.authorized.
+func (w *world) waitingOnAuthorization(task string) bool {
+	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
+		AND step = 'openPullRequest' AND awaiting_signals ? $2`, task, delivery.SignalGitHubAuthorized) == 1
+}
+
+// A pull request waiting on its owner's GitHub is the owner's item: one
+// question.asked of kind credential, addressed to them, which a sweep of
+// the step while they still have not connected does not repeat. Connecting
+// opens the pull request, and the wait is over.
+func TestAnOwnerWithoutGitHubIsAskedOnceThenThePullRequestOpens(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" false" {
+		t.Fatalf("credential asks %q, want one for Ana", got)
+	}
+	var branch string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'branch' FROM events WHERE task_id = $1 AND payload->>'kind' = 'credential'`, task).Scan(&branch)
+	if branch != delivery.BranchFor(task, 1) {
+		t.Fatalf("the ask names branch %q", branch)
+	}
+	// The step runs again with Ana still not connected: nobody is told twice.
+	w.authorizeAgain(task, ana)
+	w.until("the step swept again", func() bool {
+		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
+	})
+	if got := w.credentialAsks(task); len(got) != 1 {
+		t.Fatalf("a second sweep asked again: %q", got)
+	}
+	// No conductor decides it: nobody to tell, and nothing fails for it.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != 0 {
+		t.Fatalf("%d conductor wakes for a delivery no conductor decides", n)
+	}
+	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+	w.connectOwner(ana, "ana-token", 1)
+	w.authorizeAgain(task, ana)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if w.waitingOnAuthorization(task) {
+		t.Fatal("still waiting on the authorization")
+	}
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
+		t.Fatalf("creation auth %v", got)
+	}
+	if got := w.credentialAsks(task); len(got) != 1 {
+		t.Fatalf("credential asks after opening %q", got)
+	}
+}
+
+// A conducted delivery whose pull request waits on its owner's GitHub
+// tells its conductor so, once, in words it can pass on: it must not
+// answer "what's next?" with "nothing is needed from you".
+func TestAConductorIsToldThePullRequestWaitsOnItsOwnersGitHub(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana Lima")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" false" {
+		t.Fatalf("credential asks %q", got)
+	}
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = $2`,
+		task, delivery.WakeOwnerGitHub).Scan(&line); err != nil {
+		t.Fatalf("the conductor was not told: %v", err)
+	}
+	if !strings.Contains(line, "until Ana connects GitHub") || !strings.Contains(line, delivery.BranchFor(task, 1)) ||
+		!strings.Contains(line, "nothing is redone") {
+		t.Fatalf("the conductor's line: %q", line)
+	}
+	w.authorizeAgain(task, ana)
+	w.until("the step swept again", func() bool {
+		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub); n != 1 {
+		t.Fatalf("the conductor was told %d times", n)
+	}
+}
+
+// A conducted delivery's owner, asked to connect, connects with a token
+// GitHub then refuses: they are asked again, to reconnect, and the
+// conductor is told that too. A further sweep asks nobody again.
+func TestAnOwnerWhoConnectsThenIsRefusedIsAskedToReconnect(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" false" {
+		t.Fatalf("credential asks %q, want one to connect for Ana", got)
+	}
+	wakes := func() int {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub)
+	}
+	if n := wakes(); n != 1 {
+		t.Fatalf("the conductor was told %d times", n)
+	}
+	consumed := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
+	}
+	// Ana connects; GitHub refuses the token as the pull request is created.
+	w.gh.OpenRefuse = map[string]int{"bad-token": 401}
+	w.connectOwner(ana, "bad-token", 1)
+	w.authorizeAgain(task, ana)
+	w.until("the refusal swept", func() bool {
+		return consumed() == 1 && w.waitingOnAuthorization(task) &&
+			w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND reconnect_required`, ana) == 1
+	})
+	if got := w.credentialAsks(task); len(got) != 2 || got[0] != ana+" false" || got[1] != ana+" true" {
+		t.Fatalf("credential asks %q, want connect then reconnect for Ana", got)
+	}
+	if n := wakes(); n != 2 {
+		t.Fatalf("the conductor was told %d times, want twice", n)
+	}
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = $2
+		ORDER BY created_at DESC, id DESC LIMIT 1`, task, delivery.WakeOwnerGitHub).Scan(&line); err != nil || !strings.Contains(line, "reconnects GitHub") {
+		t.Fatalf("the conductor's second line: %q %v", line, err)
+	}
+	// Swept again with Ana still to reconnect: nobody is asked a third time.
+	w.authorizeAgain(task, ana)
+	w.until("the step swept again", func() bool { return consumed() == 2 && w.waitingOnAuthorization(task) })
+	if got := w.credentialAsks(task); len(got) != 2 {
+		t.Fatalf("a further sweep asked again: %q", got)
+	}
+	if n := wakes(); n != 2 {
+		t.Fatalf("a further sweep told the conductor again: %d", n)
+	}
+	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+}
+
+// takeOver makes person the task's owner through the control plane's real
+// PATCH /v1/tasks/:id over this test's database (testdata/take-over.ts).
+func (w *world) takeOver(task, person string) {
+	w.t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	c := w.owner.Config()
+	cmd := exec.Command("bun", "run", "orchestrator/testdata/take-over.ts", w.org, person, task)
+	cmd.Dir = filepath.Join(filepath.Dir(file), "..")
+	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil || string(out) != "200" {
+		w.t.Fatalf("take over: %v\nstdout: %s\nstderr: %s", err, out, stderr.Bytes())
+	}
+}
+
+// The owner switching, while the pull request waits on the old owner's
+// GitHub, to someone who has connected opens it as them, at once. A switch
+// to someone who has not connected changes nothing.
+func TestTakingOverAWaitingPullRequestOpensItAsTheNewOwner(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana, bo, cy := w.ownerPerson("Ana"), w.ownerPerson("Bo"), w.ownerPerson("Cy")
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.connectOwner(bo, "bo-token", 2)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	w.takeOver(task, cy)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 1 {
+		t.Fatal("a switch to someone not connected moved the publication")
+	}
+	w.takeOver(task, bo)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer bo-token" {
+		t.Fatalf("creation auth %v, want Bo's", got)
+	}
+	if w.attempts(task) != 0 {
+		t.Fatalf("the switch spent attempt %d", w.attempts(task))
+	}
+}
+
+// takenOverByUnconnectedCy parks a delivery on Ana's GitHub, then Cy, who
+// has not connected, takes the task over: the publication stays Ana's.
+func takenOverByUnconnectedCy(t *testing.T) (w *world, task, ana, cy string) {
+	w = newWorld(t)
+	w.asApp()
+	ana, cy = w.ownerPerson("Ana"), w.ownerPerson("Cy")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task = w.task()
+	w.taskOwners(task, ana)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	w.takeOver(task, cy)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 1 {
+		t.Fatal("a take-over by someone not connected moved the publication")
+	}
+	return w, task, ana, cy
+}
+
+// The new owner who took over before connecting opens the pull request as
+// they connect: the publication passes from Ana to them.
+func TestATakenOverPullRequestOpensAsTheNewOwnerWhenTheyConnect(t *testing.T) {
+	w, task, ana, cy := takenOverByUnconnectedCy(t)
+	w.connectThroughCallback(cy, "cy-token", 3)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer cy-token" {
+		t.Fatalf("creation auth %v, want Cy's", got)
+	}
+	if w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, cy) != 1 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 0 {
+		t.Fatal("the publication is still frozen to Ana")
+	}
+	if w.attempts(task) != 0 {
+		t.Fatalf("connecting spent attempt %d", w.attempts(task))
+	}
+}
+
+// The new owner, connected after taking over, presses Take over again (the
+// card's "Take over and open it as me"): the owner is unchanged, and the
+// pull request opens as them.
+func TestTakingOverAgainOnceConnectedOpensThePullRequest(t *testing.T) {
+	w, task, ana, cy := takenOverByUnconnectedCy(t)
+	w.connectOwner(cy, "cy-token", 3)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 {
+		t.Fatal("connecting outside the callback opened it")
+	}
+	w.takeOver(task, cy)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer cy-token" {
+		t.Fatalf("creation auth %v, want Cy's", got)
+	}
+	if w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 0 {
+		t.Fatal("the publication is still frozen to Ana")
 	}
 }

@@ -97,6 +97,8 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"publish-stalled", publishStalledLine("pub_3", []string{"api to 1111111", "web to 2222222"})},
 		{"unblocked", unblockedLine("GLD-8", "GLD-7", false)},
 		{"unblocked-auto", unblockedLine("GLD-8", "GLD-7", true)},
+		{"owner-github", ownerGitHubLine("Christophe", "dude/gld-8-1", false)},
+		{"owner-github-reconnect", ownerGitHubLine("Christophe", "dude/gld-8-1", true)},
 		{"run-asks", runAsksLine("implement", "run_impl", "qst_3")},
 		{"review-question", OpenReviewQuestion{ID: "rvq_1", RunID: "run_rev", Category: "correctness", NeededFrom: "product",
 			Question: "Do invoices close in UTC\nor in the organisation's zone? " + strings.Repeat("w", 80)}.wakeLine()},
