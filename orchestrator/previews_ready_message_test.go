@@ -92,14 +92,65 @@ func taskReadyText(lines ...string) string {
 	return "Ready for your look:\n- " + strings.Join(lines, "\n- ") + "\n\nCheck this task's change there, on its branch as it is now."
 }
 
-// quietAgentPreview is an agent's preview of task, started by run, whose
-// servers exist but never become ready by themselves: the test says when
-// (feedState).
-func (w *world) quietAgentPreview(task, run string) (runID, web string) {
+// readyWorld is a world whose previews wake, with one web server running
+// command ("fakelux-never-ready": ready only when the test says, feedState).
+func readyWorld(t *testing.T, command string) *world {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, command, "", nil, true)
+	return w
+}
+
+// agentPreviewWeb is an agent's preview of task, started by run, once its
+// servers exist, and its web server.
+func (w *world) agentPreviewWeb(task, run string) (runID, web string) {
 	w.t.Helper()
 	runID = w.agentPreview(task, run)
 	w.withServers(runID)
 	return runID, w.serverID(runID, "web")
+}
+
+// agentBranchPreview is preview_branch of branch by session agent run.
+func (w *world) agentBranchPreview(branch, run string) string {
+	w.t.Helper()
+	gh, err := w.previews.Forges.For(context.Background(), w.org)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	b, err := w.previews.StartBranchPreview(context.Background(), gh, w.org, w.project, branch, run, ledger.ActorAgent, "")
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return b.ID
+}
+
+func (w *world) webURL(runID string) string {
+	return w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, runID)
+}
+
+// sleepsUntilOpenedAndSaysNothing: a person's preview runID has no wake and
+// no lux Run until opened, and no ready message, opened or not.
+func (w *world) sleepsUntilOpenedAndSaysNothing(runID string) {
+	w.t.Helper()
+	for range 10 {
+		w.pump()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL
+		AND lux_run_id IS NULL AND preview_ready_at IS NULL`, runID); n != 1 || len(w.luxRuns()) != 0 {
+		w.t.Fatalf("a person's unopened preview woke (%d lux runs)", len(w.luxRuns()))
+	}
+	if n := w.allReadyMessages(); n != 0 {
+		w.t.Fatalf("%d ready messages before it was opened", n)
+	}
+	w.open(w.serverID(runID, "web"))
+	w.until("ready", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
+	})
+	w.pump()
+	if n := w.allReadyMessages(); n != 0 {
+		w.t.Fatalf("%d ready messages for a person's preview", n)
+	}
 }
 
 func (w *world) allReadyMessages() int {
@@ -116,14 +167,10 @@ func (w *world) feedState(serverID, state string, id int64) {
 }
 
 func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w := readyWorld(t, "npm run dev")
 	task := w.task()
 	conductor := w.conductorOf(task)
-	runID := w.agentPreview(task, conductor)
-	w.withServers(runID)
-	web := w.serverID(runID, "web")
+	runID, web := w.agentPreviewWeb(task, conductor)
 
 	// Not ready: starting, waking, failed, stopped say nothing.
 	for i, state := range []string{"starting", "waking", "failed", "stopped"} {
@@ -137,11 +184,12 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 	w.until("ready announced", func() bool { return len(w.readyMessages(runID)) == 1 })
 	w.unopened(runID)
 	got := w.readyMessages(runID)[0]
-	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, runID)
+	url := w.webURL(runID)
 	if got.run != conductor || got.task != task || got.session != "" || got.actor != ledger.ActorAgent {
 		t.Fatalf("said on run %q task %q session %q by %q, want the conductor %s in task %s", got.run, got.task, got.session, got.actor, conductor, task)
 	}
-	if want := taskReadyText("web — " + url); url == "" || got.text != want {
+	// An empty URL renders no " — ", so it fails this too.
+	if want := taskReadyText("web — " + url); got.text != want {
 		t.Fatalf("text %q, want %q", got.text, want)
 	}
 
@@ -189,32 +237,23 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 }
 
 func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w := readyWorld(t, "npm run dev")
 	w.gh.Branch("feature/look", "main", "a look")
 	session, agent := w.brainstormer()
 	// A task of the project with its conductor: not where the message goes.
 	w.conductorOf(w.task())
-	gh, err := w.previews.Forges.For(context.Background(), w.org)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := w.previews.StartBranchPreview(context.Background(), gh, w.org, w.project, "feature/look", agent, ledger.ActorAgent, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	runID := w.agentBranchPreview("feature/look", agent)
 	if n := w.allReadyMessages(); n != 0 {
 		t.Fatalf("%d ready messages before ready", n)
 	}
 	// Nobody opens it.
-	w.until("ready announced", func() bool { return len(w.readyMessages(b.ID)) == 1 })
-	w.unopened(b.ID)
-	got := w.readyMessages(b.ID)[0]
+	w.until("ready announced", func() bool { return len(w.readyMessages(runID)) == 1 })
+	w.unopened(runID)
+	got := w.readyMessages(runID)[0]
 	if got.run != agent || got.session != session || got.task != "" {
 		t.Fatalf("said on run %q session %q task %q, want %s in session %s", got.run, got.session, got.task, agent, session)
 	}
-	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, b.ID)
+	url := w.webURL(runID)
 	if !strings.Contains(url, previewDomain) {
 		t.Fatalf("web's URL %q", url)
 	}
@@ -226,8 +265,8 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 		t.Fatalf("%d agent messages in a task", n)
 	}
 	// A repeated preview_branch is the same preview: nothing more.
-	if _, err := w.previews.StartBranchPreview(context.Background(), gh, w.org, w.project, "feature/look", agent, ledger.ActorAgent, ""); err != nil {
-		t.Fatal(err)
+	if again := w.agentBranchPreview("feature/look", agent); again != runID {
+		t.Fatalf("a repeated preview_branch made %s, not %s", again, runID)
 	}
 	w.pump()
 	if n := w.allReadyMessages(); n != 1 {
@@ -238,60 +277,18 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 // A preview a person starts sleeps until opened, and says nothing when
 // ready.
 func TestAPersonStartedPreviewSleepsUntilOpenedAndSaysNothing(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w := readyWorld(t, "npm run dev")
 	task, runID := w.declare()
 	w.conductorOf(task) // a conductor there, which did not start it
-	for range 10 {
-		w.pump()
-		time.Sleep(10 * time.Millisecond)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL
-		AND lux_run_id IS NULL AND preview_ready_at IS NULL`, runID); n != 1 || len(w.luxRuns()) != 0 {
-		t.Fatalf("a person's unopened preview woke (%d lux runs)", len(w.luxRuns()))
-	}
-	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages before it was opened", n)
-	}
-	w.open(w.serverID(runID, "web"))
-	w.until("ready", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
-	})
-	w.pump()
-	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages for a person's preview", n)
-	}
+	w.sleepsUntilOpenedAndSaysNothing(runID)
 }
 
-// A branch preview a person starts sleeps until opened too, and says
-// nothing when ready.
+// So does a branch preview a person starts.
 func TestAPersonStartedBranchPreviewSleepsUntilOpenedAndSaysNothing(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w := readyWorld(t, "npm run dev")
 	w.gh.Branch("feature/look", "main", "a look")
 	w.brainstormer() // a session's agent, which did not start it
-	runID := w.startBranch("feature/look")
-	for range 10 {
-		w.pump()
-		time.Sleep(10 * time.Millisecond)
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL
-		AND lux_run_id IS NULL AND preview_ready_at IS NULL`, runID); n != 1 || len(w.luxRuns()) != 0 {
-		t.Fatalf("a person's unopened branch preview woke (%d lux runs)", len(w.luxRuns()))
-	}
-	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages before it was opened", n)
-	}
-	w.open(w.serverID(runID, "web"))
-	w.until("ready", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
-	})
-	w.pump()
-	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages for a person's branch preview", n)
-	}
+	w.sleepsUntilOpenedAndSaysNothing(w.startBranch("feature/look"))
 }
 
 // Two followers (two orchestrators) apply the same ready at once: one
@@ -304,9 +301,7 @@ func TestTwoFollowersOfOneReadySayItOnce(t *testing.T) {
 	w.previews.PreviewDomain = previewDomain
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task := w.task()
-	runID := w.agentPreview(task, w.conductorOf(task))
-	w.withServers(runID)
-	web := w.serverID(runID, "web")
+	runID, web := w.agentPreviewWeb(task, w.conductorOf(task))
 	const followers = 4
 	var wg sync.WaitGroup
 	errs := make(chan error, followers)
@@ -338,12 +333,10 @@ func TestTwoFollowersOfOneReadySayItOnce(t *testing.T) {
 func TestAnEndedPreviewSaysNothingWhenReady(t *testing.T) {
 	for _, end := range []string{"failed", "stopped"} {
 		t.Run(end, func(t *testing.T) {
-			w := newWorld(t)
-			w.wakeable()
-			w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+			w := readyWorld(t, "fakelux-never-ready")
 			task := w.task()
 			conductor := w.conductorOf(task)
-			runID, web := w.quietAgentPreview(task, conductor)
+			runID, web := w.agentPreviewWeb(task, conductor)
 			if end == "failed" {
 				mustExec(t, w.owner, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, runID)
 			} else if _, err := w.previews.StopPreview(context.Background(), w.org, task, conductor, ledger.ActorAgent, ""); err != nil {
@@ -363,12 +356,10 @@ func TestAnEndedPreviewSaysNothingWhenReady(t *testing.T) {
 // The conductor that started a task's preview ended and the task has a
 // newer one before the preview is ready: the latest says it, in the task.
 func TestAPreviewReadyAfterItsConductorEndedIsSaidByTheLatest(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+	w := readyWorld(t, "fakelux-never-ready")
 	task := w.task()
 	starter := w.conductorOf(task)
-	runID, web := w.quietAgentPreview(task, starter)
+	runID, web := w.agentPreviewWeb(task, starter)
 	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, starter)
 	latest := w.conductorOf(task)
 	w.feedState(web, lux.ServerReady, 1<<44)
@@ -384,20 +375,17 @@ func TestAPreviewReadyAfterItsConductorEndedIsSaidByTheLatest(t *testing.T) {
 
 // A server deleted from the preview is not listed.
 func TestADeletedPreviewServerIsNotListed(t *testing.T) {
-	w := newWorld(t)
-	w.wakeable()
-	w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+	w := readyWorld(t, "fakelux-never-ready")
 	w.recipe("api", 4000, "fakelux-never-ready", "api", nil, true)
 	task := w.task()
-	runID, web := w.quietAgentPreview(task, w.conductorOf(task))
+	runID, web := w.agentPreviewWeb(task, w.conductorOf(task))
 	w.until("both servers", func() bool {
 		return w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND deleted_at IS NULL`, runID) == 2
 	})
 	mustExec(t, w.owner, `UPDATE preview_servers SET deleted_at = now() WHERE run_id = $1 AND name = 'api'`, runID)
 	w.feedState(web, lux.ServerReady, 1<<44)
 	got := w.readyMessages(runID)
-	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, runID)
-	if want := taskReadyText("web — " + url); len(got) != 1 || got[0].text != want {
+	if want := taskReadyText("web — " + w.webURL(runID)); len(got) != 1 || got[0].text != want {
 		t.Fatalf("messages %+v, want one %q", got, want)
 	}
 }
