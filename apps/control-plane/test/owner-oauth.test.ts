@@ -201,6 +201,23 @@ test("callback signals only live publications of the person's current frozen bra
     { run: "wfr_racing", name: "github.authorized", payload: { personId: "per_owner" }, consumed_at: null }]);
 });
 
+test("callback does not open a parked publication for someone on the task who is not its owner", async () => {
+  await owner`INSERT INTO projects (id,organization_id,name,slug,key_prefix) VALUES ('prj_nonowner','org_owner','Nonowner','nonowner','NONOWNER')`;
+  await owner`INSERT INTO tasks (id,organization_id,project_id,title,number) VALUES ('tsk_nonowner','org_owner','prj_nonowner','Owned by someone else',1)`;
+  await owner`INSERT INTO task_people (task_id,person_id,organization_id,position) VALUES
+    ('tsk_nonowner','per_other','org_owner',0),('tsk_nonowner','per_owner','org_owner',1)`;
+  await owner`INSERT INTO pr_publications (organization_id,task_id,branch,owner_person_id) VALUES
+    ('org_owner','tsk_nonowner','current','per_other')`;
+  await owner`INSERT INTO workflow_runs (id,organization_id,workflow_type,idempotency_key,status,step,state,awaiting_signals,task_id) VALUES
+    ('wfr_nonowner','org_owner','task.delivery','nonowner','waiting','openPullRequest','{"branch":"current"}','["github.authorized"]','tsk_nonowner')`;
+  expect((await callback(await start())).headers.get("location")).toBe(landed("connected"));
+  const [run] = await owner`SELECT status::text AS status,awaiting_signals FROM workflow_runs WHERE id='wfr_nonowner'`;
+  expect(run).toEqual({ status: "waiting", awaiting_signals: ["github.authorized"] });
+  const [publication] = await owner`SELECT owner_person_id FROM pr_publications WHERE task_id='tsk_nonowner' AND branch='current'`;
+  expect(publication.owner_person_id).toBe("per_other");
+  expect([...await owner`SELECT id FROM workflow_signals WHERE workflow_run_id='wfr_nonowner' AND name='github.authorized'`]).toEqual([]);
+});
+
 test("githubConnected is a live authorization at the App's version: connected, never connected, reconnect required", async () => {
   const { registerPeopleRoutes } = await import("../src/api/routes/people.ts");
   const people = new Router(async () => ({ credentialKind: "person", organizationId: "org_owner", personId: "per_owner", kind: "user", name: "Owner", role: "admin", resolved: true }));
