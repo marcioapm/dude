@@ -21,9 +21,11 @@ func TestDefaultPoolResolvesAsLuxDoes(t *testing.T) {
 	}{
 		{"a tenant mark beats a platform mark and a pool named default", []lux.Pool{platformNamed, tenantNamed, platformMark, tenantMark}, "pool_tm"},
 		{"a platform mark beats a pool named default", []lux.Pool{tenantNamed, platformNamed, platformMark, other}, "pool_pm"},
+		{"a platform mark beats the tenant's pool named default", []lux.Pool{tenantNamed, platformMark}, "pool_pm"},
 		{"with no marks the tenant's default beats the platform's", []lux.Pool{platformNamed, other, tenantNamed}, "pool_tn"},
 		{"the platform's default when the tenant has none", []lux.Pool{other, platformNamed}, "pool_pn"},
 		{"nothing marked or named default", []lux.Pool{other, {ID: "pool_x", Name: "amd64"}}, ""},
+		{"lux matches the name default exactly", []lux.Pool{{ID: "pool_cap", Name: "Default"}, {ID: "pool_cap_p", Name: "DEFAULT", Platform: true}}, ""},
 		{"no pools", nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

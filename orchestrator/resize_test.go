@@ -698,8 +698,9 @@ func TestAMoveIsRaisedWhenLuxMarksNoDefaultPool(t *testing.T) {
 	if got := w.machineOf(runID); got["name"] != "Bigger" || got["poolId"] != defaultPool {
 		t.Fatalf("machine=%v", got)
 	}
-	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
-		t.Fatal("missing machine.raised")
+	// Its notice names that pool too (PoolNamesOf).
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised' AND payload->'to'->>'pool'='default'`, runID) != 1 {
+		t.Fatal("missing machine.raised to the pool named default")
 	}
 	if r := w.lux.Runs(); len(r) != 1 || r[0].ID != liveID || r[0].Resumed != 1 {
 		t.Fatal("the move did not resume the same Run once")
