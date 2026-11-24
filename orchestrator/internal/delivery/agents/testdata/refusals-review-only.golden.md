@@ -4,7 +4,7 @@
 
 ## refusals/delivery/review-only/dismiss-grounds
 
-This task only reviews: that no one here fixes a finding is no reason to dismiss it, and its author fixes what dude's review asks for. Dismiss a finding only when it is wrong or a duplicate, starting the reason with "wrong: " and the evidence, or "duplicate: " and the id of the finding it repeats
+This task only reviews: that no one here fixes a finding is no reason to dismiss it, and its author fixes what dude's review asks for. Dismiss a finding only when it is wrong or a duplicate, starting the reason with "wrong: " and the evidence, or "duplicate: " and the id of the finding it repeats; or keep it as a suggestion with "suggestion: gate <N>: " and why
 
 ## refusals/delivery/review-only/dismiss-wrong-evidence
 
@@ -13,4 +13,8 @@ Say what shows the finding is wrong after "wrong: ": the code or the run that co
 ## refusals/delivery/review-only/no-own-comment
 
 This task reviews pull request #%d: dude's review and its status comment are the output, so post no review or summary of your own there. Reply only in a thread someone started (in_reply_to)
+
+## refusals/delivery/review-only/dismiss-suggestion
+
+Keep a finding as a suggestion with "suggestion: gate <N>: " and why, with the code reference or evidence: N is the gate of the contract's rubric it fails, 2 to 7. A finding that clears every gate stays open
 

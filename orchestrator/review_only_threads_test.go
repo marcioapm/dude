@@ -218,3 +218,34 @@ func TestAWithdrawalApprovesAtTheSameHead(t *testing.T) {
 		t.Fatal("the withdrawn finding's thread is not resolved")
 	}
 }
+
+// The conductor keeps the only finding at H as a suggestion (gate 2): the
+// verdict is weighed again at H, no new round, and approves; its body
+// lists the finding as a suggestion with its gate and why, and dude's
+// thread says it was kept as a suggestion, never withdrawn.
+func TestASuggestionApprovesAtTheSameHead(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
+	root := w.dudeLineComments(n)[0]
+	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi)
+	var finding string
+	_ = w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding)
+	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"suggestion: gate 2: only the local greet mode reaches it, docs/dev.md:4"}`)
+	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+	got := reviewsAt(w.dudeReviews(wi, n), h1)
+	if got[1].State != "APPROVED" || !strings.Contains(got[1].Body, "**Suggestions (not blocking)**\n- The greeting is rude (medium) `greet.md:1`: kept as a suggestion (shipped path): only the local greet mode reaches it, docs/dev.md:4") ||
+		strings.Contains(got[1].Body, "Withdrawn") {
+		t.Fatalf("after the suggestion: %+v", got)
+	}
+	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi); r != runs {
+		t.Fatalf("%d lens Runs for a suggestion", r-runs)
+	}
+	r := repliesTo(w.gh.Pull(n), root.ID)
+	if len(r) != 1 || r[0].Body != "Kept as a suggestion (shipped path): only the local greet mode reaches it, docs/dev.md:4." {
+		t.Fatalf("replies in dude's thread: %+v", r)
+	}
+	if c := w.dudeLineComments(n); len(c) != 1 {
+		t.Fatalf("the suggestion was commented on inline again: %+v", c)
+	}
+}

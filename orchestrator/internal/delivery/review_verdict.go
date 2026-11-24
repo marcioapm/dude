@@ -322,6 +322,10 @@ type verdictFinding struct {
 	Introduced                                              *bool
 	Checked                                                 bool
 	Judgement                                               string
+	// The resolution note of a finding the conductor kept as a suggestion
+	// (keptSuggestion), "" for an open one: it holds nothing, and the
+	// review shows it with the gate it fails and why.
+	Kept string
 	// The inline comment an earlier review of dude's made for it, if one
 	// did: not repeated, listed as still open (design §6.4).
 	earlier *inlinePost
@@ -334,9 +338,19 @@ type verdictFinding struct {
 var verdictSeverities = []string{"blocking", "high", "medium"}
 
 // blocks says the finding holds APPROVE back: medium or above as filed,
-// and not said to be on the base already. (Every verdictFinding is open.)
+// not said to be on the base already, and not kept as a suggestion.
+// (Every other verdictFinding is open.)
 func (f verdictFinding) blocks() bool {
-	return (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
+	return f.Kept == "" && (f.Introduced == nil || *f.Introduced) && slices.Contains(verdictSeverities, f.Severity)
+}
+
+// suggestion is the gate a finding kept as a suggestion fails and why
+// (keptSuggestion); ok is false for any other finding.
+func (f verdictFinding) suggestion() (gate, why string, ok bool) {
+	if f.Kept == "" {
+		return "", "", false
+	}
+	return keptSuggestion(f.Kept)
 }
 
 // uncheckedBlocks says the finding would hold APPROVE back (blocks) but no
@@ -391,10 +405,14 @@ func onBaseCandidates(findings []verdictFinding) bool {
 // inlineText is the words of dude's inline comment for the finding.
 func (f verdictFinding) inlineText() string {
 	text := "**" + f.Title + "** (" + f.Severity + ")"
-	if !f.blocks() {
+	extra := []string{f.Description, f.Fix, f.Acceptance}
+	if gate, why, ok := f.suggestion(); ok {
+		text = "Suggestion, not blocking: " + text
+		extra = append(extra, fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why))
+	} else if !f.blocks() {
 		text = "nit: " + text
 	}
-	for _, s := range []string{f.Description, f.Fix, f.Acceptance} {
+	for _, s := range extra {
 		if s != "" {
 			text += "\n\n" + s
 		}
@@ -431,6 +449,21 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 	var ids []string
 	var onBase, stillOpen, suggestions, unchecked, fixed []string
 	for _, f := range findings {
+		if gate, why, ok := f.suggestion(); ok && f.Judgement != "fixed" {
+			// Kept as a suggestion by the conductor: listed with the gate
+			// it fails and why, and holding nothing. First raised here, it
+			// is commented on inline, marked as a suggestion, too.
+			line := fmt.Sprintf("- %s (%s)%s: kept as a suggestion (%s): %s", f.Title, f.Severity, where(f), gate, why)
+			if e := f.earlier; e != nil && e.URL != "" {
+				line += " " + e.URL
+			}
+			suggestions = append(suggestions, line)
+			if f.earlier == nil && f.File != "" && len(comments) < maxInline {
+				comments = append(comments, forge.ReviewComment{Path: f.File, Line: f.Line, Body: f.inlineText()})
+				ids = append(ids, f.ID)
+			}
+			continue
+		}
 		if !f.Checked {
 			unchecked = append(unchecked, "- "+f.Title+where(f))
 			continue
@@ -1167,7 +1200,8 @@ func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head 
 	rows, err := tx.Query(ctx, `SELECT f.id, f.severity::text, f.title, f.description, f.suggested_fix, COALESCE(f.acceptance, ''),
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
 		COALESCE(j.judgement, '') <> '' OR r.id IS NOT NULL,
-		COALESCE(NULLIF(j.judgement, ''), CASE WHEN r.id IS NOT NULL THEN 'still' END, '')
+		COALESCE(NULLIF(j.judgement, ''), CASE WHEN r.id IS NOT NULL THEN 'still' END, ''),
+		CASE WHEN f.status = 'accepted' THEN COALESCE(f.resolution_note, '') ELSE '' END
 		FROM review_findings f LEFT JOIN runs r ON r.id = f.run_id AND r.task_id = $1 AND r.attempt = $2
 			AND r.phase = 'review' AND r.status = 'completed' AND r.replaced_by IS NULL AND r.base_refs->>$3 = $4
 			AND r.category IS NOT DISTINCT FROM f.category
@@ -1178,13 +1212,20 @@ func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head 
 			AND k.status = 'completed' AND k.replaced_by IS NULL AND k.base_refs->>$3 = $4
 			AND k.category IS NOT DISTINCT FROM f.category
 			ORDER BY k.created_at DESC, k.id DESC LIMIT 1
-		) j ON true WHERE f.task_id = $1 AND (f.status = 'open' OR f.status = 'resolved' AND j.judgement = 'fixed')
+		) j ON true WHERE f.task_id = $1 AND (f.status = 'open' OR f.status = 'resolved' AND j.judgement = 'fixed'
+			OR f.status = 'accepted' AND starts_with(COALESCE(f.resolution_note, ''), $5))
 		AND `+strings.ReplaceAll(thisAttempt, "review_findings.run_id", "f.run_id")+` AND COALESCE(f.repo, $3) = $3
-		ORDER BY f.created_at, f.id`, st.TaskID, st.Attempt, repo, head)
+		ORDER BY f.created_at, f.id`, st.TaskID, st.Attempt, repo, head, DismissedByConductor)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[verdictFinding])
+	findings, err := pgx.CollectRows(rows, pgx.RowToStructByPos[verdictFinding])
+	// Of the conductor's dismissals, only those kept as a suggestion are
+	// the review's to show: a wrong or duplicate one is withdrawn.
+	return slices.DeleteFunc(findings, func(f verdictFinding) bool {
+		_, _, kept := f.suggestion()
+		return f.Kept != "" && !kept
+	}), err
 }
 
 // awaitReviewOnly is a review-only task's pull request wait: no fixer.

@@ -126,13 +126,23 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 		}
 		for _, p := range posts {
 			t := settledThread{inlinePost: p}
+			var bornKept bool
 			err := tx.QueryRow(ctx, `SELECT f.status::text, COALESCE(f.resolution_note, ''),
 					EXISTS (SELECT 1 FROM events e WHERE e.task_id = f.task_id AND e.event_type = $3 AND (e.payload->>'commentId')::bigint = $2),
-					EXISTS (SELECT 1 FROM events e WHERE e.task_id = f.task_id AND e.event_type IN ($4, $5) AND (e.payload->>'commentId')::bigint = $2)
+					EXISTS (SELECT 1 FROM events e WHERE e.task_id = f.task_id AND e.event_type IN ($4, $5) AND (e.payload->>'commentId')::bigint = $2),
+					EXISTS (SELECT 1 FROM events s, jsonb_array_elements(CASE WHEN jsonb_typeof(s.payload->'comments') = 'array' THEN s.payload->'comments' END) c, events r
+						WHERE s.task_id = f.task_id AND s.event_type = $6 AND (c->>'commentId')::bigint = $2
+						AND r.task_id = f.task_id AND r.event_type = $7 AND r.payload->>'findingId' = f.id AND r.occurred_at < s.occurred_at)
 				FROM review_findings f WHERE f.id = $1`, p.FindingID, p.CommentID, EvReviewThreadReplied, EvReviewThreadResolved,
-				EvReviewThreadSyncFailed).Scan(&t.Status, &t.Note, &t.Replied, &t.Settled)
+				EvReviewThreadSyncFailed, EvReviewSubmitted, EvFindingResolved).Scan(&t.Status, &t.Note, &t.Replied, &t.Settled, &bornKept)
 			if err != nil {
 				return err
+			}
+			// A comment made for a finding already kept as a suggestion
+			// says so itself (inlineText): its thread is left open, for
+			// the author, with no reply of dude's.
+			if _, _, kept := keptSuggestion(t.Note); kept && t.Status == "accepted" && bornKept {
+				continue
 			}
 			if t.Status != "open" && !t.Settled {
 				due = append(due, t)
@@ -225,18 +235,23 @@ func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threa
 }
 
 // threadReplyText is the reply syncThreads posts in dude's thread for a
-// finding of status ("accepted" is withdrawn) at head: "Withdrawn:
-// <note>." or "Fixed at <sha>.". dudesThreadReply recognises it.
+// finding of status ("accepted" is withdrawn, or kept as a suggestion) at
+// head: "Withdrawn: <note>.", "Kept as a suggestion (<gate>): <why>." or
+// "Fixed at <sha>.". dudesThreadReply recognises each.
 func threadReplyText(status, note, head string) string {
 	if status == "accepted" {
+		if gate, why, ok := keptSuggestion(note); ok {
+			return fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why)
+		}
 		return "Withdrawn: " + withdrawnNote(note) + "."
 	}
 	return fmt.Sprintf("Fixed at %s.", short(head))
 }
 
 // dudesThreadReply is the words of a reply syncThreads posts in dude's
-// thread (threadReplyText): "Fixed at <sha>." or "Withdrawn: <note>.".
-var dudesThreadReply = regexp.MustCompile(`^(?:Fixed at \S+|(?s:Withdrawn: .*))\.$`)
+// thread (threadReplyText): "Fixed at <sha>.", "Withdrawn: <note>." or
+// "Kept as a suggestion (<gate>): <why>.".
+var dudesThreadReply = regexp.MustCompile(`^(?:Fixed at \S+|(?s:Withdrawn: .*)|(?s:Kept as a suggestion \([a-z ]+\): .*))\.$`)
 
 // OwnThreadReplies adds to a review-only task's threads (DudesThreadsTx)
 // dude's replies in them not recorded yet: a reply posted and listed
@@ -273,7 +288,7 @@ func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdict
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, ''
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, '', ''
 		FROM review_findings WHERE id = $1`, findingID)
 	if err != nil {
 		return nil, err

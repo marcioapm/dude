@@ -148,6 +148,63 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 			return nil, refusef(rReviewOnlyDismissDuplicateOf, cmp.Or(of, "no finding"))
 		}
 		return map[string]any{"kind": kind, "duplicateOf": of}, nil
+	case "suggestion":
+		gate, why, ok := suggestionGrounds(rest)
+		if !ok {
+			return nil, refuseText(rReviewOnlyDismissSuggestion)
+		}
+		return map[string]any{"kind": kind, "gate": gate, "why": clip(oneLine(why), 1000)}, nil
 	}
 	return nil, refuseText(rReviewOnlyDismissGrounds)
+}
+
+// suggestionGates are the gates of contracts/review-only's rubric a
+// finding may fail to be kept as a suggestion, by number: gate 1
+// (introduced, medium or above) is what makes it a candidate at all.
+var suggestionGates = map[int]string{
+	2: "shipped path",
+	3: "proof",
+	4: "test quality",
+	5: "declared behaviour",
+	6: "proportionate",
+	7: "current",
+}
+
+// suggestionGrounds reads "gate <N>: <why>", the rest of a "suggestion:"
+// reason: N one of suggestionGates, why saying something (as "wrong:"
+// evidence must).
+func suggestionGrounds(rest string) (gate int, why string, ok bool) {
+	word, rest, _ := strings.Cut(strings.TrimSpace(rest), " ")
+	if !strings.EqualFold(word, "gate") {
+		return 0, "", false
+	}
+	num, why, found := strings.Cut(rest, ":")
+	num, why = strings.TrimSpace(num), strings.TrimSpace(why)
+	if !found || len(num) != 1 || num[0] < '0' || num[0] > '9' {
+		return 0, "", false
+	}
+	gate = int(num[0] - '0')
+	if _, known := suggestionGates[gate]; !known || len([]rune(why)) < minWrongEvidence ||
+		!strings.ContainsFunc(why, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		return 0, "", false
+	}
+	return gate, why, true
+}
+
+// keptSuggestion reads a finding's resolution note as a review-only
+// conductor's "suggestion:" dismissal (DismissedByConductor, then the
+// reason reviewOnlyGroundsTx accepted): the name of the gate it fails and
+// why. The note's prefix is the one mark of a kept suggestion: it holds
+// no verdict, and is never shown as withdrawn.
+func keptSuggestion(note string) (gate, why string, ok bool) {
+	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
+	word, rest, found := strings.Cut(reason, ":")
+	if !conductor || !found || !strings.EqualFold(strings.TrimSpace(word), "suggestion") {
+		return "", "", false
+	}
+	n, why, ok := suggestionGrounds(rest)
+	if !ok {
+		return "", "", false
+	}
+	return suggestionGates[n], strings.TrimRight(why, "."), true
 }
