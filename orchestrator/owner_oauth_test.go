@@ -69,8 +69,7 @@ func TestAConnectBeforeThePublicationParksResumesIt(t *testing.T) {
 	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
 		t.Fatalf("creation auth %v", got)
 	}
-	if n := w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-		WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized); n != 1 {
+	if n := w.consumedAuthorizations(task); n != 1 {
 		t.Fatalf("%d consumed authorization signals", n)
 	}
 }
@@ -471,6 +470,13 @@ func (w *world) waitingOnAuthorization(task string) bool {
 		AND step = 'openPullRequest' AND awaiting_signals ? $2`, task, delivery.SignalGitHubAuthorized) == 1
 }
 
+// consumedAuthorizations is the number of the task's github.authorized
+// signals its workflow consumed.
+func (w *world) consumedAuthorizations(task string) int {
+	return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+		WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
+}
+
 // resweepPublication runs the delivery's parked publication step again,
 // as a sweep of the step with no new signal, and waits for it to park
 // again.
@@ -595,16 +601,12 @@ func TestAnOwnerWhoConnectsThenIsRefusedIsAskedToReconnect(t *testing.T) {
 	if n := wakes(); n != 1 {
 		t.Fatalf("the conductor was told %d times", n)
 	}
-	consumed := func() int {
-		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
-	}
 	// Ana connects; GitHub refuses the token as the pull request is created.
 	w.gh.OpenRefuse = map[string]int{"bad-token": 401}
 	w.connectOwner(ana, "bad-token", 1)
 	w.authorizeAgain(task, ana)
 	w.until("the refusal swept", func() bool {
-		return consumed() == 1 && w.waitingOnAuthorization(task) &&
+		return w.consumedAuthorizations(task) == 1 && w.waitingOnAuthorization(task) &&
 			w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND reconnect_required`, ana) == 1
 	})
 	if got := w.credentialAsks(task); len(got) != 2 || got[0] != ana+" false" || got[1] != ana+" true" {
@@ -652,20 +654,16 @@ func TestAnOwnerRefusedAgainAfterReconnectingIsAskedAgain(t *testing.T) {
 	wakes := func() int {
 		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub)
 	}
-	consumed := func() int {
-		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
-	}
 	refused := func() bool {
 		return w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND reconnect_required`, ana) == 1
 	}
 	w.gh.OpenRefuse = map[string]int{"bad-token": 401, "bad-again": 401}
 	// Ana connects; GitHub refuses the token as the pull request is created.
 	w.connectThroughCallback(ana, "bad-token", 1)
-	w.until("the refusal swept", func() bool { return consumed() == 1 && w.waitingOnAuthorization(task) && refused() })
+	w.until("the refusal swept", func() bool { return w.consumedAuthorizations(task) == 1 && w.waitingOnAuthorization(task) && refused() })
 	// She reconnects; GitHub refuses that token too.
 	w.connectThroughCallback(ana, "bad-again", 1)
-	w.until("the second refusal swept", func() bool { return consumed() == 2 && w.waitingOnAuthorization(task) && refused() })
+	w.until("the second refusal swept", func() bool { return w.consumedAuthorizations(task) == 2 && w.waitingOnAuthorization(task) && refused() })
 	want := []string{ana + " false", ana + " true", ana + " true"}
 	if got := w.credentialAsks(task); !slices.Equal(got, want) {
 		t.Fatalf("credential asks %q, want %q", got, want)
@@ -676,7 +674,7 @@ func TestAnOwnerRefusedAgainAfterReconnectingIsAskedAgain(t *testing.T) {
 	// Swept again with no new Connect of hers, once on someone else's
 	// github.authorized and once on nothing: nobody is asked a fourth time.
 	w.authorizeAgain(task, bo)
-	w.until("the step swept on Bo's", func() bool { return consumed() == 3 && w.waitingOnAuthorization(task) })
+	w.until("the step swept on Bo's", func() bool { return w.consumedAuthorizations(task) == 3 && w.waitingOnAuthorization(task) })
 	w.resweepPublication(task)
 	if got := w.credentialAsks(task); len(got) != 3 {
 		t.Fatalf("a further sweep asked again: %q", got)
@@ -715,10 +713,6 @@ func TestAConnectDuringARefusedPublicationIsAskedAboutWhenRefused(t *testing.T) 
 	}
 	w.must(task, "decide", `{"action":"open_pull_request"}`)
 	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
-	consumed := func() int {
-		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
-	}
 	refused := func(token string) bool {
 		return w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND access_token = $2
 			AND reconnect_required`, ana, token) == 1
@@ -737,7 +731,7 @@ func TestAConnectDuringARefusedPublicationIsAskedAboutWhenRefused(t *testing.T) 
 	})
 	w.connectThroughCallback(ana, "bad-token", 1)
 	w.until("both refusals swept", func() bool {
-		return consumed() == 2 && w.waitingOnAuthorization(task) && refused("bad-again")
+		return w.consumedAuthorizations(task) == 2 && w.waitingOnAuthorization(task) && refused("bad-again")
 	})
 	if !reconnected.Load() {
 		t.Fatal("the second Connect never ran during the first token's request")
@@ -776,8 +770,7 @@ func TestAnotherDeliverysConnectDoesNotAskAgain(t *testing.T) {
 	}
 	w.authorizeAgain(other, ana)
 	w.until("the other delivery swept", func() bool {
-		return w.waitingOnAuthorization(other) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, other, delivery.SignalGitHubAuthorized) == 1
+		return w.waitingOnAuthorization(other) && w.consumedAuthorizations(other) == 1
 	})
 	w.resweepPublication(first)
 	if got := w.credentialAsks(first); !slices.Equal(got, []string{ana + " false"}) {
