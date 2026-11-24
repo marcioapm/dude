@@ -43,7 +43,7 @@ const StartStageJSON = `(SELECT json_build_object('stage', s.payload->>'stage', 
 	FROM (SELECT e.cursor, e.payload FROM events e WHERE e.event_type = 'run.stage' AND e.run_id = r.id
 	  AND r.status IN ('scheduled', 'starting', 'running') ORDER BY e.cursor DESC LIMIT 1) s
 	WHERE COALESCE(r.lux_state, '') <> 'running'
-	  OR ((s.payload->>'stage' = '` + stageSetup + `' OR s.payload->>'` + stageSetup + `' = 'true')
+	  OR ((s.payload->>'stage' = '` + stageSetup + `' OR s.payload->>'setup' = 'true')
 	    AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = r.id AND (a.run_id, a.cursor) > (r.id, s.cursor)
 	      AND a.event_type LIKE 'agent.%')))`
 

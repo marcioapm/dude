@@ -385,21 +385,24 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   (led by `park`, "Stopping it, keeping its work" / "Stopped, work kept");
   a stage lux reports that the list leaves out is drawn in its place.
 - **A start lists every stage until the agent's first turn, including a
-  repository's setup script.** `setup` is dude's own stage (lux runs the
-  script as init, after it reports the Run running): between the container
-  and the agent, drawn only once reported (`OPTIONAL_START_STAGES`), so a
-  Run with no script, or a resume whose checkout already ran it, has no
-  setup line. Its words name the repository (`setupStageWords("abs")`,
-  "Running abs’s setup script"; done, "Setup script ran"); `startSteps`'
-  `label` and `detail` put them and the script's latest line on the
-  current step. The latest line is muted mono, one line cut with an
-  ellipsis, under the row's line while folded and under the step opened.
-  "Starting the agent" follows it and ends when the agent is up, not when
-  lux says running; the "Started in" line counts both, the setup's time
-  on its own line of its title. Under the stages a 2px bar fills with the
-  done stages, the current one breathing on `--ds-motion-live`
-  (frozen under reduced motion). Meaning never rests on its hue: the
-  glyph, the words and the clock say the same.
+  repository's setup script.** `setup` is dude's own stage. lux runs the
+  script as init, after it reports the Run running. It sits between the
+  container and the agent, drawn only once reported
+  (`OPTIONAL_START_STAGES`). A Run with no script, or a resume whose
+  checkout already ran it, has no setup line. Its words name the
+  repository (`setupStageWords("abs")`, "Running abs’s setup script";
+  done, "Setup script ran"). "Starting the agent" follows it and ends when
+  the agent is up, not when lux says running. The "Started in" line counts
+  both, the setup's time on its own line of its title.
+- **The current stage's detail line** is `StartStep.detail`: the setup
+  script's latest line, which `startSteps`' `detail` puts on the current
+  step (its `label` puts the words). It is muted mono, one line cut with
+  an ellipsis. It sits under the row's line while folded and under the
+  step opened.
+- **The bar** under the stages is 2px. It fills with the done stages, the
+  current one breathing on `--ds-motion-live` (frozen under reduced
+  motion). Meaning never rests on its hue: the glyph, the words and the
+  clock say the same.
 - An optional `pool` names where it waits: `waiting` reads "Waiting for a
   machine in highmem" while it is current, and "Machine found" once done. Its line opens the stages as a
   stepper (done with their times, the current one live, the rest hollow,
@@ -696,7 +699,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - **A brainstorm's start is the same row as any agent's** (*Activity*):
   every stage until its first turn, then thinking from the moment its
   briefing lands. A brainstorm reads, asks and proposes and never builds,
-  so it runs no repository setup script: its start has no setup stage.
+  so a new brainstorm runs no setup script.
 
 - A **brainstorm session** is a conversation with one agent that belongs
   to its members, not a task: it reads the projects linked to it and
