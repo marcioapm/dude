@@ -77,6 +77,11 @@ type Store struct {
 	// SyncPullRequest is prs.Syncer.Sync: an adopted pull request's feedback
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
+	// AutoPreview is servers.Service.AutoPreview: called once a pull
+	// request dude opened for a task is first recorded, after that commits.
+	// Its error is its own to log; the pull request stays recorded. nil
+	// skips it.
+	AutoPreview func(ctx context.Context, org, taskID string) error
 	// Bound on the GitHub calls of one verdict comment; zero means
 	// verdictCommentTimeout.
 	CommentTimeout time.Duration
@@ -1488,7 +1493,9 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		asked = gh.Settings.ReviewLogins
 	}
 	id := ids.New(ids.PullRequest)
+	recorded := false
 	err = s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
+		recorded = false
 		// One already recorded (a replay that got this far) is the one: its
 		// id is returned, and it is not announced twice.
 		tag, err := tx.Exec(ctx, `
@@ -1516,8 +1523,16 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		if err != nil {
 			return err
 		}
+		recorded = true
 		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
+	// Its task's preview, prepared asleep if the task wants one: after the
+	// record committed, and only by the attempt that recorded it, so a
+	// replay prepares nothing. Its failure is logged by it and leaves the
+	// pull request recorded.
+	if err == nil && recorded && s.AutoPreview != nil {
+		_ = s.AutoPreview(ctx, org, st.TaskID)
+	}
 	return id, err
 }
 

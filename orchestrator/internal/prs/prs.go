@@ -60,6 +60,11 @@ type Syncer struct {
 	// Answers settles the in-flight answers of ended deliveries in each
 	// Reconcile pass (delivery.Store.ReconcileEndedAnswers). Nil: none.
 	Answers func(ctx context.Context) (int, error)
+	// AutoPreview is servers.Service.AutoPreview: called when a sync
+	// records a pull request dude opened for a task going from closed to
+	// open again, after that commits. Its error is its own to log; the
+	// sync stands. Nil: nothing.
+	AutoPreview func(ctx context.Context, org, taskID string) error
 }
 
 // DefaultCIGrace: how long CI may take to show up on a new head.
@@ -69,6 +74,8 @@ type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName, Mergeable string
 	Number, BehindBy, UnresolvedThreads                                                        int
 	HadCI                                                                                      bool
+	// Taken over from a person (delivery.recordAdopted), not opened by dude.
+	Adopted bool
 	HeadSeenAt                                                                                 *time.Time
 	ChecksPendingSince                                                                         *time.Time
 	FeedbackCursor                                                                             *time.Time
@@ -105,11 +112,12 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 		return tx.QueryRow(ctx, `SELECT pr.id, pr.project_id, pr.task_id, COALESCE(pr.run_id, ''), pr.state::text,
 			pr.checks::text, pr.review::text, COALESCE(pr.head_sha, ''), r.url, r.name, pr.mergeable_state,
 			pr.number, pr.behind_by, pr.unresolved_threads, pr.had_ci, pr.head_seen_at, pr.checks_pending_since, pr.feedback_cursor,
-			pr.reviews_json, pr.checks_json, pr.updated_at
+			pr.reviews_json, pr.checks_json, pr.updated_at, pr.adopted
 			FROM pull_requests pr JOIN repositories r ON r.id = pr.repository_id WHERE pr.id = $1`, prID).
 			Scan(&pr.ID, &pr.ProjectID, &pr.TaskID, &pr.RunID, &pr.State, &pr.Checks, &pr.Review, &pr.HeadSHA,
 				&pr.RepoURL, &pr.RepoName, &pr.Mergeable, &pr.Number, &pr.BehindBy, &pr.UnresolvedThreads,
-				&pr.HadCI, &pr.HeadSeenAt, &pr.ChecksPendingSince, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.ChecksJSON, &pr.UpdatedAt)
+				&pr.HadCI, &pr.HeadSeenAt, &pr.ChecksPendingSince, &pr.FeedbackCursor, &pr.ReviewsJSON, &pr.ChecksJSON, &pr.UpdatedAt,
+				&pr.Adopted)
 	}); err != nil {
 		return err
 	}
@@ -528,6 +536,13 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	})
 	if err != nil {
 		return err
+	}
+	// Reopened (closed → open, as this sync recorded it, past the
+	// compare-and-set): the task's preview, prepared asleep if it wants
+	// one, for a pull request dude opened. Committed first; its failure is
+	// logged by it and fails nothing here.
+	if s.AutoPreview != nil && !pr.Adopted && pr.State == forge.StateClosed && isOpen(status.State) {
+		_ = s.AutoPreview(ctx, org, pr.TaskID)
 	}
 
 	var permitted []forge.Feedback
