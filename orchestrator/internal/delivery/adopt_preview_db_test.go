@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/marciomartins/dude/orchestrator/internal/dbtest"
@@ -44,7 +45,7 @@ func TestRecordAdoptedPreparesAPreviewOnlyWhenItAnnouncesAnOpenOne(t *testing.T)
 		st := &State{TaskID: task, ProjectID: "prj_a", Source: &Source{Kind: SourcePR, RepositoryID: repo.ID,
 			Repository: repo.Name, Number: number, Title: "Theirs", HeadBranch: "feature/" + task, BaseBranch: "main"}}
 		pr := forge.Status{PullRequestRef: forge.PullRequestRef{Number: number, State: state, HeadSHA: "abc",
-			URL: "https://github.com/acme/target/pull/" + string(rune('0'+number))}}
+			URL: "https://github.com/acme/target/pull/" + strconv.Itoa(number)}}
 		if _, err := s.recordAdopted(ctx, org, st, repo, pr); err != nil {
 			t.Fatal(err)
 		}

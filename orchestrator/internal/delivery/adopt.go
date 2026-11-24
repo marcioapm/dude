@@ -203,9 +203,10 @@ func (s *Store) recordAdopted(ctx context.Context, org string, st *State, repo R
 		announcedNow = true
 		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
-	// After the commit, and only by the call that announced the adoption
-	// (a replay finds it announced), as openPullRequest does. One already
-	// merged or closed when taken over gets none.
+	// After the commit, and only by the call that announced the adoption,
+	// as openPullRequest does: a replay finds it announced (the upsert
+	// affects the row either way, so the announcement decides, not the row
+	// count). One already merged or closed when taken over gets none.
 	if err == nil && announcedNow && (pr.State == forge.StateOpen || pr.State == forge.StateDraft) && s.AutoPreview != nil {
 		_ = s.AutoPreview(ctx, org, st.TaskID)
 	}

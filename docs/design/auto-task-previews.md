@@ -32,10 +32,9 @@ dude prepares that task's preview. Each task may say otherwise.
 - **Adopted**: `delivery.Store.recordAdopted`, after the transaction that
   recorded the taken-over pull request (`adopted = true`) commits, and only
   when that call appended its `pull_request.opened`: a replay finds it
-  announced and prepares nothing (its `ON CONFLICT … DO UPDATE` affects the
-  row either way, so the announcement decides, not the row count). Only for
-  one open or a draft at adoption: one already merged or closed gets none
-  (the adopt step escalates `source_gone` for those first).
+  announced and prepares nothing. Only for one open or a draft at adoption:
+  one already merged or closed gets none (the adopt step escalates
+  `source_gone` for those first).
 - **Reopened**: `prs.Syncer.sync`, after the compare-and-set transaction
   that recorded the row going from `closed` to open or draft. Not on any
   other sync: a push (`synchronize`), checks, reviews, an open pull request
