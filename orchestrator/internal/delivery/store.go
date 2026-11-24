@@ -765,26 +765,34 @@ func (s *Store) AmendFindingIDs(ctx context.Context, org string, st *State, ids 
 
 // AttemptedFindings is, per category, the open findings a fix has been
 // sent — what the next reviewer of that category is asked to judge. Never
-// the tester's: the next test judges those.
+// the tester's: the next test judges those. A review-only task's are its
+// open findings and kept suggestions, below.
 func (s *Store) AttemptedFindings(ctx context.Context, org string, st *State) (map[string][]string, error) {
 	out := map[string][]string{}
 	// A review-only task fixes nothing: a re-review judges every finding
-	// of the attempt still open (design §6.2); one the conductor withdrew
-	// (accepted) is not open, and not shown.
-	attempted := ` AND fix_attempts > 0`
+	// of the attempt still open (design §6.2), and every one the conductor
+	// kept as a suggestion (keptSuggestion), so the verdict can show it
+	// fixed once the author fixes it. Judged fixed or still, a kept one
+	// stays accepted: only an open finding is resolved by a judgement
+	// (phases' recordFindingsTx), so none becomes blocking again. One the
+	// conductor withdrew as wrong or a duplicate is not shown.
+	which, args := `status = 'open' AND fix_attempts > 0`, []any{st.TaskID, st.Attempt}
 	if st.Source.ReviewOnly() {
-		attempted = ""
+		which = `(status = 'open' OR status = 'accepted' AND starts_with(COALESCE(resolution_note, ''), $3))`
+		args = append(args, DismissedByConductor)
 	}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT category, id FROM review_findings
-			WHERE task_id = $1 AND status = 'open'`+attempted+` AND `+thisAttempt+` AND `+fromReview+` ORDER BY created_at`,
-			st.TaskID, st.Attempt)
+		rows, err := tx.Query(ctx, `SELECT category, id, status::text, COALESCE(resolution_note, '') FROM review_findings
+			WHERE task_id = $1 AND `+which+` AND `+thisAttempt+` AND `+fromReview+` ORDER BY created_at`, args...)
 		if err != nil {
 			return err
 		}
-		pairs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, ID string }])
-		for _, p := range pairs {
-			out[p.Category] = append(out[p.Category], p.ID)
+		found, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Category, ID, Status, Note string }])
+		for _, f := range found {
+			if _, _, kept := keptSuggestion(f.Note); f.Status != "open" && !kept {
+				continue
+			}
+			out[f.Category] = append(out[f.Category], f.ID)
 		}
 		return err
 	})

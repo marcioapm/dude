@@ -3,6 +3,7 @@ package delivery
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -198,5 +199,42 @@ func TestSuggestionGatesAreTheContractsGates(t *testing.T) {
 	}
 	if !reflect.DeepEqual(titles, suggestionGates) {
 		t.Fatalf("the contract's gates %v, suggestionGates %v", titles, suggestionGates)
+	}
+}
+
+// Only a conductor's "suggestion: gate N: why" note is a kept suggestion.
+// A finding whose note is a conductor's wrong or duplicate withdrawal, or
+// a person's acceptance (even in a suggestion's words), is never shown as
+// one, inline or in the body; nor is an open finding. A kept suggestion
+// its lens judged fixed is listed as fixed, no longer as a suggestion.
+func TestOnlyAKeptSuggestionIsShownAsOne(t *testing.T) {
+	yes := true
+	for _, note := range []string{
+		keptAs("wrong: the caller checks it, api/x.go:4."),
+		keptAs("duplicate: f-2"),
+		"accepted by a person",
+		"accepted by a person: suggestion: gate 2: only DEV_MODE=1 reaches it.",
+		"",
+	} {
+		f := verdictFinding{ID: "f1", Checked: true, Title: "Local mode leaks", Severity: "medium", File: "a.go", Line: 3, Introduced: &yes,
+			Judgement: "still", Kept: note}
+		if _, _, ok := f.suggestion(); ok {
+			t.Errorf("%q: read as a suggestion", note)
+		}
+		if text := f.inlineText(); strings.Contains(text, "Suggestion, not blocking") || strings.Contains(text, "Kept as a suggestion") {
+			t.Errorf("%q: inline text %q", note, text)
+		}
+		body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Reviewed"}, "a8f3e1c0ffee", "main", nil, []verdictFinding{f}, "")
+		if strings.Contains(body, "Suggestions (not blocking)") || strings.Contains(body, "kept as a suggestion") ||
+			slices.ContainsFunc(inline, func(c forge.ReviewComment) bool { return strings.HasPrefix(c.Body, "Suggestion, not blocking") }) {
+			t.Errorf("%q: shown as a suggestion:\n%s\n%+v", note, body, inline)
+		}
+	}
+	fixed := verdictFinding{ID: "f1", Checked: true, Title: "Local mode leaks", Severity: "medium", File: "a.go", Line: 3, Introduced: &yes,
+		Judgement: "fixed", Kept: keptAs("suggestion: gate 2: only DEV_MODE=1 reaches it, cmd/dev.go:12."), earlier: &inlinePost{Head: "1111111aaaa", URL: "u1"}}
+	body, inline, _ := verdictReviewOf(verdictDecision{Headline: "Approved"}, "a8f3e1c0ffee", "main", nil, []verdictFinding{fixed}, "")
+	if len(inline) != 0 || !strings.Contains(body, "**Fixed at a8f3e1c**\n- Local mode leaks `a.go:3`") ||
+		strings.Contains(body, "Suggestions (not blocking)") || strings.Contains(body, "kept as a suggestion") {
+		t.Fatalf("a kept suggestion judged fixed: %+v\n%s", inline, body)
 	}
 }
