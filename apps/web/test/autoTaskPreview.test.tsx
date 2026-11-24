@@ -10,12 +10,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { ToastProvider, TooltipProvider } from "@dude/design-system/primitives";
 import type { PreviewSettings, Recipe } from "@dude/domain";
-import { click, mount, until } from "./dom.ts";
+import { click, mount, settle, until } from "./dom.ts";
 import { accessibleName, allByRole, byRole } from "../../../packages/design-system/test/queries.ts";
 import { FixtureClient } from "../src/fixtures/client.ts";
-import { PROJECT } from "../src/fixtures/data.ts";
+import { PROJECT, TASK_ID } from "../src/fixtures/data.ts";
 import type { Task, TaskDetail, TaskFields } from "../src/api/client.ts";
+import { PeopleProvider } from "../src/people.tsx";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
+import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { AutoPreviewControl, autoPreviewInEffect } from "../src/screens/AutoPreviewControl.tsx";
 
 let unmount: (() => Promise<void>) | undefined;
@@ -165,6 +167,31 @@ test("on a task that is done, failed or aborted the choice is disabled, saying w
     unmount = undefined;
     document.body.innerHTML = "";
   }
+});
+
+class TaskOverview extends TaskRecording {
+  constructor(private patch: Partial<TaskDetail>) {
+    super("a");
+  }
+  override async getTask(id: string): Promise<TaskDetail> {
+    return { ...(await super.getTask(id)), ...this.patch } as TaskDetail;
+  }
+}
+
+test("the task's Overview shows the choice in its This task block, and saves it", async () => {
+  const client = new TaskOverview({ status: "running", autoTaskPreview: null, projectAutoTaskPreview: true });
+  const mounted = await mount(<TooltipProvider><ToastProvider><PeopleProvider client={client}>
+    <TaskScreen client={client} taskId={TASK_ID} onOpenRun={() => {}} onBack={() => {}} />
+  </PeopleProvider></ToastProvider></TooltipProvider>);
+  unmount = mounted.unmount;
+  const block = await until(() => mounted.container.querySelector<HTMLElement>("section[aria-label='This task']"), "This task");
+  await settle();
+  const row = await until(() => block.querySelector<HTMLElement>("[data-testid=task-auto-preview]"), "the automatic preview choice");
+  expect(byRole(row, "combobox", "Automatic preview").textContent).toBe("Use project default (On)");
+  expect(effect(row)).toBe("In effect: On · project default");
+  await pick(row, "Automatic preview", "Off");
+  await until(() => client.changes.length === 1 || undefined, "saved");
+  expect(client.changes).toEqual([{ autoTaskPreview: false }]);
 });
 
 test("in effect: the task's own choice, else the project's", () => {
