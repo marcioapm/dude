@@ -45,12 +45,11 @@ type ResizePlan struct {
 	Note string
 	// The epoch the resumed placement will have.
 	SinceEpoch int
-	// lux's pool list could not be read, so whether Target is in the Run's
-	// pool is not known: nothing is sent and nothing recorded.
-	unknown bool
-	// With unknown: the list was read and lux names no pool for a Run
-	// that names none (delivery.ErrNoDefaultPool).
-	noDefault bool
+	// Why the resume cannot be planned, nil when it can: lux's pool list
+	// could not be read (delivery.ErrPoolsUnread) or names no pool for a
+	// Run that names none (delivery.ErrNoDefaultPool). Nothing is sent and
+	// nothing recorded.
+	reason error
 	// lux's refusal of Send, after which the resume went without it.
 	refused *lux.Error
 	// Records a refusal durably before the fallback resume is asked for,
@@ -158,12 +157,12 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
 	if errors.Is(err, delivery.ErrNoDefaultPool) {
 		slog.Warn("lux names no default pool; the Run resumes on its size", "luxRun", before.ID)
-		p.unknown, p.noDefault = true, true
+		p.reason = delivery.ErrNoDefaultPool
 		return p
 	}
 	if err != nil {
 		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
-		p.unknown = true
+		p.reason = delivery.ErrPoolsUnread
 		return p
 	}
 	p.Pool = pool
@@ -214,11 +213,8 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 // read pools name no default delivery.ErrNoDefaultPool: there is nothing to
 // check, and nothing may be parked.
 func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *ResizePlan) error {
-	if plan != nil && plan.noDefault {
-		return delivery.ErrNoDefaultPool
-	}
-	if plan != nil && plan.unknown {
-		return delivery.ErrPoolsUnread
+	if plan != nil && plan.reason != nil {
+		return plan.reason
 	}
 	if plan == nil || plan.Send == nil {
 		return nil
@@ -314,7 +310,7 @@ func resourcesRefused(le *lux.Error) bool {
 // moves only with the size's numbers or its id: a resume that changes
 // neither (a disk lux keeps again) records nothing new.
 func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
-	if p == nil || p.unknown {
+	if p == nil || p.reason != nil {
 		return nil
 	}
 	rec := *p.Recorded
@@ -441,14 +437,10 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	}); err != nil || move == nil {
 		return err
 	}
-	if plan.unknown {
+	if plan.reason != nil {
 		// The move's size cannot be planned without lux's pools, and an
 		// unsized resume would never settle it: the resume is retried.
-		why := delivery.ErrPoolsUnread
-		if plan.noDefault {
-			why = delivery.ErrNoDefaultPool
-		}
-		return fmt.Errorf("machine move %s: %w", move.ID, why)
+		return fmt.Errorf("machine move %s: %w", move.ID, plan.reason)
 	}
 	if plan.moveTo == "" && plan.Target != nil {
 		plan.moveTo = plan.Target.Name
@@ -606,7 +598,7 @@ func RecordResize(ctx context.Context, d *db.DB, c lux.Client, log *slog.Logger,
 	if log == nil {
 		log = slog.Default()
 	}
-	if plan == nil || plan.unknown {
+	if plan == nil || plan.reason != nil {
 		return
 	}
 	if plan.Send != nil && answer.Resize == nil && answer.Spec.Resources == nil {
