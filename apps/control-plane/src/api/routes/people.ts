@@ -79,21 +79,26 @@ export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId
     ORDER BY tp.position`) as Array<{ id: string }>;
   const was = before.map((r) => r.id);
   const next = keep ? [...people, ...was.filter((id) => !people.includes(id))] : [...people];
-  if (next.length === was.length && next.every((id, i) => id === was[i])) return;
+  const owner = next[0] ?? null;
+  if (next.length === was.length && next.every((id, i) => id === was[i])) {
+    // Take over by the owner already named: their pull request waiting on
+    // someone else's GitHub opens as them once they have connected.
+    if (owner) await openAsNewOwner(scope, taskId, owner);
+    return;
+  }
 
   await scope.sql`DELETE FROM task_people WHERE task_id = ${taskId}`;
   await scope.sql`
     INSERT INTO task_people (task_id, person_id, organization_id, position)
     SELECT ${taskId}, id, ${scope.organizationId}, n - 1
     FROM jsonb_array_elements_text(${next}::jsonb) WITH ORDINALITY AS t(id, n)`;
-  const owner = next[0] ?? null;
   if (owner !== (was[0] ?? null)) {
     await scope.sql`UPDATE tasks SET owner_key_id = ${owner ? await keyOf(scope, owner) : null} WHERE id = ${taskId}`;
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: was[0] ?? null, to: owner }, { projectId, taskId });
     // The new owner did not ask for it to start when unblocked.
     await endAutoStart(scope, ctx, taskId, projectId, "owner_changed");
-    if (owner) await openAsNewOwner(scope, taskId, owner);
   }
+  if (owner) await openAsNewOwner(scope, taskId, owner);
   await recordAs(scope, ctx, EventTypes.TaskPeopleChanged, { people: next }, { projectId, taskId });
 }
 
@@ -111,9 +116,10 @@ export const GITHUB_CONNECTED = `EXISTS (SELECT 1 FROM github_user_authorization
  * github.authorized) opens it as the task's new owner when they have
  * connected: its publication is theirs from now, and the step is woken to
  * try again. A new owner who has not connected changes nothing: the pull
- * request still waits on the one it was frozen to.
+ * request still waits on the one it was frozen to. Also run as the owner
+ * presses Take over again, and as they connect (the OAuth callback).
  */
-async function openAsNewOwner(scope: OrgScope, taskId: string, owner: string): Promise<void> {
+export async function openAsNewOwner(scope: OrgScope, taskId: string, owner: string): Promise<void> {
   const waiting = (await scope.sql`
     SELECT r.id FROM workflow_runs r JOIN pr_publications pub ON pub.task_id = r.task_id AND pub.branch = r.state->>'branch'
     JOIN people p ON p.id = ${owner}

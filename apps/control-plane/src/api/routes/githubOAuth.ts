@@ -4,6 +4,7 @@ import { withOrg, type OrgScope } from "../../db/client.ts";
 import { config } from "../../config.ts";
 import { badRequest, json, noContent } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { openAsNewOwner } from "./people.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export const callbackPath = "/v1/me/github/callback";
@@ -165,6 +166,16 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
             (r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized')
             OR (r.status = 'running' AND r.step IN ('openPullRequest', 'awaitPRFix')))`;
         for (const { id } of recipients) await signalAuthorized(sql, organizationId, id, personId);
+        // A task they own (ownerJson's rule) and took over while not
+        // connected: its pull request still waits on the one it was frozen
+        // to, and opens as them now.
+        const owned = await sql`SELECT DISTINCT r.task_id FROM workflow_runs r
+          JOIN pr_publications p ON p.task_id = r.task_id AND p.branch = r.state->>'branch'
+          WHERE r.workflow_type = 'task.delivery' AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'
+            AND p.owner_person_id IS DISTINCT FROM ${personId}
+            AND (SELECT tp.person_id FROM task_people tp JOIN people o ON o.id = tp.person_id
+              WHERE tp.task_id = r.task_id AND o.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) = ${personId}`;
+        for (const { task_id } of owned) await openAsNewOwner({ organizationId, sql }, task_id, personId);
         return "connected";
       });
       return landing(stored, slug);

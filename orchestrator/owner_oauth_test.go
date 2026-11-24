@@ -604,3 +604,61 @@ func TestTakingOverAWaitingPullRequestOpensItAsTheNewOwner(t *testing.T) {
 		t.Fatalf("the switch spent attempt %d", w.attempts(task))
 	}
 }
+
+// takenOverByUnconnectedCy parks a delivery on Ana's GitHub, then Cy, who
+// has not connected, takes the task over: the publication stays Ana's.
+func takenOverByUnconnectedCy(t *testing.T) (w *world, task, ana, cy string) {
+	w = newWorld(t)
+	w.asApp()
+	ana, cy = w.ownerPerson("Ana"), w.ownerPerson("Cy")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task = w.task()
+	w.taskOwners(task, ana)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	w.takeOver(task, cy)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 1 {
+		t.Fatal("a take-over by someone not connected moved the publication")
+	}
+	return w, task, ana, cy
+}
+
+// The new owner who took over before connecting opens the pull request as
+// they connect: the publication passes from Ana to them.
+func TestATakenOverPullRequestOpensAsTheNewOwnerWhenTheyConnect(t *testing.T) {
+	w, task, ana, cy := takenOverByUnconnectedCy(t)
+	w.connectThroughCallback(cy, "cy-token", 3)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer cy-token" {
+		t.Fatalf("creation auth %v, want Cy's", got)
+	}
+	if w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, cy) != 1 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 0 {
+		t.Fatal("the publication is still frozen to Ana")
+	}
+	if w.attempts(task) != 0 {
+		t.Fatalf("connecting spent attempt %d", w.attempts(task))
+	}
+}
+
+// The new owner, connected after taking over, presses Take over again (the
+// card's "Take over and open it as me"): the owner is unchanged, and the
+// pull request opens as them.
+func TestTakingOverAgainOnceConnectedOpensThePullRequest(t *testing.T) {
+	w, task, ana, cy := takenOverByUnconnectedCy(t)
+	w.connectOwner(cy, "cy-token", 3)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 {
+		t.Fatal("connecting outside the callback opened it")
+	}
+	w.takeOver(task, cy)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer cy-token" {
+		t.Fatalf("creation auth %v, want Cy's", got)
+	}
+	if w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 0 {
+		t.Fatal("the publication is still frozen to Ana")
+	}
+}
