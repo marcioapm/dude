@@ -14,9 +14,9 @@ task's preview. Each task may say otherwise.
 - `tasks.auto_task_preview boolean NULL`: the task's own choice, null
   following the project's. `GET /v1/tasks/:id` gives `autoTaskPreview` and
   `projectAutoTaskPreview`; `PATCH /v1/tasks/:id` takes
-  `autoTaskPreview: true | false | null` from any member, as the rest of the
-  edit, and is never fixed by a delivery (it does not change what the task
-  asks). CLI: `dude task update TASK --auto-preview on|off|project`.
+  `autoTaskPreview: true | false | null` from any member, and is never fixed
+  by a delivery (it does not change what the task asks). CLI:
+  `dude task update TASK --auto-preview on|off|project`.
 - In effect: `COALESCE(task, project)`.
 
 ## When
@@ -39,9 +39,10 @@ task's preview. Each task may say otherwise.
 ## What
 
 `servers.Service.AutoPreview` reads the setting in effect and whether the
-project's previews are wakeable (a preview domain, and a server that starts
-in previews), then calls `startPreview` (`StartPreview` without the view it returns, which
-asks lux) as `system`/`auto-preview`:
+project's previews are wakeable (lux's relative hostnames or a preview
+domain, and a server that starts in previews), then calls `startPreview`
+(`StartPreview` without the view it returns, which asks lux) as
+`system`/`auto-preview`:
 
 - the task's live preview, if it has one (the conductor's), is returned
   as it is: never a second task preview, never a branch preview;
@@ -49,7 +50,7 @@ asks lux) as `system`/`auto-preview`:
   `wake_wanted_at` (`agentWakes`), so no lux Run is placed until someone
   opens its URL, and `announceReady` never says "Ready for your look" for it.
 
-A project with nothing to start in previews gets none: `StartPreview` would
+A project whose previews are not wakeable gets none: `startPreview` would
 make an eager preview there, whose Run starts at once. That is skipped with
 a Debug log, as is a task that is over or gone (`task_finished`,
 `not_found`). Any other error is logged at Warn and dropped by the caller:
@@ -68,10 +69,8 @@ automatic preview; nothing reconciles it.
   (`BeforePullRequestFact`, as Before the pull request is). Its hint says it
   governs only the automatic preparation (a preview someone asks for still
   starts) and ends with `Effective: On|Off · project default|task override`.
-  Disabled with the reason once the task is done, failed or aborted.
+  Disabled with the reason once the task is done, as Before the pull request
+  is (a failed or aborted task can be picked back up).
 
 Built from existing design-system components (`SettingRow`, `Select`,
 `BeforePullRequestFact`); no design-system change.
-
-Previews must sleep and wake on the deployment (lux's relative hostnames, or
-a preview domain): otherwise `wakeable` is false and nothing is prepared.
