@@ -144,7 +144,8 @@ func joinInput(first, rest string) string {
 }
 
 // PlanResize compares the recorded size and pool with the target. A pool
-// list failure leaves the Run unchanged; a missing settings size does too.
+// list failure, lux naming no default pool, or a missing settings size
+// leaves the Run unchanged.
 func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, before lux.Run) *ResizePlan {
 	if recorded == nil || target == nil {
 		return nil
