@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,9 +45,11 @@ type ResizePlan struct {
 	Note string
 	// The epoch the resumed placement will have.
 	SinceEpoch int
-	// lux's pool list could not be read, so whether Target is in the Run's
-	// pool is not known: nothing is sent and nothing recorded.
-	unknown bool
+	// Why the resume cannot be planned, nil when it can: lux's pool list
+	// could not be read (delivery.ErrPoolsUnread) or names no pool for a
+	// Run that names none (delivery.ErrNoDefaultPool). Nothing is sent and
+	// nothing recorded.
+	reason error
 	// lux's refusal of Send, after which the resume went without it.
 	refused *lux.Error
 	// Records a refusal durably before the fallback resume is asked for,
@@ -141,7 +144,8 @@ func joinInput(first, rest string) string {
 }
 
 // PlanResize compares the recorded size and pool with the target. A pool
-// list failure leaves the Run unchanged; a missing settings size does too.
+// list failure, lux naming no default pool, or a missing settings size
+// leaves the Run unchanged.
 func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Machine, before lux.Run) *ResizePlan {
 	if recorded == nil || target == nil {
 		return nil
@@ -153,8 +157,11 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 	}
 	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
 	if err != nil {
-		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
-		p.unknown = true
+		slog.Warn("lux's pools give no pool to move to; the Run resumes on its size", "luxRun", before.ID, "error", err)
+		p.reason = delivery.ErrPoolsUnread
+		if errors.Is(err, delivery.ErrNoDefaultPool) {
+			p.reason = delivery.ErrNoDefaultPool
+		}
 		return p
 	}
 	p.Pool = pool
@@ -188,25 +195,24 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 	if err != nil {
 		return "", err
 	}
-	for _, p := range pools {
-		if p.IsDefault {
-			if p.ID == current {
-				return "", nil
-			}
-			return p.ID, nil
-		}
+	p, ok := lux.DefaultPool(pools)
+	if !ok {
+		return "", delivery.ErrNoDefaultPool
 	}
-	return "", fmt.Errorf("lux reports no default pool")
+	if p.ID == current {
+		return "", nil
+	}
+	return p.ID, nil
 }
 
 // ValidateResize checks the exact sized resume without stopping the Run.
 // Older lux refuses validateOnly with 400: the real resume keeps its safe
 // fallback, so lack of dry-run support never fails the agent's Run. A plan
-// lux's pools could not be read for is delivery.ErrPoolsUnread: there is
-// nothing to check, and nothing may be parked.
+// that could not be made returns its reason: there is nothing to check, and
+// nothing may be parked.
 func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *ResizePlan) error {
-	if plan != nil && plan.unknown {
-		return delivery.ErrPoolsUnread
+	if plan != nil && plan.reason != nil {
+		return plan.reason
 	}
 	if plan == nil || plan.Send == nil {
 		return nil
@@ -302,7 +308,7 @@ func resourcesRefused(le *lux.Error) bool {
 // moves only with the size's numbers or its id: a resume that changes
 // neither (a disk lux keeps again) records nothing new.
 func (p *ResizePlan) Outcome(answer lux.Run) *delivery.Machine {
-	if p == nil || p.unknown {
+	if p == nil || p.reason != nil {
 		return nil
 	}
 	rec := *p.Recorded
@@ -429,10 +435,10 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	}); err != nil || move == nil {
 		return err
 	}
-	if plan.unknown {
-		// The move's size cannot be planned without lux's pools, and an
-		// unsized resume would never settle it: the resume is retried.
-		return fmt.Errorf("machine move %s: lux's pools could not be read", move.ID)
+	if plan.reason != nil {
+		// The move's size cannot be planned without a pool to move to, and
+		// an unsized resume would never settle it: the resume is retried.
+		return fmt.Errorf("machine move %s: %w", move.ID, plan.reason)
 	}
 	if plan.moveTo == "" && plan.Target != nil {
 		plan.moveTo = plan.Target.Name
@@ -590,7 +596,7 @@ func RecordResize(ctx context.Context, d *db.DB, c lux.Client, log *slog.Logger,
 	if log == nil {
 		log = slog.Default()
 	}
-	if plan == nil || plan.unknown {
+	if plan == nil || plan.reason != nil {
 		return
 	}
 	if plan.Send != nil && answer.Resize == nil && answer.Spec.Resources == nil {

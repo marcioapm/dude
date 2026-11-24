@@ -12,4 +12,6 @@
 
 {{- define "refusals/tools/machines/lux-pools-could-not-be-read"}}lux's pools could not be read; ask again shortly{{end}}
 
+{{- define "refusals/tools/machines/lux-has-no-default-pool"}}lux has no default pool to move you in, so dude cannot move this Run. Carry on on %s, and say in your work what did not fit.{{end}}
+
 {{- define "refusals/tools/machines/this-run-no-longer-available-for"}}this Run is no longer available for a machine move{{end}}

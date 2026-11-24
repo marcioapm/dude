@@ -40,8 +40,8 @@ func RefusalOf(le *lux.Error, size Machine, pools []lux.Pool, run lux.Run) MoveR
 	if size.PoolID != nil {
 		poolID = *size.PoolID
 	}
-	if i := slices.IndexFunc(pools, func(p lux.Pool) bool { return p.IsDefault }); poolID == "" && i >= 0 {
-		poolID = pools[i].ID
+	if p, ok := lux.DefaultPool(pools); poolID == "" && ok {
+		poolID = p.ID
 	}
 	PoolNamesOf(pools).Name(&out.Size)
 	out.OtherPool = poolID != "" && run.PoolID != "" && poolID != run.PoolID

@@ -64,4 +64,11 @@ func TestEachLuxRefusalIsSaidInDudesWords(t *testing.T) {
 	if got := r.ForPerson(); got != "this lux cannot change a stopped Run's CPUs or memory" {
 		t.Errorf("older lux, same pool: %q", got)
 	}
+	// No pool marked default: a size naming no pool is in the one named
+	// default, as lux resolves it.
+	unmarked := []lux.Pool{{ID: "pool_amd", Name: "amd64"}, {ID: "pool_dflt", Name: "default", Platforms: []string{"linux/arm64"}}}
+	r = RefusalOf(&lux.Error{Status: 422, Code: "platform_mismatch"}, large, unmarked, lux.Run{PoolID: "pool_amd", Placements: run.Placements})
+	if got := r.ForPerson(); !r.OtherPool || got != "Large is in default, whose machines are linux/arm64; this agent's image is linux/amd64 only" {
+		t.Errorf("no pool marked default: OtherPool=%v %q", r.OtherPool, got)
+	}
 }

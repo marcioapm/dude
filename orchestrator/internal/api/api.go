@@ -330,6 +330,9 @@ func (s *Server) resetMachine(w http.ResponseWriter, r *http.Request, org string
 			}
 			plan := phases.PlanResize(ctx, s.Lux, current, &target, before)
 			if err := phases.ValidateResize(ctx, s.Lux, live, plan); err != nil {
+				if errors.Is(err, delivery.ErrNoDefaultPool) {
+					return fail(http.StatusConflict, "no_default_pool", "lux has no default pool to move this Run in")
+				}
 				if errors.Is(err, delivery.ErrPoolsUnread) {
 					return fail(http.StatusServiceUnavailable, "pools_unavailable", "lux's pools could not be read; try again shortly")
 				}
