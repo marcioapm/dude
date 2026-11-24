@@ -1,5 +1,6 @@
-import { useId, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useId, useState, type HTMLAttributes, type ReactElement, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
+import { firstName } from "../util/format.ts";
 import { toMs } from "../util/useNow.ts";
 import { Icon } from "../icons/index.tsx";
 import { Duration } from "./Numbers.tsx";
@@ -46,7 +47,7 @@ export interface CredentialCardProps extends Omit<HTMLAttributes<HTMLElement>, "
 export function credentialWords(person: string | null, yours: boolean, reconnect = false): { title: string; label: string } {
   const verb = reconnect ? "reconnect" : "connect";
   const Verb = reconnect ? "Reconnect" : "Connect";
-  const first = person?.trim().split(/\s+/)[0] || null;
+  const first = firstName(person);
   if (yours) return { title: `${Verb} GitHub to open the pull request`, label: `Needs you · ${Verb} GitHub` };
   return first
     ? { title: `Waiting for ${person} to ${verb} GitHub`, label: `Needs ${first} · ${Verb} GitHub` }
@@ -54,7 +55,7 @@ export function credentialWords(person: string | null, yours: boolean, reconnect
 }
 
 export function CredentialCard({ person, yours, branch, reconnect = false, askedAt, onConnect, connecting, onTakeOver, takingOver,
-  className, ...rest }: CredentialCardProps) {
+  className, ...rest }: CredentialCardProps): ReactElement {
   const [why, setWhy] = useState(false);
   const whyId = useId();
   const words = credentialWords(person, yours, reconnect);
@@ -125,13 +126,14 @@ export interface CredentialWarningProps extends Omit<HTMLAttributes<HTMLDivEleme
  * live GitHub connection, so the task will stop before its pull request.
  * An attention Callout under the owner field; never a block.
  */
-export function CredentialWarning({ person, yours, onConnect, className, ...rest }: CredentialWarningProps) {
+export function CredentialWarning({ person, yours, onConnect, className, ...rest }: CredentialWarningProps): ReactElement {
   return (
     <Callout tone="attention" className={className} data-testid="credential-warning" {...rest}>
       {person} hasn't connected GitHub. The task will do its work and then stop before its pull request.{" "}
       {yours && onConnect ? (
         <Button size="sm" variant="quiet" leadingIcon="github" onClick={onConnect} data-testid="credential-warning-connect">Connect GitHub</Button>
-      ) : yours ? null : <>Pick an owner who has connected GitHub, or ask {person.trim().split(/\s+/)[0] || person} to connect.</>}
+      ) : null}
+      {!yours ? <>Pick an owner who has connected GitHub, or ask {firstName(person, person)} to connect.</> : null}
     </Callout>
   );
 }
