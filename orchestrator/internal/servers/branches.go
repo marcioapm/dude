@@ -144,7 +144,7 @@ func (s *Service) StartBranchPreview(ctx context.Context, gh *forge.GitHub, org,
 		id := ids.New(ids.Run)
 		// One live preview per project branch (runs_live_branch_preview_idx):
 		// a start that lost the race returns the winner's.
-		// An agent's preview is asked to wake as it is made (agentWakes).
+		// An agent's preview wakes as it is made (agentWakes).
 		tag, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, preview_branch, preview_branch_checked_at,
 				attempt, status, kind, started_by, wakeable, wake_wanted_at)
 			VALUES ($1, $2, $3, $4, now(), 1, 'pending', 'preview', COALESCE(NULLIF($6, ''),

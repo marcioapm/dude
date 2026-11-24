@@ -1163,9 +1163,7 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 		if err != nil {
 			return err
 		}
-		// An agent's wakeable preview is asked to wake as it is made
-		// (agentWakes): it comes up once its servers exist, unopened. A
-		// person's sleeps until opened.
+		// An agent's wakeable preview wakes as it is made (agentWakes).
 		if _, err := tx.Exec(ctx, `INSERT INTO runs (id, organization_id, project_id, task_id, attempt, status, kind, started_by, wakeable,
 				wake_wanted_at)
 			VALUES ($1, $2, $3, $4, $5, 'pending', 'preview', COALESCE(NULLIF($7, ''),
