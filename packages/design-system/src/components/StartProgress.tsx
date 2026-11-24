@@ -61,7 +61,12 @@ export function startSteps({ stage, since, done = [], failed, stages = FRESH_STA
   const at = stage ? order.indexOf(stage) : -1;
   return order.map((id, i) => {
     const words = START_STAGE_WORDS[id];
-    const label = i === at && nowLabel ? nowLabel : id === "waiting" && pool ? `${words.now} in ${pool}` : words.now;
+    let label = words.now;
+    if (i === at && nowLabel) {
+      label = nowLabel;
+    } else if (id === "waiting" && pool) {
+      label = `${words.now} in ${pool}`;
+    }
     const state: StartStepState = at < 0 ? "pending" : i < at ? "done" : i === at ? (failed ? "failed" : "current") : "pending";
     const tookMs = state === "done" ? done.find((d) => d.stage === id)?.tookMs : undefined;
     return {
@@ -200,6 +205,7 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
     );
   }
 
+  const donePercent = current ? (100 * steps.filter((st) => st.state === "done").length) / steps.length : 0;
   const line = (
     <>
       <StatusMark status="starting" size="sm" label={verb} />
@@ -238,8 +244,8 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
         {current ? (
           // How far through its stages: done stages fill it, the current one breathes (frozen under reduced motion).
           <span className={styles["bar"]} aria-hidden data-testid="start-bar">
-            <span className={styles["barFill"]} style={{ width: `${(100 * steps.filter((st) => st.state === "done").length) / steps.length}%` }} />
-            <span className={styles["barNow"]} style={{ left: `${(100 * steps.filter((st) => st.state === "done").length) / steps.length}%`, width: `${100 / steps.length}%` }} />
+            <span className={styles["barFill"]} style={{ width: `${donePercent}%` }} />
+            <span className={styles["barNow"]} style={{ left: `${donePercent}%`, width: `${100 / steps.length}%` }} />
           </span>
         ) : null}
         <span className="ds-sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="start-announce">{announce}</span>
