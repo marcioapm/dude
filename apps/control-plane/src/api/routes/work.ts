@@ -139,13 +139,16 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
   -- it is live and lux has not reported it running, or, after a setup
   -- script (dude's stage, which lux reports running through), until the
   -- agent's first record. Its twin over runs r is the orchestrator's
-  -- phases.StartStageJSON (stage.go): change both.
+  -- phases.StartStageJSON (stage.go): change both. events_run_stage_idx
+  -- (migration 273) finds the stage; the agent probe's row comparison keeps
+  -- it on events_run_cursor_idx, from the stage on.
   (SELECT json_build_object('stage', s.payload->>'stage', 'since', s.payload->>'since', 'epoch', (s.payload->>'epoch')::int)
-   FROM (SELECT e.cursor, e.payload FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
+   FROM (SELECT e.cursor, e.payload FROM events e WHERE e.event_type = 'run.stage' AND e.run_id = runs.id
      AND runs.status IN ('scheduled', 'starting', 'running') ORDER BY e.cursor DESC LIMIT 1) s
    WHERE COALESCE(runs.lux_state, '') <> 'running'
      OR ((s.payload->>'stage' = 'setup' OR s.payload->>'setup' = 'true')
-       AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = runs.id AND a.cursor > s.cursor AND a.event_type LIKE 'agent.%'))) AS "startStage",
+       AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = runs.id AND (a.run_id, a.cursor) > (runs.id, s.cursor)
+         AND a.event_type LIKE 'agent.%'))) AS "startStage",
   can_run_containers AS "canRunContainers", project_secret_names AS "projectSecretNames"`;
 
 const SESSION_SELECT = `

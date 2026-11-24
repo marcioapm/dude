@@ -33,14 +33,19 @@ var startStages = map[string]bool{"waiting": true, "image": true, "volumes": tru
 // (dude's stages, which lux reports running through), until the agent's
 // first record; NULL otherwise. The ledger is the source: no column holds
 // it. Its twin over runs is the control plane's startStage
-// (apps/control-plane/src/api/routes/work.ts).
+// (apps/control-plane/src/api/routes/work.ts). The latest stage is read
+// through events_run_stage_idx (migration 273), so its predicate is that
+// index's literal; the agent probe compares (run_id, cursor) as a row, so
+// it walks events_run_cursor_idx from the stage on, never events' cursor
+// across every Run.
 const StartStageJSON = `(SELECT json_build_object('stage', s.payload->>'stage', 'since', s.payload->>'since',
 		'epoch', (s.payload->>'epoch')::int)
-	FROM (SELECT e.cursor, e.payload FROM events e WHERE e.run_id = r.id AND e.event_type = 'run.stage'
+	FROM (SELECT e.cursor, e.payload FROM events e WHERE e.event_type = 'run.stage' AND e.run_id = r.id
 	  AND r.status IN ('scheduled', 'starting', 'running') ORDER BY e.cursor DESC LIMIT 1) s
 	WHERE COALESCE(r.lux_state, '') <> 'running'
 	  OR ((s.payload->>'stage' = '` + stageSetup + `' OR s.payload->>'` + stageSetup + `' = 'true')
-	    AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = r.id AND a.cursor > s.cursor AND a.event_type LIKE 'agent.%')))`
+	    AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = r.id AND (a.run_id, a.cursor) > (r.id, s.cursor)
+	      AND a.event_type LIKE 'agent.%')))`
 
 // stage records lux's stage event while the Run is starting: each stage
 // before running, and running while lux's state is not yet running (the
