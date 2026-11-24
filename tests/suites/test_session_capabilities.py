@@ -89,7 +89,9 @@ def test_a_brainstorm_proposes_a_link_the_owner_confirms_and_its_next_turn_reads
     reply = _turn(client, session, "what is in the console?\n" + _tool("list_repositories", {"project": "WC"}) + "\n" +
                   _tool("say", {"text": "WC path: {{last.0.path}}"}), "WC path:")
     assert "WC path: /workspace/repos/WC/web-console" in reply, reply
-    assert any(h.startswith("wc-web") for h in _held(owner_dsn, run)), _held(owner_dsn, run)
+    # lux reports the clone after the agent's own records, so the path can be said before the Run holds it.
+    wait_until(lambda: any(h.startswith("wc-web") for h in _held(owner_dsn, run)), timeout=30,
+               message=f"the Run never held WC's clone: {_held(owner_dsn, run)}")
     assert any("A member linked WC/web-console; it is checked out at /workspace/repos/WC/web-console" in t
                for t in _said(client, session)), _said(client, session)
 
@@ -129,7 +131,9 @@ def test_a_failed_checkout_is_told_and_refresh_checkout_recovers_it(client: ApiC
     reply = _turn(client, session, "and now?\n" + _tool("list_repositories", {"project": "WC"}) + "\n" +
                   _tool("say", {"text": "WC path: {{last.0.path}}"}), "WC path:")
     assert "WC path: /workspace/repos/WC/web-console" in reply, reply
-    assert any(h.startswith("wc-web") for h in _held(owner_dsn, run)), _held(owner_dsn, run)
+    # lux reports the clone after the agent's own records, so the path can be said before the Run holds it.
+    wait_until(lambda: any(h.startswith("wc-web") for h in _held(owner_dsn, run)), timeout=30,
+               message=f"the Run never held WC's clone: {_held(owner_dsn, run)}")
     assert any("dude asked again for WC/web-console, as you asked" in t for t in _said(client, session)), _said(client, session)
     assert query(owner_dsn, "SELECT count(*) AS n FROM events WHERE session_id = %s AND event_type = 'session.checkout.requested'",
                  (session,))[0]["n"] == 1
