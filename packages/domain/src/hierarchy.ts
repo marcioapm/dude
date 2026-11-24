@@ -512,6 +512,12 @@ export const taskSchema = z.object({
   status: taskStatusSchema,
   requestedBy: z.string().nullable().default(null),
   /**
+   * Automatic task previews for this task (tasks.auto_task_preview,
+   * migration 272): true or false, or null to follow its project's
+   * (PreviewSettings.autoTaskPreview).
+   */
+  autoTaskPreview: z.boolean().nullable().default(null),
+  /**
    * Who drives it: told when it waits on someone, and the only one who
    * answers its agents. Null for a task nobody owns, which anyone may
    * answer for.

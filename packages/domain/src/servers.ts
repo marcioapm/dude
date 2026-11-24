@@ -153,8 +153,18 @@ export const previewSettingsSchema = z.object({
   wakeTimeoutMinutes: z.number().int().min(1).max(PREVIEW_WAKE_TIMEOUT_MAX_MINUTES).default(PREVIEW_WAKE_TIMEOUT_DEFAULT_MINUTES),
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),
+  /**
+   * Automatic task previews (projects.auto_task_preview, migration 272):
+   * when dude opens or reopens a pull request it opened for one of the
+   * project's tasks, it prepares the task's preview, asleep until someone
+   * opens it. A task may say otherwise (taskAutoPreviewSchema). Off by default.
+   */
+  autoTaskPreview: z.boolean().default(false),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
+
+/** A task's own choice on automatic task previews: null follows its project's (PATCH /v1/tasks/:id). */
+export const taskAutoPreviewSchema = z.boolean().nullable();
 
 export type ServerState = "stopped" | "starting" | "ready" | "unreachable" | "exited";
 
