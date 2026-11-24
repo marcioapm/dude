@@ -12,13 +12,16 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/forge"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
+	"github.com/marciomartins/dude/orchestrator/internal/lux"
 	"github.com/marciomartins/dude/orchestrator/internal/servers"
 )
 
@@ -435,4 +438,65 @@ func TestAutoPreviewFailureLeavesThePullRequestRecorded(t *testing.T) {
 	if all, _ := w.taskPreviews(task); all != 0 {
 		t.Fatalf("%d previews from a failed preparation", all)
 	}
+}
+
+// stuckLux is the fake lux with every read of a Run's or its servers'
+// state hanging until the test ends, counted: a lux that is slow or down.
+type stuckLux struct {
+	lux.Client
+	stuck chan struct{}
+	reads atomic.Int32
+}
+
+func (l *stuckLux) hang(ctx context.Context) {
+	l.reads.Add(1)
+	select {
+	case <-l.stuck:
+	case <-ctx.Done():
+	}
+}
+
+func (l *stuckLux) ListServers(ctx context.Context, hostname string, labels ...string) ([]lux.TenantServer, error) {
+	l.hang(ctx)
+	return nil, context.DeadlineExceeded
+}
+
+func (l *stuckLux) Get(ctx context.Context, runID string) (lux.Run, error) {
+	l.hang(ctx)
+	return lux.Run{}, context.DeadlineExceeded
+}
+
+func (l *stuckLux) Servers(ctx context.Context, runID string) ([]lux.Server, error) {
+	l.hang(ctx)
+	return nil, context.DeadlineExceeded
+}
+
+// 9. The preparation does not wait on lux: it runs on the pull request's
+// open step and its webhook sync, and nothing reads a view of the preview
+// it makes. With lux hanging, the dormant preview is made at once and lux
+// is never asked.
+func TestAutoPreviewDoesNotAskLux(t *testing.T) {
+	w := autoWorld(t, true)
+	task := w.task()
+	stuck := &stuckLux{Client: w.previews.Lux, stuck: make(chan struct{})}
+	t.Cleanup(func() { close(stuck.stuck) })
+	svc := *w.previews.Service
+	svc.Lux = stuck
+	done := make(chan error, 1)
+	go func() { done <- svc.AutoPreview(context.Background(), w.org, task) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AutoPreview: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("AutoPreview still waiting after 10s (%d lux reads)", stuck.reads.Load())
+	}
+	if n := stuck.reads.Load(); n != 0 {
+		t.Fatalf("AutoPreview read lux %d times, want none", n)
+	}
+	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
+		t.Fatalf("%d previews (%d live), want one", all, live)
+	}
+	w.dormant(w.livePreviewID(task))
 }

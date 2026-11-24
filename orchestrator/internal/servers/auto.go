@@ -17,9 +17,10 @@ const AutoPreviewActor = "auto-preview"
 // AutoPreview prepares task's preview, if automatic task previews are on
 // for it (its own choice, else its project's: migration 272), when dude
 // opens or reopens a pull request it opened for the task. The preview is
-// StartPreview's, as the system: asleep until someone opens its URL
-// (agentWakes), never announced (announceReady), and the task's live one
-// if it has one already — a repeat makes nothing.
+// startPreview's (StartPreview without its view: lux is not asked), as
+// the system: asleep until someone opens its URL (agentWakes), never
+// announced (announceReady), and the task's live one if it has one
+// already — a repeat makes nothing.
 //
 // A project with nothing to start in previews (or no preview domain) gets
 // none: StartPreview would make an eager one, whose Run starts at once.
@@ -49,7 +50,9 @@ func (s *Service) AutoPreview(ctx context.Context, org, taskID string) error {
 		return nil
 	}
 	if err == nil {
-		_, err = s.StartPreview(ctx, org, taskID, AutoPreviewActor, ledger.ActorSystem, "")
+		// startPreview, not StartPreview: nobody reads the view, and building
+		// it asks lux (ListServers) on the pull request's open/sync path.
+		err = s.startPreview(ctx, org, taskID, AutoPreviewActor, ledger.ActorSystem, "")
 	}
 	var refusal *Error
 	if errors.As(err, &refusal) {

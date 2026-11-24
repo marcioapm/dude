@@ -1128,6 +1128,16 @@ func (p *Previews) waitForLogin(ctx context.Context, r previewRun, cause error) 
 // StartPreview starts a task preview on behalf of actor, or returns the
 // task's existing live preview. A task that is over cannot start a preview.
 func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, identity ...string) (TaskServers, error) {
+	if err := s.startPreview(ctx, org, taskID, actor, identity...); err != nil {
+		return TaskServers{}, err
+	}
+	return s.ForTask(ctx, org, taskID)
+}
+
+// startPreview is StartPreview without the view it returns: the record
+// and the kick, and no call to lux (AutoPreview runs on a pull request's
+// open and sync paths, which have no use for the view).
+func (s *Service) startPreview(ctx context.Context, org, taskID, actor string, identity ...string) error {
 	actorType, personID := ledger.ActorHuman, ""
 	if len(identity) == 2 {
 		actorType, personID = identity[0], identity[1]
@@ -1182,10 +1192,10 @@ func (s *Service) StartPreview(ctx context.Context, org, taskID, actor string, i
 		return phases.ServersChanged(ctx, tx, org, projectID, taskID, id, map[string]any{"change": "created"})
 	})
 	if err != nil {
-		return TaskServers{}, err
+		return err
 	}
 	s.kick()
-	return s.ForTask(ctx, org, taskID)
+	return nil
 }
 
 // StopPreview stops a task's live preview for good.

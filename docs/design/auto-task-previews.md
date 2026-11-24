@@ -40,7 +40,8 @@ task's preview. Each task may say otherwise.
 
 `servers.Service.AutoPreview` reads the setting in effect and whether the
 project's previews are wakeable (a preview domain, and a server that starts
-in previews), then calls `StartPreview` as `system`/`auto-preview`:
+in previews), then calls `startPreview` (`StartPreview` without the view it returns, which
+asks lux) as `system`/`auto-preview`:
 
 - the task's live preview, if it has one (the conductor's), is returned
   as it is: never a second task preview, never a branch preview;
