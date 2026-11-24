@@ -93,6 +93,14 @@ test("from source, the runner reads every .sql file in migrations/, in order", a
   expect(files.map((f) => f.name)).toEqual(await repoSqlFiles());
 });
 
+test("the migrations shipped through 275 are never renamed or removed", async () => {
+  // Shipped names never change; move this pin forward only when a release ships.
+  const shipped = (await repoSqlFiles()).filter((f) => f <= "275_events_run_stage_idx.sql");
+  expect(shipped.length).toBe(248);
+  expect(createHash("sha256").update(shipped.join("\n")).digest("hex"))
+    .toBe("73ade654a4f1acb7111b2d1da6168f45efa3a32b2ef16a671407d87ab8551ef5");
+});
+
 test("the binary applies every file in migrations/ with the checksum of its bytes on disk", async () => {
   // From a directory with no SQL in it, so nothing can be read from disk.
   const url = await createDatabase();
@@ -1708,7 +1716,7 @@ test("a database main left at 114 takes 115 to 117, keeps its relations, and tas
       ('org_u', 'wi_off', 'wi_a', 'blocks', 'per_u'), ('org_u', 'wi_a', 'wi_off', 'related', 'per_u')`;
 
     expect((await migrate(url, { log: () => {} })).applied).toEqual(await listFrom("115_agent_coordination.sql"));
-    expect((await recorded(url)).map((m) => m.name).slice(-120)).toEqual((await repoSqlFiles()).slice(-120));
+    expect((await recorded(url)).map((m) => m.name)).toEqual(await repoSqlFiles());
     expect([...await sql`SELECT from_task_id, to_task_id, kind::text FROM task_relations ORDER BY kind`]).toEqual([
       { from_task_id: "wi_off", to_task_id: "wi_a", kind: "blocks" },
       { from_task_id: "wi_a", to_task_id: "wi_off", kind: "related" },
