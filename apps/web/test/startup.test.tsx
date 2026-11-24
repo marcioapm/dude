@@ -749,6 +749,20 @@ describe("a repository's setup script in the start (prod sequence)", () => {
     expect(snapshot(live, "running").turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual(["Started in 5m 22s."]);
   });
 
+  test("lux's running state trailing init's records: run.started during setup leaves the start live until the agent is up", () => {
+    const events = prod();
+    const started = events.findIndex((e) => e.eventType === "run.started");
+    const [runStarted] = events.splice(started, 1);
+    // After the setup's first line: lux's state event came late on the stream.
+    events.splice(events.findIndex((e) => e.eventType === "run.setup.progress") + 1, 0, runStarted!);
+    events.forEach((e, i) => { e.cursor = 10_000 + i; });
+    const during = project(events.slice(0, events.indexOf(runStarted!) + 1), "running");
+    expect(during.start).toMatchObject({ stage: "setup", setup: { repository: "abs" } });
+    expect(during.turns.some((t) => t.kind === "notice")).toBe(false);
+    const up = project(events, "running");
+    expect(up.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual(["Started in 5m 22s."]);
+  });
+
   test("an older stream with no setup and no agent.session.started renders as before: run.started ends the start", () => {
     const old = [created(), stage("waiting", 0), stage("image", 4_000), stage("running", 9_000), ev("run.started", {}, 12_000),
       ev("agent.message", { text: "hi" }, 40_000)];
