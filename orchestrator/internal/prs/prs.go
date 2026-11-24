@@ -74,14 +74,14 @@ type tracked struct {
 	ID, ProjectID, TaskID, RunID, State, Checks, Review, HeadSHA, RepoURL, RepoName, Mergeable string
 	Number, BehindBy, UnresolvedThreads                                                        int
 	HadCI                                                                                      bool
-	// Taken over from a person (delivery.recordAdopted), not opened by dude.
-	Adopted bool
 	HeadSeenAt                                                                                 *time.Time
 	ChecksPendingSince                                                                         *time.Time
 	FeedbackCursor                                                                             *time.Time
 	UpdatedAt                                                                                  time.Time
 	ReviewsJSON                                                                                []byte
 	ChecksJSON                                                                                 []byte
+	// Taken over from a person (delivery.recordAdopted), not opened by dude.
+	Adopted bool
 }
 
 // ErrRaced: another sync of the same pull request recorded first. Sync
