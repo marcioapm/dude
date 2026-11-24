@@ -140,7 +140,7 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
   -- script (dude's stage, which lux reports running through), until the
   -- agent's first record. Its twin over runs r is the orchestrator's
   -- phases.StartStageJSON (stage.go): change both. events_run_stage_idx
-  -- (migration 273) finds the stage; the agent probe's row comparison keeps
+  -- (migration 275) finds the stage; the agent probe's row comparison keeps
   -- it on events_run_cursor_idx, from the stage on.
   (SELECT json_build_object('stage', s.payload->>'stage', 'since', s.payload->>'since', 'epoch', (s.payload->>'epoch')::int)
    FROM (SELECT e.cursor, e.payload FROM events e WHERE e.event_type = 'run.stage' AND e.run_id = runs.id

@@ -34,7 +34,7 @@ var startStages = map[string]bool{"waiting": true, "image": true, "volumes": tru
 // first record; NULL otherwise. The ledger is the source: no column holds
 // it. Its twin over runs is the control plane's startStage
 // (apps/control-plane/src/api/routes/work.ts). The latest stage is read
-// through events_run_stage_idx (migration 273), so its predicate is that
+// through events_run_stage_idx (migration 275), so its predicate is that
 // index's literal; the agent probe compares (run_id, cursor) as a row, so
 // it walks events_run_cursor_idx from the stage on, never events' cursor
 // across every Run.
