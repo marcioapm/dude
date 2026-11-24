@@ -471,13 +471,19 @@ func (w *world) waitingOnAuthorization(task string) bool {
 		AND step = 'openPullRequest' AND awaiting_signals ? $2`, task, delivery.SignalGitHubAuthorized) == 1
 }
 
-// resweepPublication runs the delivery's parked publication step again
-// with no new github.authorized, as a retry of the step does, and waits
-// for it to park again.
+// resweepPublication runs the delivery's parked publication step again,
+// as a sweep of the step with no new signal, and waits for it to park
+// again.
 func (w *world) resweepPublication(task string) {
 	w.t.Helper()
-	mustExec(w.t, w.owner, `UPDATE workflow_runs SET status = 'running', wake_at = NULL
+	tag, err := w.owner.Exec(context.Background(), `UPDATE workflow_runs SET status = 'running', wake_at = NULL
 		WHERE task_id = $1 AND status = 'waiting' AND step = 'openPullRequest'`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if n := tag.RowsAffected(); n != 1 {
+		w.t.Fatalf("the sweep woke %d parked publications, want one", n)
+	}
 	w.until("the step swept again", func() bool { return w.waitingOnAuthorization(task) })
 }
 
@@ -681,6 +687,14 @@ func TestAnOwnerRefusedAgainAfterReconnectingIsAskedAgain(t *testing.T) {
 	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
 		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
 	}
+	// She disconnects, which signals nobody: swept again, she is asked to
+	// connect, not to reconnect, and that is a new question.
+	mustExec(t, w.owner, `DELETE FROM github_user_authorizations WHERE person_id = $1`, ana)
+	w.resweepPublication(task)
+	want = append(want, ana+" false")
+	if got := w.credentialAsks(task); !slices.Equal(got, want) {
+		t.Fatalf("credential asks after disconnecting %q, want %q", got, want)
+	}
 }
 
 // A Connect that lands while the publication step is calling GitHub with
@@ -742,6 +756,40 @@ func TestAConnectDuringARefusedPublicationIsAskedAboutWhenRefused(t *testing.T) 
 	}
 	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
 		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+}
+
+// An owner's github.authorized on another delivery is not an authorization
+// this one has seen: swept again, this delivery asks nobody.
+func TestAnotherDeliverysConnectDoesNotAskAgain(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	first, other := w.task(), w.task()
+	w.taskOwners(first, ana)
+	w.taskOwners(other, ana)
+	w.deliver(first)
+	w.deliver(other)
+	for _, task := range []string{first, other} {
+		w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	}
+	w.authorizeAgain(other, ana)
+	w.until("the other delivery swept", func() bool {
+		return w.waitingOnAuthorization(other) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, other, delivery.SignalGitHubAuthorized) == 1
+	})
+	w.resweepPublication(first)
+	if got := w.credentialAsks(first); !slices.Equal(got, []string{ana + " false"}) {
+		t.Fatalf("credential asks %q, want one for Ana", got)
+	}
+	// Nor is another signal of this run's that names her.
+	mustExec(t, w.owner, `INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, consumed_at)
+		SELECT 'sig_other_' || id, organization_id, id, $2, jsonb_build_object('personId', $3::text), now()
+		FROM workflow_runs WHERE task_id = $1`, first, delivery.SignalConductorDecision, ana)
+	w.resweepPublication(first)
+	if got := w.credentialAsks(first); !slices.Equal(got, []string{ana + " false"}) {
+		t.Fatalf("credential asks after another signal %q, want one for Ana", got)
 	}
 }
 
