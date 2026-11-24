@@ -694,7 +694,8 @@ func TestAMoveIsRaisedWhenLuxMarksNoDefaultPool(t *testing.T) {
 	w.until("move settled", func() bool {
 		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
 	})
-	if got := w.machineOf(runID); got["name"] != "Bigger" {
+	// Recorded in the pool lux put it in: the one named default.
+	if got := w.machineOf(runID); got["name"] != "Bigger" || got["poolId"] != defaultPool {
 		t.Fatalf("machine=%v", got)
 	}
 	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
