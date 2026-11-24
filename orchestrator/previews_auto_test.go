@@ -350,10 +350,9 @@ func TestAutoPreviewNotForAPullRequestRecordedAlready(t *testing.T) {
 
 // 7. A pull request dude took over from a person (adopted) is the task's
 // as one dude opened is: its adoption, through the delivery's adopt step,
-// prepares the task's one preview asleep, made by the system, after the
-// adoption's record committed, and never announced though the task has a
-// conductor. (A replay of the record, and one merged before it, are
-// delivery's TestRecordAdoptedPreparesAPreviewOnlyWhenItAnnouncesAnOpenOne.)
+// prepares the task's one dormant preview once the record commits. (A
+// replay of the record, and one merged before it, are delivery's
+// TestRecordAdoptedPreparesAPreviewOnlyWhenItAnnouncesAnOpenOne.)
 func TestAutoPreviewForAnAdoptedPullRequest(t *testing.T) {
 	w := autoWorld(t, true)
 	n := w.gh.OpenAsPerson("someone", "feature/theirs", "main", "Their work")
@@ -410,8 +409,7 @@ func TestAutoPreviewOnAnAdoptedPullRequestsReopen(t *testing.T) {
 // preview.
 func TestAutoPreviewNotForBranches(t *testing.T) {
 	w := autoWorld(t, true)
-	task := w.task()
-	w.conductorOf(task)
+	w.conductorOf(w.task())
 	w.gh.Branch("feature/look", "main", "a look")
 	_, agent := w.brainstormer()
 	w.agentBranchPreview("feature/look", agent)
