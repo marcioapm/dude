@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -470,6 +471,16 @@ func (w *world) waitingOnAuthorization(task string) bool {
 		AND step = 'openPullRequest' AND awaiting_signals ? $2`, task, delivery.SignalGitHubAuthorized) == 1
 }
 
+// resweepPublication runs the delivery's parked publication step again
+// with no new github.authorized, as a retry of the step does, and waits
+// for it to park again.
+func (w *world) resweepPublication(task string) {
+	w.t.Helper()
+	mustExec(w.t, w.owner, `UPDATE workflow_runs SET status = 'running', wake_at = NULL
+		WHERE task_id = $1 AND status = 'waiting' AND step = 'openPullRequest'`, task)
+	w.until("the step swept again", func() bool { return w.waitingOnAuthorization(task) })
+}
+
 // A pull request waiting on its owner's GitHub is the owner's item: one
 // question.asked of kind credential, addressed to them, which a sweep of
 // the step while they still have not connected does not repeat. Connecting
@@ -492,11 +503,7 @@ func TestAnOwnerWithoutGitHubIsAskedOnceThenThePullRequestOpens(t *testing.T) {
 		t.Fatalf("the ask names branch %q", branch)
 	}
 	// The step runs again with Ana still not connected: nobody is told twice.
-	w.authorizeAgain(task, ana)
-	w.until("the step swept again", func() bool {
-		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
-	})
+	w.resweepPublication(task)
 	if got := w.credentialAsks(task); len(got) != 1 {
 		t.Fatalf("a second sweep asked again: %q", got)
 	}
@@ -550,11 +557,7 @@ func TestAConductorIsToldThePullRequestWaitsOnItsOwnersGitHub(t *testing.T) {
 		!strings.Contains(line, "nothing is redone") {
 		t.Fatalf("the conductor's line: %q", line)
 	}
-	w.authorizeAgain(task, ana)
-	w.until("the step swept again", func() bool {
-		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
-			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
-	})
+	w.resweepPublication(task)
 	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub); n != 1 {
 		t.Fatalf("the conductor was told %d times", n)
 	}
@@ -610,12 +613,69 @@ func TestAnOwnerWhoConnectsThenIsRefusedIsAskedToReconnect(t *testing.T) {
 		t.Fatalf("the conductor's second line: %q %v", line, err)
 	}
 	// Swept again with Ana still to reconnect: nobody is asked a third time.
-	w.authorizeAgain(task, ana)
-	w.until("the step swept again", func() bool { return consumed() == 2 && w.waitingOnAuthorization(task) })
+	w.resweepPublication(task)
 	if got := w.credentialAsks(task); len(got) != 2 {
 		t.Fatalf("a further sweep asked again: %q", got)
 	}
 	if n := wakes(); n != 2 {
+		t.Fatalf("a further sweep told the conductor again: %d", n)
+	}
+	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+}
+
+// Each Connect that GitHub then refuses asks the owner again: asked to
+// connect, refused, asked to reconnect, refused again, asked to reconnect
+// again, and the conductor told each time. A sweep with no new Connect
+// asks nobody.
+func TestAnOwnerRefusedAgainAfterReconnectingIsAskedAgain(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana, bo := w.ownerPerson("Ana"), w.ownerPerson("Bo")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
+	wakes := func() int {
+		return w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub)
+	}
+	consumed := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
+	}
+	refused := func() bool {
+		return w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND reconnect_required`, ana) == 1
+	}
+	w.gh.OpenRefuse = map[string]int{"bad-token": 401, "bad-again": 401}
+	// Ana connects; GitHub refuses the token as the pull request is created.
+	w.connectThroughCallback(ana, "bad-token", 1)
+	w.until("the refusal swept", func() bool { return consumed() == 1 && w.waitingOnAuthorization(task) && refused() })
+	// She reconnects; GitHub refuses that token too.
+	w.connectThroughCallback(ana, "bad-again", 1)
+	w.until("the second refusal swept", func() bool { return consumed() == 2 && w.waitingOnAuthorization(task) && refused() })
+	want := []string{ana + " false", ana + " true", ana + " true"}
+	if got := w.credentialAsks(task); !slices.Equal(got, want) {
+		t.Fatalf("credential asks %q, want %q", got, want)
+	}
+	if n := wakes(); n != 3 {
+		t.Fatalf("the conductor was told %d times, want three", n)
+	}
+	// Swept again with no new Connect of hers, once on someone else's
+	// github.authorized and once on nothing: nobody is asked a fourth time.
+	w.authorizeAgain(task, bo)
+	w.until("the step swept on Bo's", func() bool { return consumed() == 3 && w.waitingOnAuthorization(task) })
+	w.resweepPublication(task)
+	if got := w.credentialAsks(task); len(got) != 3 {
+		t.Fatalf("a further sweep asked again: %q", got)
+	}
+	if n := wakes(); n != 3 {
 		t.Fatalf("a further sweep told the conductor again: %d", n)
 	}
 	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
