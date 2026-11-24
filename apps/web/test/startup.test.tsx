@@ -763,6 +763,19 @@ describe("a repository's setup script in the start (prod sequence)", () => {
     expect(up.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual(["Started in 5m 22s."]);
   });
 
+  test("lux's running state as servers.changed during setup leaves the start live until the agent is up", () => {
+    const events = prod();
+    // Past the setup's first line, lux's state change arrives as servers.changed.
+    const changed = ev("servers.changed", { change: "state", luxState: "running" }, t("12:02:12"));
+    events.splice(events.findIndex((e) => e.eventType === "run.setup.progress") + 1, 0, changed);
+    events.forEach((e, i) => { e.cursor = 20_000 + i; });
+    const during = project(events.slice(0, events.indexOf(changed) + 1), "running");
+    expect(during.start).toMatchObject({ stage: "setup", setup: { repository: "abs" } });
+    expect(during.turns.some((t) => t.kind === "notice")).toBe(false);
+    const up = project(events, "running");
+    expect(up.turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual(["Started in 5m 22s."]);
+  });
+
   test("an older stream with no setup and no agent.session.started renders as before: run.started ends the start", () => {
     const old = [created(), stage("waiting", 0), stage("image", 4_000), stage("running", 9_000), ev("run.started", {}, 12_000),
       ev("agent.message", { text: "hi" }, 40_000)];
@@ -771,6 +784,9 @@ describe("a repository's setup script in the start (prod sequence)", () => {
     const notices = c.turns.filter((t) => t.kind === "notice");
     expect(notices).toEqual([expect.objectContaining({ text: "Started in 12s.", title: "Machine found 4.0s\nImage ready 5.0s\nAgent started 3.0s", at: at(12_000) })]);
     expect(project(old.slice(0, 5)).start).toBeNull();
+    // A plain running stage after it, once lux said running, starts nothing again.
+    const trailing = project([...old, stage("running", 41_000)], "running");
+    expect(trailing.turns.filter((t) => t.kind === "notice" && t.text.startsWith("Started in")).length).toBe(1);
   });
 
   test("a start with no setup script (none, or skipped by its marker) never shows the setup stage", () => {

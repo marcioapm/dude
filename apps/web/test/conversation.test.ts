@@ -603,6 +603,18 @@ describe("activity", () => {
     const state = apply(emptyProjection(), [ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }), ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]);
     expect(snapshot(state, "running").activity).toBe("tool");
   });
+
+  test("a prompt or directive landing while the agent waits for its conductor's answer shows no thinking", () => {
+    const asked = ev("question.routed", { kind: "agent", questionId: "qst_w", addressee: "conductor", prompt: "English?" });
+    expect(snapshot(apply(emptyProjection(), [asked, ev(EventTypes.PromptDelivered, { text: "go" })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), [asked, ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]), "running").activity).toBeNull();
+  });
+
+  test("a prompt or directive landing while its conductor holds a repository request shows no thinking", () => {
+    const held = ev("repository.routed", { requestId: "rrq_w", repository: "web", access: "read", reason: "r", addressee: "conductor" });
+    expect(snapshot(apply(emptyProjection(), [held, ev(EventTypes.PromptDelivered, { text: "go" })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), [held, ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]), "running").activity).toBeNull();
+  });
 });
 
 describe("usage", () => {

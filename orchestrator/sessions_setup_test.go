@@ -1,6 +1,7 @@
 package orchestrator_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -60,7 +61,30 @@ func TestABrainstormRunsNoSetupScriptAndAnOldOneStillResumes(t *testing.T) {
 	if got := s.resumedSecretNames(run)[0]; !slices.Contains(got, setupSecret.Name) {
 		t.Errorf("the old brainstorm's resume carried %v, want the setup manifest", got)
 	}
+	// The manifest given again names the repository and its script, not a header alone.
+	repo := base64.StdEncoding.EncodeToString([]byte(spec.Git.Repositories[0].Name))
+	script := base64.StdEncoding.EncodeToString([]byte("npm ci"))
+	if got := s.resumedManifest(luxID); !strings.Contains(got, repo+" ") || !strings.Contains(got, " "+script+"\n") {
+		t.Errorf("the old brainstorm's resumed manifest %q names no %s with its script", got, spec.Git.Repositories[0].Name)
+	}
 	if now, status := s.brainstorm(id); now != run || status == "failed" {
 		t.Errorf("the session's agent is %s %s, want %s running", now, status, run)
 	}
+}
+
+// resumedManifest is the setup manifest the first resume of lux Run luxID
+// carried, "" when it carried none.
+func (s *sessionWorld) resumedManifest(luxID string) string {
+	s.t.Helper()
+	for _, r := range s.lux.Runs() {
+		if r.ID != luxID || len(r.ResumeSecrets) == 0 {
+			continue
+		}
+		for _, sec := range r.ResumeSecrets[0] {
+			if sec.Name == setupSecret.Name {
+				return sec.Value
+			}
+		}
+	}
+	return ""
 }
