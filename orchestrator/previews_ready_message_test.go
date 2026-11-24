@@ -86,6 +86,22 @@ func (w *world) readyMessages(runID string) []readyMessage {
 
 type readyMessage struct{ run, task, session, actor, text string }
 
+// taskReadyText is a task preview's message, as its template renders it,
+// for its server lines.
+func taskReadyText(lines ...string) string {
+	return "Ready for your look:\n- " + strings.Join(lines, "\n- ") + "\n\nCheck this task's change there, on its branch as it is now."
+}
+
+// quietAgentPreview is an agent's preview of task, started by run, whose
+// servers exist but never become ready by themselves: the test says when
+// (feedState).
+func (w *world) quietAgentPreview(task, run string) (runID, web string) {
+	w.t.Helper()
+	runID = w.agentPreview(task, run)
+	w.withServers(runID)
+	return runID, w.serverID(runID, "web")
+}
+
 func (w *world) allReadyMessages() int {
 	return w.count(`SELECT count(*) FROM events WHERE organization_id = $1 AND event_type = 'agent.message'
 		AND payload ? 'previewReady'`, w.org)
@@ -125,9 +141,8 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 	if got.run != conductor || got.task != task || got.session != "" || got.actor != ledger.ActorAgent {
 		t.Fatalf("said on run %q task %q session %q by %q, want the conductor %s in task %s", got.run, got.task, got.session, got.actor, conductor, task)
 	}
-	if !strings.HasPrefix(got.text, "Ready for your look:") || !strings.Contains(got.text, "web — "+url) ||
-		strings.Contains(strings.ToLower(got.text), "pull request") {
-		t.Fatalf("text %q (url %s)", got.text, url)
+	if want := taskReadyText("web — " + url); url == "" || got.text != want {
+		t.Fatalf("text %q, want %q", got.text, want)
 	}
 
 	// Seen again: a replayed or later ready, another start_preview, a
@@ -199,8 +214,13 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 	if got.run != agent || got.session != session || got.task != "" {
 		t.Fatalf("said on run %q session %q task %q, want %s in session %s", got.run, got.session, got.task, agent, session)
 	}
-	if !strings.Contains(got.text, "feature/look") || !strings.Contains(got.text, "web — ") {
-		t.Fatalf("text %q", got.text)
+	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, b.ID)
+	if !strings.Contains(url, previewDomain) {
+		t.Fatalf("web's URL %q", url)
+	}
+	want := "Ready for your look:\n- web — " + url + "\n\nCheck `feature/look` there, as the branch is now."
+	if got.text != want {
+		t.Fatalf("text %q, want %q", got.text, want)
 	}
 	if n := w.count(`SELECT count(*) FROM events WHERE organization_id = $1 AND event_type = 'agent.message' AND task_id IS NOT NULL`, w.org); n != 0 {
 		t.Fatalf("%d agent messages in a task", n)
@@ -280,5 +300,74 @@ func TestTwoFollowersOfOneReadySayItOnce(t *testing.T) {
 	}
 	if n := len(w.readyMessages(runID)); n != 1 {
 		t.Fatalf("%d ready messages, want 1", n)
+	}
+}
+
+// A preview that failed or ended before its servers say ready says
+// nothing: only a live preview is announced.
+func TestAnEndedPreviewSaysNothingWhenReady(t *testing.T) {
+	for _, end := range []string{"failed", "stopped"} {
+		t.Run(end, func(t *testing.T) {
+			w := newWorld(t)
+			w.wakeable()
+			w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+			task := w.task()
+			conductor := w.conductorOf(task)
+			runID, web := w.quietAgentPreview(task, conductor)
+			if end == "failed" {
+				mustExec(t, w.owner, `UPDATE runs SET status = 'failed', ended_at = now() WHERE id = $1`, runID)
+			} else if _, err := w.previews.StopPreview(context.Background(), w.org, task, conductor, ledger.ActorAgent, ""); err != nil {
+				t.Fatal(err)
+			}
+			w.feedState(web, lux.ServerReady, 1<<44)
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID); n != 1 {
+				t.Fatal("the ready was not applied")
+			}
+			if n := w.allReadyMessages(); n != 0 {
+				t.Fatalf("%d ready messages for a %s preview", n, end)
+			}
+		})
+	}
+}
+
+// The conductor that started a task's preview ended and the task has a
+// newer one before the preview is ready: the latest says it, in the task.
+func TestAPreviewReadyAfterItsConductorEndedIsSaidByTheLatest(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+	task := w.task()
+	starter := w.conductorOf(task)
+	runID, web := w.quietAgentPreview(task, starter)
+	mustExec(t, w.owner, `UPDATE runs SET status = 'completed', ended_at = now() WHERE id = $1`, starter)
+	latest := w.conductorOf(task)
+	w.feedState(web, lux.ServerReady, 1<<44)
+	got := w.readyMessages(runID)
+	if len(got) != 1 {
+		t.Fatalf("%d ready messages, want 1", len(got))
+	}
+	if got[0].run != latest || got[0].task != task || got[0].session != "" {
+		t.Fatalf("said on run %q task %q session %q, want the latest conductor %s (not %s) in task %s",
+			got[0].run, got[0].task, got[0].session, latest, starter, task)
+	}
+}
+
+// A server deleted from the preview is not listed.
+func TestADeletedPreviewServerIsNotListed(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "fakelux-never-ready", "", nil, true)
+	w.recipe("api", 4000, "fakelux-never-ready", "api", nil, true)
+	task := w.task()
+	runID, web := w.quietAgentPreview(task, w.conductorOf(task))
+	w.until("both servers", func() bool {
+		return w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND deleted_at IS NULL`, runID) == 2
+	})
+	mustExec(t, w.owner, `UPDATE preview_servers SET deleted_at = now() WHERE run_id = $1 AND name = 'api'`, runID)
+	w.feedState(web, lux.ServerReady, 1<<44)
+	got := w.readyMessages(runID)
+	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, runID)
+	if want := taskReadyText("web — " + url); len(got) != 1 || got[0].text != want {
+		t.Fatalf("messages %+v, want one %q", got, want)
 	}
 }
