@@ -377,7 +377,11 @@ func (t *translator) apply(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.Fram
 		if f.Epoch > 0 {
 			t.epoch = f.Epoch
 		}
+		was := t.init
 		t.init.Record(f)
+		if err := t.setupProgress(ctx, tx, s, f, was); err != nil {
+			return err
+		}
 		if f.Event != nil {
 			return t.agentEvent(ctx, tx, s, f)
 		}

@@ -418,9 +418,19 @@ export const EventTypes = {
    * `repositories`, `container`, `running` while lux's state is not yet
    * running), or `park` for a move's stop (a drain, a preemption, a
    * migrate); `since` lux's `stageSince` in UTC. Written only while the Run
-   * starts. A start that fails says its stage in `run.failed`.
+   * starts. A start that fails says its stage in `run.failed`. dude writes
+   * `setup` itself, with `repository`, when init runs a repository's setup
+   * script (after lux's `running`, which lux reports running through), and
+   * `running` with `setup: true` once init is done: the start lasts until
+   * the agent's first record.
    */
   RunStage: "run.stage",
+  /**
+   * The latest line a repository's setup script printed while it runs, at
+   * most every 3 s while it prints. Payload: `{ repository, line, epoch }`:
+   * `line` its last non-empty line, redacted, at most 200 characters.
+   */
+  RunSetupProgress: "run.setup.progress",
   /**
    * The project secrets an agent Run was given at submit, by the phase's
    * recipient (`project_secrets.recipients`). Once per Run. Payload:

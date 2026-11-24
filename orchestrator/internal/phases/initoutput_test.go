@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -236,5 +237,234 @@ func TestASetupFailureFailsTheRunNamingItsRepository(t *testing.T) {
 	}
 	if strings.Contains(string(raw), value) {
 		t.Error("run.failed holds the secret")
+	}
+}
+
+// setupStageRun is a running implementer Run given the project secret
+// value, for the setup stage's tests.
+func setupStageRun(t *testing.T, value string) (*Syncer, phaseRun, *pgx.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	app, owner := dbtest.Open(t)
+	org := dbtest.Org(t, owner)
+	for _, q := range []string{
+		`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ('prj_'||$1, $1, 'P', 'prj_'||$1, 'P')`,
+		`INSERT INTO tasks (id, organization_id, project_id, number, title, goal) VALUES ('wi_'||$1, $1, 'prj_'||$1, 1, 'T', 'G')`,
+		`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, phase, status, lux_run_id, lux_state, project_secret_names)
+			VALUES ('run_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 1, 'implement', 'running', 'lrun_1', 'running', '{TOKEN}')`,
+		`INSERT INTO run_project_secrets (run_id, organization_id, name, value) VALUES ('run_'||$1, $1, 'TOKEN', '` + value + `')`,
+	} {
+		if _, err := owner.Exec(ctx, q, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := phaseRun{ID: "run_" + org, Org: org, ProjectID: "prj_" + org, TaskID: "wi_" + org, Phase: "implement", Status: statusRunning, LuxState: "running"}
+	return &Syncer{DB: app, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, r, owner
+}
+
+// applyEach applies each frame as a batch of its own, at the time at gives it.
+func applyEach(t *testing.T, s *Syncer, r phaseRun, frames []lux.Frame, at []time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for i, f := range frames {
+		s.Now = func() time.Time { return at[i] }
+		tr := &translator{run: r}
+		if err := s.DB.InOrg(ctx, r.Org, func(tx pgx.Tx) error { return tr.load(ctx, tx) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.applyBatch(ctx, tr, []lux.Frame{f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+type stageEvent struct {
+	Type    string
+	Payload map[string]any
+}
+
+func stageEvents(t *testing.T, owner *pgx.Conn, runID string) []stageEvent {
+	t.Helper()
+	rows, err := owner.Query(context.Background(), `SELECT event_type, payload FROM events WHERE run_id = $1
+		AND event_type IN ('run.stage', 'run.setup.progress') ORDER BY cursor`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []stageEvent
+	for rows.Next() {
+		var e stageEvent
+		var raw []byte
+		if err := rows.Scan(&e.Type, &raw); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.Unmarshal(raw, &e.Payload)
+		out = append(out, e)
+	}
+	return out
+}
+
+// A setup script that runs is a start stage: setup, naming the repository
+// from init's marker line, then its latest line no more often than every
+// 3 s and redacted, then the agent's stage once init is done.
+func TestASetupScriptIsAStartStageWithItsLatestLine(t *testing.T) {
+	const value = "setup-stage-not-a-real-token-1"
+	s, r, owner := setupStageRun(t, value)
+	t0 := time.Date(2026, 11, 24, 12, 2, 8, 0, time.UTC)
+	sec := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Second))) }
+	frames := []lux.Frame{
+		initEvent(1, "start", 0),
+		output(1, "stderr", setupRunningPrefix+"abs\n"),
+		output(1, "stdout", "abs setup: npm ci (backend)\n"),
+		output(1, "stdout", "abs setup: npm ci (frontend)\n"),
+		output(1, "stdout", "npm notice using "+value+"\n"),
+		output(1, "stdout", "\x1b[32mabs setup: prisma generate\x1b[0m\n\n"),
+		output(1, "stdout", "abs setup: "+strings.Repeat("y", 300)+"\n"),
+		output(1, "stdout", "abs setup: generate:api\n"),
+		initEvent(1, "done", 0),
+	}
+	at := []time.Time{sec(0), sec(0.5), sec(1), sec(2), sec(4.5), sec(5), sec(8), sec(9), sec(276)}
+	applyEach(t, s, r, frames, at)
+	got := stageEvents(t, owner, r.ID)
+	var lines []string
+	for _, e := range got {
+		if e.Type == EvRunSetupProgress {
+			lines = append(lines, e.Payload["line"].(string))
+			if e.Payload["repository"] != "abs" {
+				t.Errorf("progress names %v", e.Payload["repository"])
+			}
+		}
+	}
+	if len(got) < 2 || got[0].Type != EvRunStage || got[0].Payload["stage"] != "setup" || got[0].Payload["repository"] != "abs" {
+		t.Fatalf("first events %+v", got)
+	}
+	if since, _ := got[0].Payload["since"].(string); !strings.HasPrefix(since, "2026-11-24T12:02:08.5") {
+		t.Errorf("setup since %q", since)
+	}
+	last := got[len(got)-1]
+	if last.Type != EvRunStage || last.Payload["stage"] != "running" || last.Payload["setup"] != true {
+		t.Errorf("last event %+v", last)
+	}
+	// 1 s: the first line; 2 s: within 3 s, held; 4.5 s: the redacted token line; 5 s: held; 8 s: the long line cut.
+	want := []string{"abs setup: npm ci (backend)", "npm notice using [REDACTED:TOKEN]", "abs setup: " + strings.Repeat("y", setupLineMax-len("abs setup: ")-1) + "…"}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Errorf("lines\n%q\nwant\n%q", lines, want)
+	}
+	for _, l := range lines {
+		if utf8.RuneCountInString(l) > setupLineMax {
+			t.Errorf("line of %d characters", utf8.RuneCountInString(l))
+		}
+	}
+	var raw string
+	if err := owner.QueryRow(context.Background(), `SELECT string_agg(payload::text, ' ') FROM events WHERE run_id = $1`, r.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, value) {
+		t.Error("an event holds the secret")
+	}
+	// The API keeps reporting the start, though lux says running, until the agent's first record.
+	stageNow := func() string {
+		var stage *string
+		if err := owner.QueryRow(context.Background(), `SELECT `+StartStageJSON+`->>'stage' FROM runs r WHERE r.id = $1`, r.ID).Scan(&stage); err != nil {
+			t.Fatal(err)
+		}
+		if stage == nil {
+			return ""
+		}
+		return *stage
+	}
+	if got := stageNow(); got != "running" {
+		t.Errorf("start stage after setup %q, want running", got)
+	}
+	if err := s.DB.InOrg(context.Background(), r.Org, func(tx pgx.Tx) error {
+		return s.event(context.Background(), tx, r, evSessionStarted, "agent", map[string]any{"role": "implement"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageNow(); got != "" {
+		t.Errorf("start stage once the agent is up %q", got)
+	}
+}
+
+// An init that runs no script writes no stage: no manifest, a resume whose
+// marker skips the script, or a repository with no checkout.
+func TestAnInitThatRunsNoScriptWritesNoSetupStage(t *testing.T) {
+	for name, frames := range map[string][]lux.Frame{
+		"no manifest":           {initEvent(1, "start", 0), initEvent(1, "done", 0)},
+		"skipped by its marker": {initEvent(2, "start", 0), output(2, "stdout", "instructions written\n"), initEvent(2, "done", 0)},
+		"no checkout":           {initEvent(1, "start", 0), output(1, "stderr", "dude: abs has no checkout at abs; its setup script is skipped\n"), initEvent(1, "done", 0)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, r, owner := setupStageRun(t, "setup-stage-not-a-real-token-2")
+			at := make([]time.Time, len(frames))
+			for i := range at {
+				at[i] = time.Date(2026, 11, 24, 12, 0, i*5, 0, time.UTC)
+			}
+			applyEach(t, s, r, frames, at)
+			if got := stageEvents(t, owner, r.ID); len(got) != 0 {
+				t.Errorf("wrote %+v", got)
+			}
+		})
+	}
+}
+
+// A setup script that fails keeps the failure path: no agent stage after
+// it, the Run failed naming the repository.
+func TestAFailedSetupWritesNoAgentStage(t *testing.T) {
+	s, r, owner := setupStageRun(t, "setup-stage-not-a-real-token-3")
+	failed, _ := json.Marshal(map[string]any{"state": "failed", "reason": "exit code 1"})
+	frames := []lux.Frame{
+		initEvent(1, "start", 0),
+		output(1, "stderr", setupRunningPrefix+"abs\n"),
+		output(1, "stderr", "npm ERR! boom\n"+setupFailedPrefix+"1 abs\n"),
+		initEvent(1, "done", 1),
+		{Kind: "lux", Epoch: 1, EventID: 9, EventType: "state", EventData: failed},
+	}
+	at := make([]time.Time, len(frames))
+	for i := range at {
+		at[i] = time.Date(2026, 11, 24, 12, 0, i*5, 0, time.UTC)
+	}
+	applyEach(t, s, r, frames, at)
+	got := stageEvents(t, owner, r.ID)
+	if len(got) == 0 || got[0].Payload["stage"] != "setup" {
+		t.Fatalf("events %+v", got)
+	}
+	for _, e := range got {
+		if e.Type == EvRunStage && e.Payload["stage"] == "running" {
+			t.Errorf("the agent's stage after a failed setup: %+v", e)
+		}
+	}
+	var runErr string
+	if err := owner.QueryRow(context.Background(), `SELECT error FROM runs WHERE id = $1`, r.ID).Scan(&runErr); err != nil {
+		t.Fatal(err)
+	}
+	if runErr != "The setup script of abs failed with exit code 1: npm ERR! boom" {
+		t.Errorf("error %q", runErr)
+	}
+}
+
+// The latest line: after the marker, as a terminal shows it, never one cut at the tail's start.
+func TestSetupLine(t *testing.T) {
+	for _, tc := range []struct {
+		tail string
+		cut  bool
+		want string
+	}{
+		{setupRunningPrefix + "abs\n", false, ""},
+		{"earlier\n" + setupRunningPrefix + "abs\nnpm ci\n\n  \n", false, "npm ci"},
+		{setupRunningPrefix + "abs\nprogress 10%\rprogress 90%\n", false, "progress 90%"},
+		{"half a lin", true, ""},
+		{"half a line\nwhole line\n", true, "whole line"},
+		{setupRunningPrefix + "api\nfirst\n" + setupRunningPrefix + "web\n", false, ""},
+	} {
+		if got := setupLine(tc.tail, tc.cut); got != tc.want {
+			t.Errorf("setupLine(%q) = %q, want %q", tc.tail, got, tc.want)
+		}
+	}
+	if got := setupRunning("x\n" + setupRunningPrefix + "api\n" + setupRunningPrefix + "web\nout\n"); got != "web" {
+		t.Errorf("setupRunning %q", got)
+	}
+	if got := setupRunning("echo " + setupRunningPrefix + "api\n"); got != "" {
+		t.Errorf("setupRunning mid-line %q", got)
 	}
 }

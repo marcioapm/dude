@@ -21,19 +21,26 @@ const EvRunStage = "run.stage"
 // with its work kept, before it waits for a host elsewhere.
 const stageParked = "park"
 
-// startStages are lux's stages of a start, written while the Run starts.
-var startStages = map[string]bool{"waiting": true, "image": true, "volumes": true, "repositories": true, "container": true, "running": true}
+// startStages are the stages of a start, written while the Run starts:
+// lux's, and setup, dude's own (a repository's setup script running in
+// init, setupProgress), which lux never announces.
+var startStages = map[string]bool{"waiting": true, "image": true, "volumes": true, "repositories": true, "container": true,
+	stageSetup: true, "running": true}
 
 // StartStageJSON (SQL, over runs r): where the Run's start is, as the API
 // gives it ({stage, since, epoch} from its latest run.stage), while it is
-// live and lux has not reported it running; NULL otherwise. The ledger is
-// the source: no column holds it. Its twin over runs is the control
-// plane's startStage (apps/control-plane/src/api/routes/work.ts).
-const StartStageJSON = `(SELECT json_build_object('stage', e.payload->>'stage', 'since', e.payload->>'since',
-		'epoch', (e.payload->>'epoch')::int)
-	FROM events e WHERE e.run_id = r.id AND e.event_type = 'run.stage'
-	  AND r.status IN ('scheduled', 'starting', 'running') AND COALESCE(r.lux_state, '') <> 'running'
-	ORDER BY e.cursor DESC LIMIT 1)`
+// live and lux has not reported it running, or, after a setup script
+// (dude's stages, which lux reports running through), until the agent's
+// first record; NULL otherwise. The ledger is the source: no column holds
+// it. Its twin over runs is the control plane's startStage
+// (apps/control-plane/src/api/routes/work.ts).
+const StartStageJSON = `(SELECT json_build_object('stage', s.payload->>'stage', 'since', s.payload->>'since',
+		'epoch', (s.payload->>'epoch')::int)
+	FROM (SELECT e.cursor, e.payload FROM events e WHERE e.run_id = r.id AND e.event_type = 'run.stage'
+	  AND r.status IN ('scheduled', 'starting', 'running') ORDER BY e.cursor DESC LIMIT 1) s
+	WHERE COALESCE(r.lux_state, '') <> 'running'
+	  OR ((s.payload->>'stage' = '` + stageSetup + `' OR s.payload->>'` + stageSetup + `' = 'true')
+	    AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = r.id AND a.cursor > s.cursor AND a.event_type LIKE 'agent.%')))`
 
 // stage records lux's stage event while the Run is starting: each stage
 // before running, and running while lux's state is not yet running (the

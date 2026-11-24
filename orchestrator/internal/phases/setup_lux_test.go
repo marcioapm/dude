@@ -314,3 +314,70 @@ echo ran >> "$(git rev-parse --git-path setup-runs)"
 		t.Errorf("after the resume the repository's hook ran %q, want once more", b)
 	}
 }
+
+// initFrames is the Run's init records from its stream, by placement: its
+// lux.init events and the output between them.
+func (l *setupLux) initFrames(run string) map[int][]lux.Frame {
+	l.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	out := map[int][]lux.Frame{}
+	_ = l.c.Output(ctx, run, "", 0, func(f lux.Frame) error {
+		if f.Kind == "record" && (f.Event != nil && f.Event.Type == "lux.init" || f.Channel == "stdout" || f.Channel == "stderr") {
+			out[f.Epoch] = append(out[f.Epoch], f)
+		}
+		return nil
+	})
+	return out
+}
+
+// The setup stage from what SetupInit really prints under lux: the first
+// start runs the script and writes the stage naming the repository; a
+// resume whose marker skips it writes none.
+func TestTheSetupStageFollowsTheScriptThatRuns(t *testing.T) {
+	l := newSetupLux(t, "api")
+	scripts := map[string]string{"api": "echo 'api setup: installing'\n"}
+	run := l.submit(scripts, "api")
+	ctx := context.Background()
+	if err := l.c.Stop(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	for r, _ := l.c.Get(ctx, run); r.State != "stopped"; r, _ = l.c.Get(ctx, run) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := l.c.Resume(ctx, run, lux.ResumeInput{Secrets: []lux.Secret{SetupSecret(l.setups(scripts, "api"))}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(l.started(run)) < 4 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	byEpoch := l.initFrames(run)
+	if len(byEpoch) != 2 {
+		t.Fatalf("init records of %d placements", len(byEpoch))
+	}
+	var epochs []int
+	for e := range byEpoch {
+		epochs = append(epochs, e)
+	}
+	slices.Sort(epochs)
+	for i, epoch := range epochs {
+		s, r, owner := setupStageRun(t, "setup-lux-not-a-real-token")
+		frames := byEpoch[epoch]
+		at := make([]time.Time, len(frames))
+		for j := range at {
+			at[j] = time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC).Add(time.Duration(j) * 4 * time.Second)
+		}
+		applyEach(t, s, r, frames, at)
+		got := stageEvents(t, owner, r.ID)
+		if i == 0 {
+			if len(got) < 2 || got[0].Payload["stage"] != "setup" || got[0].Payload["repository"] != "api" ||
+				got[len(got)-1].Payload["stage"] != "running" {
+				t.Errorf("first start wrote %+v", got)
+			}
+			continue
+		}
+		if len(got) != 0 {
+			t.Errorf("the resume, its script skipped, wrote %+v", got)
+		}
+	}
+}

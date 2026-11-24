@@ -136,12 +136,16 @@ const runSelect = (sql: OrgScope["sql"]) => sql`
     FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stalled' ORDER BY e.cursor DESC LIMIT 1) END AS stalled,
   replaced_by AS "replacedBy", finding_ids AS "findingIds", review_range->>'of' AS "reviewOf",
   -- Where its start is (run.stage, the ledger's; no column holds it), while
-  -- it is live and lux has not reported it running. Its twin over runs r is
-  -- the orchestrator's phases.StartStageJSON (stage.go): change both.
-  (SELECT json_build_object('stage', e.payload->>'stage', 'since', e.payload->>'since', 'epoch', (e.payload->>'epoch')::int)
-   FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
-     AND runs.status IN ('scheduled', 'starting', 'running') AND COALESCE(runs.lux_state, '') <> 'running'
-   ORDER BY e.cursor DESC LIMIT 1) AS "startStage",
+  -- it is live and lux has not reported it running, or, after a setup
+  -- script (dude's stage, which lux reports running through), until the
+  -- agent's first record. Its twin over runs r is the orchestrator's
+  -- phases.StartStageJSON (stage.go): change both.
+  (SELECT json_build_object('stage', s.payload->>'stage', 'since', s.payload->>'since', 'epoch', (s.payload->>'epoch')::int)
+   FROM (SELECT e.cursor, e.payload FROM events e WHERE e.run_id = runs.id AND e.event_type = 'run.stage'
+     AND runs.status IN ('scheduled', 'starting', 'running') ORDER BY e.cursor DESC LIMIT 1) s
+   WHERE COALESCE(runs.lux_state, '') <> 'running'
+     OR ((s.payload->>'stage' = 'setup' OR s.payload->>'setup' = 'true')
+       AND NOT EXISTS (SELECT 1 FROM events a WHERE a.run_id = runs.id AND a.cursor > s.cursor AND a.event_type LIKE 'agent.%'))) AS "startStage",
   can_run_containers AS "canRunContainers", project_secret_names AS "projectSecretNames"`;
 
 const SESSION_SELECT = `
