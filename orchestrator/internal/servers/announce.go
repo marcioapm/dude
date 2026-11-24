@@ -3,23 +3,13 @@ package servers
 import (
 	"cmp"
 	"context"
-	"fmt"
-	"strings"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
-)
-
-// The words an agent-started preview's first ready is announced in: the
-// agent's own message (agent.message), as it would say it. A pull request is
-// never claimed: the preview serves a branch, merged or not.
-const (
-	readyLead      = "Ready for your look:"
-	readyTaskCheck = "Check this task's change there, on its branch as it is now."
-	// %s: the branch.
-	readyBranchCheck = "Check `%s` there, as the branch is now."
 )
 
 // announceReady posts "Ready for your look" in the conversation of the
@@ -30,7 +20,7 @@ const (
 // the Run row held), so a preview Run is announced once, whoever sees its
 // ready and however often. A preview a person started, or one no longer
 // live, is not announced. No network work: everything is read in tx.
-func announceReady(ctx context.Context, tx pgx.Tx, org, runID string) error {
+func announceReady(ctx context.Context, tx pgx.Tx, log *slog.Logger, org, runID string) error {
 	var starter, projectID, taskID, branch string
 	// A Run has one run.created. Found by run_id (events_run_cursor_idx),
 	// not in cursor order: an ordered scan of a Run with a long history may
@@ -52,6 +42,9 @@ func announceReady(ctx context.Context, tx pgx.Tx, org, runID string) error {
 			OR ($2 = '' AND a.id = $1)
 		ORDER BY a.created_at DESC, a.id DESC LIMIT 1`, starter, taskID).Scan(&speaker, &sessionID, &speakerTask)
 	if db.IsNotFound(err) {
+		if taskID != "" {
+			log.Debug("a preview's ready is not announced: its task has no conductor", "run", runID, "task", taskID)
+		}
 		return nil
 	}
 	if err != nil {
@@ -66,32 +59,17 @@ func announceReady(ctx context.Context, tx pgx.Tx, org, runID string) error {
 	if err != nil {
 		return err
 	}
-	type served struct{ name, url string }
-	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (served, error) {
-		var s served
-		return s, row.Scan(&s.name, &s.url)
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (delivery.PreviewReadyServer, error) {
+		var s delivery.PreviewReadyServer
+		return s, row.Scan(&s.Name, &s.URL)
 	})
 	if err != nil {
 		return err
 	}
-	var b strings.Builder
-	b.WriteString(readyLead)
-	for _, s := range list {
-		if s.url == "" {
-			fmt.Fprintf(&b, "\n- %s", s.name)
-			continue
-		}
-		fmt.Fprintf(&b, "\n- %s — %s", s.name, s.url)
-	}
-	b.WriteString("\n\n")
-	if taskID != "" {
-		b.WriteString(readyTaskCheck)
-	} else {
-		fmt.Fprintf(&b, readyBranchCheck, branch)
-	}
+	text := delivery.PreviewReady(list, taskID != "", branch)
 	_, err = ledger.Append(ctx, tx, ledger.Event{Type: "agent.message", OrganizationID: org, ProjectID: projectID,
 		TaskID: speakerTask, RunID: speaker, SessionID: sessionID, ActorType: ledger.ActorAgent, ActorID: speaker,
 		Source: ledger.SourceOrchestrator, CorrelationID: cmp.Or(speakerTask, sessionID),
-		Payload: map[string]any{"text": b.String(), "previewReady": runID}})
+		Payload: map[string]any{"text": text, "previewReady": runID}})
 	return err
 }

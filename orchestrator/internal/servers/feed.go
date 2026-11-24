@@ -259,7 +259,7 @@ func (f *Feed) Apply(ctx context.Context, e lux.FeedEvent) error {
 				return err
 			}
 			kick = true
-			return announceReady(ctx, tx, org, runID)
+			return announceReady(ctx, tx, f.Log, org, runID)
 		case "server.deleted", "server.expired":
 			// Gone in lux, by dude's own delete or lux's expiry: a preview
 			// still live ends with it (its Run cancelled by the sweep).
