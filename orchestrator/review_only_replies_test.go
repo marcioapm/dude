@@ -45,6 +45,10 @@ func TestAnAuthorsReplyInDudesThreadReachesTheConductor(t *testing.T) {
 			t.Errorf("the wake does not say %q", want)
 		}
 	}
+	// Open, it is no suggestion.
+	if w.woke(wi, "Suggestion, not blocking") || w.woke(wi, "Kept as a suggestion") {
+		t.Error("the wake shows an open finding as a suggestion")
+	}
 	if c := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'pull_request.commented'
 		AND payload->>'feedbackId' = $2 AND payload->>'addressed' = 'conductor'`, wi, fmt.Sprintf("line-comment-%d", reply)); c != 1 {
 		t.Errorf("%d replies recorded as addressed to the conductor", c)
@@ -58,8 +62,16 @@ func TestAnAuthorsReplyInDudesThreadReachesTheConductor(t *testing.T) {
 	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi)
 	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the caller checks for nil at greet.go:3, as the author showed"}`)
 	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
-	if got := reviewsAt(w.dudeReviews(wi, n), h1); got[1].State != "APPROVED" {
+	// Withdrawn as wrong, it is no suggestion: neither listed as one nor
+	// commented on as one.
+	if got := reviewsAt(w.dudeReviews(wi, n), h1); got[1].State != "APPROVED" || strings.Contains(got[1].Body, "Suggestions (not blocking)") ||
+		strings.Contains(got[1].Body, "kept as a suggestion") || strings.Contains(got[1].Body, "The greeting is rude") {
 		t.Fatalf("after the dismissal: %+v", got)
+	}
+	for _, c := range w.dudeLineComments(n) {
+		if strings.Contains(c.Body, "Suggestion, not blocking") {
+			t.Errorf("the withdrawn finding was commented on as a suggestion: %q", c.Body)
+		}
 	}
 	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi); r != runs {
 		t.Errorf("%d lens Runs for a dismissal", r-runs)

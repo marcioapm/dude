@@ -905,8 +905,9 @@ func (w *steps) review(ctx context.Context, sc workflow.StepContext) (workflow.R
 		return workflow.Result{}, err
 	}
 	// A re-review judges what the fixer was sent: every open finding a fix
-	// has attempted, by the reviewer of its category, or by one of this
-	// round's when it has none (judgedBy).
+	// has attempted (review only: every open one and kept suggestion), by
+	// the reviewer of its category, or by one of this round's when it has
+	// none (judgedBy).
 	attempted, err := w.s.AttemptedFindings(ctx, sc.OrganizationID, st)
 	if err != nil {
 		return workflow.Result{}, err

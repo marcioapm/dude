@@ -204,7 +204,8 @@ func TestAWithdrawalApprovesAtTheSameHead(t *testing.T) {
 	_ = w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding)
 	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"wrong: the author showed the behaviour is intended"}`)
 	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
-	if got := reviewsAt(w.dudeReviews(wi, n), h1); got[1].State != "APPROVED" {
+	if got := reviewsAt(w.dudeReviews(wi, n), h1); got[1].State != "APPROVED" || strings.Contains(got[1].Body, "Suggestions (not blocking)") ||
+		strings.Contains(got[1].Body, "kept as a suggestion") {
 		t.Fatalf("after the withdrawal: %+v", got)
 	}
 	if r := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi); r != runs {
@@ -264,5 +265,44 @@ func TestASuggestionApprovesAtTheSameHead(t *testing.T) {
 	}
 	if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 1 || w.gh.ResolvedThreads[thread] {
 		t.Fatalf("after H2: replies %+v, resolved %v", r, w.gh.ResolvedThreads[thread])
+	}
+}
+
+// A finding kept as a suggestion at H1 is judged again at the author's
+// next head, H2, by its own lens: judged fixed, H2's verdict lists it as
+// fixed and no longer as a suggestion; judged still there, it stays a
+// suggestion and holds nothing. Either way it stays kept (accepted): a
+// judgement never reopens it.
+func TestAKeptSuggestionIsJudgedAgainAtTheNextHead(t *testing.T) {
+	for _, judged := range []string{"fixed", "still"} {
+		t.Run(judged, func(t *testing.T) {
+			w := newWorld(t)
+			w.withTools()
+			w.reRounds(time.Second)
+			verdict := "still"
+			wi, n, h1 := w.findingThenVerdict(func() string { return verdict })
+			finding := w.openFinding(wi)
+			w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"suggestion: gate 2: only the local greet mode reaches it, docs/dev.md:4"}`)
+			w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+			verdict = judged
+			h2 := w.push("polite.md")
+			w.agentsDone(wi, "reviewed H2", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
+			got := reviewsAt(w.dudeReviews(wi, n), h2)[0]
+			suggestion := "**Suggestions (not blocking)**\n- The greeting is rude (medium) `greet.md:1`: kept as a suggestion (shipped path)"
+			fixed := "**Fixed at " + h2[:7] + "**\n- The greeting is rude `greet.md:1`"
+			listed := map[string]string{"fixed": fixed, "still": suggestion}[judged]
+			gone := map[string]string{"fixed": suggestion, "still": fixed}[judged]
+			if got.State != "APPROVED" || !strings.Contains(got.Body, listed) || strings.Contains(got.Body, gone) ||
+				strings.Contains(got.Body, "Still open") {
+				t.Fatalf("at H2, judged %s: %s %q", judged, got.State, got.Body)
+			}
+			if c := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review' AND base_refs->>'target' = $2
+				AND $3 = ANY(finding_ids)`, wi, h2, finding); c != 1 {
+				t.Fatalf("%d lens Runs at H2 were given the kept suggestion to judge", c)
+			}
+			if c := w.count(`SELECT count(*) FROM review_findings WHERE id = $1 AND status = 'accepted'`, finding); c != 1 {
+				t.Fatalf("the kept suggestion judged %s is no longer kept", judged)
+			}
+		})
 	}
 }
