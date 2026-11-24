@@ -361,11 +361,7 @@ const updateTaskInput = z.object({
   source: taskSourceInput,
   /** The answer to superseded_required for its source (createTask's). */
   supersede: supersedeInput,
-  /**
-   * Automatic task previews for this task: true or false, or null to follow
-   * its project's (migration 272). Only what dude does when it opens or
-   * reopens the task's pull request; never fixed by a delivery.
-   */
+  /** Automatic task previews: true or false, or null to follow its project's; never fixed by a delivery. */
   autoTaskPreview: taskAutoPreviewSchema,
 }).partial();
 

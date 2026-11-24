@@ -154,10 +154,8 @@ export const previewSettingsSchema = z.object({
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),
   /**
-   * Automatic task previews (projects.auto_task_preview, migration 272):
-   * when dude opens or reopens a pull request it opened for one of the
-   * project's tasks, it prepares the task's preview, asleep until someone
-   * opens it. A task may say otherwise (taskAutoPreviewSchema). Off by default.
+   * Automatic task previews (projects.auto_task_preview): when dude opens or reopens a pull request it opened for a
+   * task, it prepares the task's preview, asleep until someone opens it. A task may say otherwise.
    */
   autoTaskPreview: z.boolean().default(false),
 });

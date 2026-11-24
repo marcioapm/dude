@@ -44,10 +44,7 @@ import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-/**
- * A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055;
- * autoTaskPreview: projects.auto_task_preview, migration 272).
- */
+/** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055; auto_task_preview: 272). */
 async function projectServers(scope: OrgScope, projectId: string): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
   const [row] = (await scope.sql`
     SELECT preview_settings(p)::jsonb || jsonb_build_object('autoTaskPreview', p.auto_task_preview) AS previews,

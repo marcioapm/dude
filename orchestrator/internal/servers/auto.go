@@ -14,19 +14,16 @@ import (
 // reopens the task's pull request (run.created's actor id).
 const AutoPreviewActor = "auto-preview"
 
-// AutoPreview prepares task's preview, if automatic task previews are on
-// for it (its own choice, else its project's: migration 272), when dude
-// opens or reopens a pull request it opened for the task. The preview is
-// startPreview's (StartPreview without its view: lux is not asked), as
-// the system: asleep until someone opens its URL (agentWakes), never
-// announced (announceReady), and the task's live one if it has one
-// already — a repeat makes nothing.
+// AutoPreview prepares task's preview when dude opens or reopens a pull
+// request it opened for the task, if automatic task previews are on for it
+// (its own choice, else its project's). As the system, the preview sleeps
+// until someone opens its URL (agentWakes) and is never announced
+// (announceReady); a live one is kept.
 //
 // A project with nothing to start in previews (or no preview domain) gets
 // none: startPreview would make an eager one, whose Run starts at once.
-// A task that is over or gone is a quiet no-op too. Callers run it after
-// what they recorded committed; its error is logged here, for them to
-// drop: the pull request's record is what matters.
+// A task that is over or gone is a quiet no-op. Callers run it after their
+// record commits and drop its error, which is logged here.
 func (s *Service) AutoPreview(ctx context.Context, org, taskID string) error {
 	var on, wakeable bool
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
@@ -50,8 +47,7 @@ func (s *Service) AutoPreview(ctx context.Context, org, taskID string) error {
 		return nil
 	}
 	if err == nil {
-		// startPreview, not StartPreview: nobody reads the view, and building
-		// it asks lux (ListServers) on the pull request's open/sync path.
+		// Not StartPreview: its view asks lux, and nobody reads it.
 		err = s.startPreview(ctx, org, taskID, AutoPreviewActor, ledger.ActorSystem, "")
 	}
 	var refusal *Error

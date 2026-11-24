@@ -78,9 +78,8 @@ type Store struct {
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// AutoPreview is servers.Service.AutoPreview: called once a pull
-	// request dude opened for a task is first recorded, after that commits.
-	// Its error is its own to log; the pull request stays recorded. nil
-	// skips it.
+	// request dude opened is first recorded, after that commits; its error
+	// is dropped. nil skips it.
 	AutoPreview func(ctx context.Context, org, taskID string) error
 	// Bound on the GitHub calls of one verdict comment; zero means
 	// verdictCommentTimeout.
@@ -1526,14 +1525,9 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		recorded = true
 		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
-	// Its task's preview, prepared asleep if the task wants one: after the
-	// record committed, and only by the attempt that inserted it. A plain
-	// replay never gets here (reposToOpen counts the open pull request as
-	// covering the branch); recorded guards the step reaching GitHub for one
-	// recorded already — recorded closed, reopened on GitHub before a sync,
-	// the branch moved — whose insert conflicts: that prepares nothing (the
-	// reopen's sync does). Its failure is logged by it and leaves the pull
-	// request recorded.
+	// After the commit, and only by the attempt that inserted the row: one
+	// recorded closed and reopened on GitHub before a sync conflicts here,
+	// and its reopen's sync prepares the preview instead.
 	if err == nil && recorded && s.AutoPreview != nil {
 		_ = s.AutoPreview(ctx, org, st.TaskID)
 	}

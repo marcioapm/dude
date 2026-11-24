@@ -511,11 +511,7 @@ export const taskSchema = z.object({
   acceptanceCriteria: z.array(z.string()).default([]),
   status: taskStatusSchema,
   requestedBy: z.string().nullable().default(null),
-  /**
-   * Automatic task previews for this task (tasks.auto_task_preview,
-   * migration 272): true or false, or null to follow its project's
-   * (PreviewSettings.autoTaskPreview).
-   */
+  /** Automatic task previews (tasks.auto_task_preview): true or false, or null to follow its project's. */
   autoTaskPreview: z.boolean().nullable().default(null),
   /** Its project's automatic task previews, as its settings say now: what null follows. */
   projectAutoTaskPreview: z.boolean().default(false),

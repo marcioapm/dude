@@ -60,10 +60,9 @@ type Syncer struct {
 	// Answers settles the in-flight answers of ended deliveries in each
 	// Reconcile pass (delivery.Store.ReconcileEndedAnswers). Nil: none.
 	Answers func(ctx context.Context) (int, error)
-	// AutoPreview is servers.Service.AutoPreview: called when a sync
-	// records a pull request dude opened for a task going from closed to
-	// open again, after that commits. Its error is its own to log; the
-	// sync stands. Nil: nothing.
+	// AutoPreview is servers.Service.AutoPreview: called after a sync
+	// commits a pull request dude opened going from closed to open; its
+	// error is dropped. Nil: nothing.
 	AutoPreview func(ctx context.Context, org, taskID string) error
 }
 
@@ -537,10 +536,7 @@ func (s *Syncer) sync(ctx context.Context, org, prID string) error {
 	if err != nil {
 		return err
 	}
-	// Reopened (closed → open, as this sync recorded it, past the
-	// compare-and-set): the task's preview, prepared asleep if it wants
-	// one, for a pull request dude opened. Committed first; its failure is
-	// logged by it and fails nothing here.
+	// Reopened, as this sync committed it past the compare-and-set.
 	if s.AutoPreview != nil && !pr.Adopted && pr.State == forge.StateClosed && isOpen(status.State) {
 		_ = s.AutoPreview(ctx, org, pr.TaskID)
 	}
