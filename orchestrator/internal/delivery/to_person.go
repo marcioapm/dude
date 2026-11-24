@@ -190,8 +190,9 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 // delivery waits for it. Once per c.Key.
 func askCredentialTx(ctx context.Context, tx pgx.Tx, org string, st *State, c *CredentialWait) error {
 	var asked bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
-		AND payload->>'kind' = 'credential' AND payload->>'key' = $3)`, st.TaskID, EvQuestionAsked, c.Key).Scan(&asked); err != nil || asked {
+	// The predicate is events_task_credential_asks_idx's, literally.
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE event_type = 'question.asked'
+		AND payload->>'kind' = 'credential' AND task_id = $1 AND payload->>'key' = $2)`, st.TaskID, c.Key).Scan(&asked); err != nil || asked {
 		return err
 	}
 	if err := emitTx(ctx, tx, org, st, EvQuestionAsked, map[string]any{"kind": "credential", "reason": c.Reason,
