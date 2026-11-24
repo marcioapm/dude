@@ -2102,8 +2102,10 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 
 // awaitOwnerAuthorization parks a publication until its frozen owner
 // connects GitHub; the branch stays pushed and no retry budget is spent.
-// The owner is told, once per delivery, attempt and owner: a sweep of the
-// step while they still have not connected tells nobody again.
+// The owner is told once per delivery, owner and state (connect, or
+// reconnect): a sweep of the step while they still have not connected
+// tells nobody again, and a Connect that GitHub then refuses asks them to
+// reconnect.
 func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepContext, st *State, cause error) (workflow.Result, error) {
 	var reconnect bool
 	if e := (forge.OwnerAuthorizationError{}); errors.As(cause, &e) {
@@ -2116,7 +2118,7 @@ func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepCon
 			return err
 		}
 		wait := &CredentialWait{Reason: ReasonOwnerGitHub, PersonID: owner, Branch: st.Branch, Reconnect: reconnect,
-			Key: fmt.Sprintf("%s:%d:%s", sc.WorkflowRunID, st.Attempt, owner)}
+			Key: credentialKey(sc.WorkflowRunID, owner, reconnect)}
 		_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: cause.Error(), Why: WhyCredential,
 			Credential: wait})
 		return err
@@ -2124,6 +2126,17 @@ func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepCon
 		return workflow.Result{}, err
 	}
 	return workflow.Result{Next: "openPullRequest", State: st, AwaitSignals: []string{SignalGitHubAuthorized}}, nil
+}
+
+// credentialKey is a credential wait's once-only key: the delivery's
+// workflow run (each attempt has its own), the person, and whether they
+// are asked to connect or to reconnect.
+func credentialKey(workflowRunID, person string, reconnect bool) string {
+	state := "connect"
+	if reconnect {
+		state = "reconnect"
+	}
+	return workflowRunID + ":" + person + ":" + state
 }
 
 // awaitPullRequest wakes a fixer only when there is something to fix: the

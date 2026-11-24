@@ -231,11 +231,18 @@ test("a task's credentialWait shows while its delivery waits on the frozen owner
     ('wfr_cw','org_owner','task.delivery','cw','waiting','openPullRequest','{"branch":"dude/cw-1-1"}','["github.authorized"]','tsk_cw', now() - interval '1 hour')`;
   await owner`INSERT INTO events (id,organization_id,event_type,project_id,task_id,actor_type,actor_id,source,payload) VALUES
     ('evt_cw','org_owner','question.asked','prj_cw','tsk_cw','system','workflow','control-plane',
-     ${{ kind: "credential", reason: "owner_github", personId: "per_owner", branch: "dude/cw-1-1", reconnect: false, key: "wfr_cw:0:per_owner" }}::jsonb)`;
+     ${{ kind: "credential", reason: "owner_github", personId: "per_owner", branch: "dude/cw-1-1", reconnect: false, key: "wfr_cw:per_owner:connect" }}::jsonb)`;
   const read = async () => (await owner.unsafe(`SELECT ${credentialWaitJson()} FROM tasks WHERE id = 'tsk_cw'`))[0].credentialWait;
   const shown = await read();
   expect({ ...shown, askedAt: undefined, person: shown.person.id }).toEqual({ reason: "owner_github", person: "per_owner", branch: "dude/cw-1-1",
     reconnect: false, askedAt: undefined });
+  // GitHub refused the token she connected: the latest ask, to reconnect, is the one shown, since the first ask.
+  await owner`INSERT INTO events (id,organization_id,event_type,project_id,task_id,actor_type,actor_id,source,payload) VALUES
+    ('evt_cw_again','org_owner','question.asked','prj_cw','tsk_cw','system','workflow','control-plane',
+     ${{ kind: "credential", reason: "owner_github", personId: "per_owner", branch: "dude/cw-1-1", reconnect: true, key: "wfr_cw:per_owner:reconnect" }}::jsonb)`;
+  const again = await read();
+  expect(again.reconnect).toBe(true);
+  expect(again.askedAt).not.toBe(shown.askedAt);
   // Passed to someone else: the wait is no longer the frozen owner's.
   await owner`UPDATE pr_publications SET owner_person_id = 'per_other' WHERE task_id = 'tsk_cw'`;
   expect(await read()).toBeNull();
