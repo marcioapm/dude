@@ -330,6 +330,8 @@ export interface TaskFields {
   repositories: TaskRepository[];
   /** Existing work it starts from (a pull request or a branch), or null for new work; fixed once delivery starts. */
   source?: TaskSourceInput | null;
+  /** Automatic task previews for it: true or false, or null to follow its project's. Never fixed. */
+  autoTaskPreview?: boolean | null;
 }
 
 export type { TaskRepository, TaskSource, TaskSourceInput, TaskSourceMode } from "@dude/domain";

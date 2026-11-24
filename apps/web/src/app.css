@@ -1352,6 +1352,24 @@ body {
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+/* Project settings → Servers → Automatic task previews: the calm hint when nothing would start. */
+.autoPreviewHint {
+  display: block;
+  margin-top: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
+.autoPreviewHint a {
+  white-space: nowrap;
+}
+/* Task Overview → This task: the automatic preview row, its label over its control in the rail. */
+.autoPreviewRail {
+  container-type: inline-size;
+}
+.autoPreviewEffect {
+  display: block;
+  margin-top: var(--ds-space-4);
+  color: var(--ds-color-text-secondary);
+}
 /* Settings → Network: the small headings between a row's chip lists. */
 .networkLabel {
   font-size: var(--ds-text-xs);
