@@ -106,7 +106,8 @@ func (s *Service) SettleMarks(ctx context.Context) (int, error) {
 // sessionProbe reads, in one snapshot so that output committed with its
 // Run's end is never missed:
 //   - spoke: the session's own agent (its brainstorm Runs, not the
-//     investigators it starts) said or did something past the cursor, read
+//     investigators it starts) said or did something past the cursor (a
+//     preview's "Ready for your look" is dude's, not a reply), read
 //     from events_session_cursor_idx with a primary-key lookup per event;
 //   - ended: no live brainstorm Run is left (runs_live_brainstorm_idx) and
 //     no ended one holds an unread message the syncer will hand to a
@@ -123,6 +124,8 @@ func (s *Service) SettleMarks(ctx context.Context) (int, error) {
 const sessionProbe = `SELECT
 	EXISTS (SELECT 1 FROM events e WHERE e.session_id = $1 AND e.cursor > $2
 		AND e.event_type IN ('agent.message', 'agent.tool.called')
+		-- dude's "Ready for your look" (servers.announceReady) is not a reply.
+		AND NOT e.payload ? 'previewReady'
 		AND EXISTS (SELECT 1 FROM runs r WHERE r.id = e.run_id AND r.role = 'brainstorm' AND r.kind = 'agent')),
 	NOT EXISTS (SELECT 1 FROM runs r WHERE r.session_id = $1 AND ` + delivery.LiveBrainstorm + `)
 	AND NOT EXISTS (SELECT 1 FROM runs r JOIN directives d ON d.run_id = r.id WHERE r.session_id = $1

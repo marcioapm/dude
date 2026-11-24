@@ -259,7 +259,8 @@ func codeFacts(ctx context.Context, tx pgx.Tx, r stallRow, s *delivery.Stall) er
 	var todos json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT payload->'todos' FROM events WHERE run_id = $1 AND event_type = $2
 			ORDER BY cursor DESC LIMIT 1), '[]'),
-			COALESCE((SELECT payload->>'text' FROM events WHERE run_id = $1 AND event_type = $3 ORDER BY cursor DESC LIMIT 1), '')`,
+			COALESCE((SELECT payload->>'text' FROM events WHERE run_id = $1 AND event_type = $3
+				AND NOT payload ? 'previewReady' ORDER BY cursor DESC LIMIT 1), '')`,
 		r.ID, evPlanUpdated, evAgentMessage).Scan(&todos, &s.LastMessage); err != nil {
 		return err
 	}
