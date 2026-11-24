@@ -551,6 +551,70 @@ describe("activity", () => {
     ]);
     expect(snapshot(state, "running").activity).toBe("thinking");
   });
+
+  test("the agent thinks from the moment its prompt lands, timed from then", () => {
+    const prompt = ev(EventTypes.PromptDelivered, { text: "where does metering go?" });
+    const state = apply(emptyProjection(), [prompt]);
+    expect(snapshot(state, "running")).toMatchObject({ activity: "thinking", thinkingSince: prompt.occurredAt });
+    // Its first model request keeps the same thinking, timed from the prompt.
+    apply(state, [ev(EventTypes.ModelRequestCompleted, { tokens: { input: 1, output: 1 } })]);
+    expect(snapshot(state, "running")).toMatchObject({ activity: "thinking", thinkingSince: prompt.occurredAt });
+    // A briefed conductor's echoed briefing is its input all the same.
+    const briefed = apply(emptyProjection(), [ev(EventTypes.ConductorBriefed, { text: "the briefing" }), ev(EventTypes.PromptDelivered, { text: "the briefing" })]);
+    expect(snapshot(briefed, "running").activity).toBe("thinking");
+  });
+
+  test("a directive delivered to a parked-then-resumed agent shows it thinking; a turn that ends with no model request clears it", () => {
+    const events = [
+      ...realTurn(),
+      ev("run.parked", { reason: "idle" }),
+      ev(EventTypes.RunSteered, { text: "and retries?", directiveId: "dir_1" }),
+      ev("run.unparked", { epoch: 2 }),
+      ev(EventTypes.DirectiveDelivered, { directiveId: "dir_1" }),
+    ];
+    const state = apply(emptyProjection(), events);
+    expect(snapshot(state, "running").activity).toBe("thinking");
+    expect(snapshot(state, "running").start).toBeNull();
+    // The harness refused it: the turn ended with no model request.
+    apply(state, [ev(EventTypes.SessionStopped, { reason: "error" })]);
+    expect(snapshot(state, "running")).toMatchObject({ activity: null, thinkingSince: null });
+    // Folded one at a time, the same.
+    const live = emptyProjection();
+    for (const e of [...events, ev(EventTypes.SessionStopped, { reason: "error" })]) apply(live, [e]);
+    expect(snapshot(live, "running").activity).toBeNull();
+  });
+
+  test("an interrupt's own delivery starts no thinking", () => {
+    const state = apply(emptyProjection(), [...realTurn(), ev(EventTypes.DirectiveDelivered, { directiveId: "dir_x", interruptOnly: true })]);
+    expect(snapshot(state, "running").activity).toBeNull();
+  });
+
+  test("no thinking survives a parked, paused, failed or ended Run", () => {
+    const landed = () => [ev(EventTypes.PromptDelivered, { text: "go" })];
+    expect(snapshot(apply(emptyProjection(), [...landed(), ev("run.parked", { reason: "idle" })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), [...landed(), ev(EventTypes.RunFailed, { error: "boom", kept: true })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), landed()), "paused").activity).toBeNull();
+    for (const status of ["completed", "failed", "aborted"] as const) {
+      expect(snapshot(apply(emptyProjection(), landed()), status)).toMatchObject({ activity: null, thinkingSince: null });
+    }
+  });
+
+  test("a prompt delivered while a tool is open keeps the tool", () => {
+    const state = apply(emptyProjection(), [ev(EventTypes.ToolCalled, { tool: "bash", callId: "c1" }), ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]);
+    expect(snapshot(state, "running").activity).toBe("tool");
+  });
+
+  test("a prompt or directive landing while the agent waits for its conductor's answer shows no thinking", () => {
+    const asked = ev("question.routed", { kind: "agent", questionId: "qst_w", addressee: "conductor", prompt: "English?" });
+    expect(snapshot(apply(emptyProjection(), [asked, ev(EventTypes.PromptDelivered, { text: "go" })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), [asked, ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]), "running").activity).toBeNull();
+  });
+
+  test("a prompt or directive landing while its conductor holds a repository request shows no thinking", () => {
+    const held = ev("repository.routed", { requestId: "rrq_w", repository: "web", access: "read", reason: "r", addressee: "conductor" });
+    expect(snapshot(apply(emptyProjection(), [held, ev(EventTypes.PromptDelivered, { text: "go" })]), "running").activity).toBeNull();
+    expect(snapshot(apply(emptyProjection(), [held, ev(EventTypes.DirectiveDelivered, { directiveId: "d" })]), "running").activity).toBeNull();
+  });
 });
 
 describe("usage", () => {

@@ -224,6 +224,19 @@ export function ChatSection({ mode }: { readonly mode: PaneMode }) {
       </Block>
 
       <Block
+        id="ch-thinking-landed"
+        title="Thinking, from the moment the prompt lands"
+        note="An agent that has its input is working on it: the activity row says thinking as soon as its prompt or a delivered message reaches it, timed from then, before its first model request completes. The same row, its dashed ring and its clock, for every role; it ends with the agent's first output, a tool, or the turn's end."
+      >
+        <Panes mode={mode}>
+          <ChatTranscript maxHeight="none" live>
+            <ChatMessage role="human" name="Márcio" intent="prompt" content="Where does metering go once the meter's rollup lands?" startedAt={Date.now() - 6_000} />
+            <ChatMessage role="brainstorm" activity="thinking" activityProps={{ since: Date.now() - 6_000 }} data-testid="gallery-thinking-landed" />
+          </ChatTranscript>
+        </Panes>
+      </Block>
+
+      <Block
         id="ch-thinking"
         title="ThinkingBlock"
         note="The model's reasoning, which arrives between its messages and its tool calls. Secondary by construction: no avatar, no frame, muted ink, a 24px row — quieter than a message, and distinct from a tool call, which has a surface and a border. Collapsed it is brain · label · a one-line preview · how long it took. While streaming the brain sits inside the thinking rhythm's drifting ring, the preview follows the latest line and the duration ticks. Twelve in a row read as a faint ledger, not a wall."

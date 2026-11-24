@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, type AgentRole, type StartStage } from "@dude/domain";
+import { FRESH_START_STAGES, MOVE_STAGES, RESUME_STAGES, setupStageWords, type AgentRole, type StartStage } from "@dude/domain";
 import { AgentAvatar, LogStream, StartChip, StartProgress, StatusMark, didNot, startSteps, type StartStep } from "@dude/design-system/components";
 import type { SetupFailure, StartState } from "./api/conversation.ts";
 import { ApiError } from "./api/client.ts";
@@ -20,6 +20,8 @@ export const SLOW_AFTER_MS: Record<StartStage, number> = {
   volumes: 60_000,
   repositories: 90_000,
   container: 60_000,
+  // A setup script can take minutes by design (npm ci, codegen): its latest line says it is moving.
+  setup: 600_000,
   running: 60_000,
 };
 
@@ -30,6 +32,7 @@ const SLOW_WORDS: Record<StartStage, string> = {
   volumes: "A large workspace takes a while to restore.",
   repositories: "A large repository takes a while to check out.",
   container: "The container is taking longer than usual to start.",
+  setup: "The repository's setup script is taking a while.",
   running: "The agent is taking longer than usual to come up.",
 };
 
@@ -50,7 +53,9 @@ export function retryRefusal(err: unknown, why: (err: unknown) => string): { tak
 const STAGES_OF: Record<StartState["kind"], readonly StartStage[]> = { start: FRESH_START_STAGES, resume: RESUME_STAGES, move: MOVE_STAGES };
 
 export function stepsOf(start: StartState): StartStep[] {
-  return startSteps({ stage: start.stage, since: start.stageSince, done: start.done, failed: start.failed !== null, stages: STAGES_OF[start.kind], pool: start.machine?.pool });
+  const setup = start.stage === "setup" ? start.setup : undefined;
+  return startSteps({ stage: start.stage, since: start.stageSince, done: start.done, failed: start.failed !== null, stages: STAGES_OF[start.kind],
+    pool: start.machine?.pool, label: setup ? setupStageWords(setup.repository) : null, detail: setup?.line ?? null });
 }
 
 /** The slow line, once the current stage has run past its threshold at `now`; none while failed or with no stage. */

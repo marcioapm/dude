@@ -299,6 +299,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Under reduced motion every loop freezes in a legible pose (the ring stays
   dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
   ticking as text. Motion here is state, not decoration.
+- An agent with its input is shown thinking until its first output: the row
+  says **thinking** from the moment its prompt or a delivered message lands
+  (`agent.prompt.delivered`, `run.directive.delivered`), its clock timed from
+  then, not from its first completed model request. A tool, a message, the
+  turn's end, a park, a pause or the Run's end replace or clear it.
 - Errors are never behind a click: a failed `ToolCallCard` opens by default
   and repeats the error's first line, in primary ink on the danger tint, in
   its collapsed row. A non-zero exit code is a danger chip in the collapsed
@@ -375,11 +380,30 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   lux's stage and a **stage list** from the caller and the words from one
   map, `START_STAGE_WORDS` in `@dude/domain`, shared with branch previews:
   `FRESH_START_STAGES` (waiting, image, volumes, repositories, container,
-  running), `RESUME_STAGES` (the same six, as lux announces each on every
+  setup, running), `RESUME_STAGES` (the same, as lux announces each on every
   resume) or `MOVE_STAGES`
   (led by `park`, "Stopping it, keeping its work" / "Stopped, work kept");
-  a stage lux reports that the list leaves out is drawn in its place. An
-  optional `pool` names where it waits: `waiting` reads "Waiting for a
+  a stage lux reports that the list leaves out is drawn in its place.
+- **A start lists every stage until the agent's first turn, including a
+  repository's setup script.** `setup` is dude's own stage. lux runs the
+  script as init, after it reports the Run running. It sits between the
+  container and the agent, drawn only once reported
+  (`OPTIONAL_START_STAGES`). A Run with no script, or a resume whose
+  checkout already ran it, has no setup line. Its words name the
+  repository (`setupStageWords("abs")`, "Running abs’s setup script";
+  done, "Setup script ran"). "Starting the agent" follows it and ends when
+  the agent is up, not when lux says running. The "Started in" line counts
+  both, the setup's time on its own line of its title.
+- **The current stage's detail line** is `StartStep.detail`: the setup
+  script's latest line, which `startSteps`' `detail` puts on the current
+  step (its `label` puts the words). It is muted mono, one line cut with
+  an ellipsis. It sits under the row's line while folded and under the
+  step opened.
+- **The bar** under the stages is 2px. It fills with the done stages, the
+  current one breathing on `--ds-motion-live` (frozen under reduced
+  motion). Meaning never rests on its hue: the glyph, the words and the
+  clock say the same.
+- An optional `pool` names where it waits: `waiting` reads "Waiting for a
   machine in highmem" while it is current, and "Machine found" once done. Its line opens the stages as a
   stepper (done with their times, the current one live, the rest hollow,
   `aria-current="step"`). With no stage (an older lux) it is the verb and
@@ -702,6 +726,11 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   counts as "note" in `proposalSummary`.
 
 ### Brainstorm sessions
+
+- **A brainstorm's start is the same row as any agent's** (*Activity*):
+  every stage until its first turn, then thinking from the moment its
+  briefing lands. A brainstorm reads, asks and proposes and never builds,
+  so a new brainstorm runs no setup script.
 
 - A **brainstorm session** is a conversation with one agent that belongs
   to its members, not a task: it reads the projects linked to it and

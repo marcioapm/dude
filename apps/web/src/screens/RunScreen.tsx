@@ -49,7 +49,7 @@ import { useRunServers } from "../runServers.ts";
 import { ApiError, modelCostShown } from "../api/client.ts";
 import { CostOf } from "./MetricsSection.tsx";
 import {
-  NOT_STARTED, NOT_STARTED_RETRIED, conductorWaitComposer, MODEL_PARK_WORDS, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
+  NOT_STARTED, activityPropsOf, NOT_STARTED_RETRIED, conductorWaitComposer, MODEL_PARK_WORDS, PAUSE_WORDS, actorName, apply, emptyProjection, humanActor, landsHint, project, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type HumanTurn, type QuestionTurn, type Turn,
 } from "../api/conversation.ts";
 import { useNetworkNotes } from "../networkRefused.tsx";
 import { ChildOpenContext, ChildStatus, SubagentsBlock, childEntries } from "../childThreads.tsx";
@@ -698,7 +698,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
               {startRow}
               {conversation.activity ? (
                 <ChatMessage role={role} activity={conversation.activity}
-                  activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
+                  activityProps={activityPropsOf(conversation)} />
               ) : null}
             </ChatTranscript>
             {viewing ? (
@@ -889,11 +889,7 @@ export const RunScreen = memo(function RunScreen({ client, runId, onOpenTask, on
                 <ChatMessage
                   role={role}
                   activity={conversation.activity}
-                  activityProps={
-                    conversation.activeTool
-                      ? { label: conversation.activeTool.name, since: conversation.activeTool.since }
-                      : undefined
-                  }
+                  activityProps={activityPropsOf(conversation)}
                 />
               ) : null}
             </ChatTranscript>

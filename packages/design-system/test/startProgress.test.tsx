@@ -35,10 +35,38 @@ async function mount(node: React.ReactNode): Promise<HTMLElement> {
 
 const T0 = Date.now() - 31_000;
 
+describe("a repository's setup script", () => {
+  test("drawn between the container and the agent only once reported, named for its repository, its latest line under it", () => {
+    expect(startSteps({ stage: "container" }).map((s) => s.id)).not.toContain("setup");
+    const steps = startSteps({ stage: "setup", since: T0, done: [{ stage: "container", tookMs: 9_000 }], label: "Running abs\u2019s setup script",
+      detail: "abs setup: npm ci (frontend)" });
+    expect(steps.map((s) => s.id)).toEqual(["waiting", "image", "volumes", "repositories", "container", "setup", "running"]);
+    expect(steps[5]).toMatchObject({ state: "current", label: "Running abs\u2019s setup script", doneLabel: "Setup script ran", detail: "abs setup: npm ci (frontend)" });
+    expect(steps[6]).toMatchObject({ state: "pending", label: "Starting the agent" });
+    const done = startSteps({ stage: "running", done: [{ stage: "setup", tookMs: 275_000 }] });
+    expect(done.find((s) => s.id === "setup")).toMatchObject({ state: "done", tookMs: 275_000 });
+    expect(done.find((s) => s.id === "setup")!.detail).toBeUndefined();
+  });
+
+  test("the row: the stage's words and clock, the latest line in muted mono under the line, the stages with it opened, the bar", async () => {
+    const steps = startSteps({ stage: "setup", since: T0, done: [{ stage: "container", tookMs: 9_000 }], label: "Running abs\u2019s setup script",
+      detail: "abs setup: generate:api" });
+    const closed = renderToStaticMarkup(<StartProgress steps={steps} startedAt={T0} />);
+    expect(closed).toContain("Running abs\u2019s setup script");
+    expect(closed).toContain('data-testid="start-detail"');
+    expect(closed).toContain("abs setup: generate:api");
+    expect(closed).toContain('data-testid="start-bar"');
+    const open = renderToStaticMarkup(<StartProgress steps={steps} startedAt={T0} defaultOpen />);
+    expect(open).toContain('data-testid="start-step-detail"');
+    expect(open).not.toContain('data-testid="start-detail"');
+  });
+});
+
 describe("startSteps", () => {
   test("the fresh list by default: done with times, the current with its since, the rest pending, words from the map", () => {
     const steps = startSteps({ stage: "repositories", since: T0 + 20_000, done: [{ stage: "waiting", tookMs: 9_400 }, { stage: "image", tookMs: 1_200 }] });
-    expect(steps.map((s) => s.id)).toEqual([...FRESH_START_STAGES]);
+    // A setup script's stage is drawn only once reported.
+    expect(steps.map((s) => s.id)).toEqual(FRESH_START_STAGES.filter((s) => s !== "setup"));
     expect(steps.map((s) => s.state)).toEqual(["done", "done", "done", "current", "pending", "pending"]);
     expect(steps[0]).toEqual({ id: "waiting", label: "Waiting for a machine", doneLabel: "Machine found", state: "done", tookMs: 9_400 });
     expect(steps[3]!.since).toBe(T0 + 20_000);
@@ -259,7 +287,7 @@ test("the gallery's Starting blocks render in dark and light, comfortable and co
   globalThis.IntersectionObserver = OnScreen as unknown as typeof IntersectionObserver;
   const el = await mount(<PaneDensityContext.Provider value="both"><StartingSection mode="both" /></PaneDensityContext.Provider>);
   const blocks = [...el.querySelectorAll("section#starting [id^='st-']")];
-  expect(blocks.map((b) => b.id)).toEqual(["st-play", "st-states", "st-failed", "st-move", "st-chip"]);
+  expect(blocks.map((b) => b.id)).toEqual(["st-play", "st-states", "st-setup", "st-failed", "st-move", "st-chip"]);
   for (const block of blocks) {
     const panes = [...block.querySelectorAll(":scope [data-theme][data-density]")].filter((p) => !p.parentElement!.closest("[data-theme]"));
     expect(panes.map((p) => `${p.getAttribute("data-density")} ${p.getAttribute("data-theme")}`), block.id).toEqual(FRAMES);
@@ -269,7 +297,19 @@ test("the gallery's Starting blocks render in dark and light, comfortable and co
     expect([...move.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "current", "pending", "pending", "pending", "pending", "pending"]);
     expect(move.querySelector("li")!.textContent).toContain("Stopped, work kept");
   }
-  expect(el.querySelectorAll("[data-testid=start-failed]").length).toBe(8);
+  expect(el.querySelectorAll("[data-testid=start-failed]").length).toBe(12);
+  for (const setup of el.querySelectorAll("[data-testid=start-setup]")) {
+    expect(setup.getAttribute("data-stage")).toBe("setup");
+    expect(setup.querySelector("[data-testid=start-detail]")!.textContent).toContain("abs setup: npm ci");
+  }
+  for (const open of el.querySelectorAll("[data-testid=start-setup-open]")) {
+    expect([...open.querySelectorAll("li")].map((li) => li.getAttribute("data-state"))).toEqual(["done", "done", "done", "done", "done", "current", "pending"]);
+    expect(open.querySelector("[data-testid=start-step-detail]")!.textContent).toBe("abs setup: prisma generate");
+  }
+  for (const skipped of el.querySelectorAll("[data-testid=start-setup-skipped]")) {
+    expect(skipped.textContent).not.toContain("setup script");
+  }
+  expect(el.querySelectorAll("[data-testid=start-setup]").length).toBe(4);
   for (const plain of el.querySelectorAll("[data-testid=start-failure-plain] [data-testid=start-failed]")) {
     expect(plain.textContent).toBe("Did not start: The Brainstorm runs on Fast, which names no model yet. An admin sets it in Models. Nothing was spent on the model.");
   }

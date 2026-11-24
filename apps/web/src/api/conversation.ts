@@ -399,6 +399,11 @@ export interface StartState {
    * repository's setup script failed it (lux's own words are then only "exit code N"); `setup` says which and what it printed.
    */
   failed: { reason: string | null; source: "lux" | "dude"; setup?: SetupFailure } | null;
+  /**
+   * A repository's setup script ran in this start (`run.stage` setup): which, and the latest line it printed
+   * (`run.setup.progress`). The start then lasts until the agent's first record, past lux's report of it running.
+   */
+  setup?: { repository: string | null; line: string | null };
 }
 
 /** A repository's setup script that failed a Run: `run.failed`'s `setup`, as the orchestrator records it. */
@@ -741,6 +746,8 @@ export interface Conversation {
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
   activeTool: { name: string; since: string } | null;
+  /** When the agent began thinking, when activity is "thinking": the row's elapsed time. */
+  thinkingSince: string | null;
   /** How often it called each tool, by the tool's name as the harness gives it. */
   toolCounts: ReadonlyMap<string, number>;
   /** How often dude recorded a call of each of its tools (`agent.tool.dude`), by the tool's name. */
@@ -820,6 +827,7 @@ export interface Projection {
   contextWindow: number;
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
+  thinkingSince: string | null;
   toolCounts: Map<string, number>;
   dudeToolCounts: Map<string, number>;
   lands: SteerLands | null;
@@ -889,6 +897,12 @@ export interface Projection {
   startStaged: boolean;
   /** The current Run's agent has run: a later start is a resume. */
   ran: boolean;
+  /**
+   * The start lux's report of the Run running ended (run.started, servers.changed), and its "Started in" notice,
+   * until the agent's first record: a setup script reported in between reopens it (its init runs after lux says
+   * running), the notice taken back.
+   */
+  endedStart: { start: StartState; notice: NoticeTurn | null; ran: boolean; messages: HumanTurn[] } | null;
   /** The current Run is a conductor dude started with its wake note (conductor.woken started). */
   startWoken: boolean;
   /** Messages its briefing carries, shown queued until the agent is up. */
@@ -933,6 +947,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     contextWindow: 0,
     activity: null,
     activeTool: null,
+    thinkingSince: null,
     toolCounts: new Map(),
     dudeToolCounts: new Map(),
     lands: null,
@@ -957,6 +972,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     start: null,
     startStaged: false,
     ran: false,
+    endedStart: null,
     startWoken: false,
     startMessages: [],
     failedStart: null,
@@ -1003,13 +1019,17 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
     if (isToolEvent) state.pendingAsk = null;
     // The agent's own records (or lux reporting it running) end a start: it is up. A machine move's start ends
     // only once the Run has stopped for it: until then they are the turn the request ended.
-    if (AGENT_UP.has(event.eventType) && !moveNotStopped(state)) endStart(state, event);
+    if (AGENT_UP.has(event.eventType) && !moveNotStopped(state)) {
+      endStart(state, event);
+      state.endedStart = null;
+    }
 
     switch (event.eventType) {
       case EventTypes.RunCreated:
         // A new Run of this ledger (a session's next agent, a task's next conductor): it starts afresh.
         state.ran = false;
         state.start = newStart("start", event.occurredAt);
+        state.endedStart = null;
         state.startStaged = false;
         state.startWoken = false;
         state.heldUnpark = null;
@@ -1050,8 +1070,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.RunStage: {
         if (!isStartStage(payload.stage)) break;
         const stage = payload.stage;
+        // The agent's start after a setup script: only the start that script was in goes on to it.
+        if (payload.setup === true && !state.start?.setup) break;
         const since = typeof payload.since === "string" ? payload.since : event.occurredAt;
         const reason = typeof payload.reason === "string" && payload.reason ? payload.reason : null;
+        // A setup script after lux said running: the start it ended goes on, its notice taken back.
+        if (stage === "setup" && !state.start && state.endedStart) reopenStart(state);
         let start = state.start;
         if (stage === "park") {
           // A move: stopped with its work kept, then started on another machine.
@@ -1059,12 +1083,28 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         } else if (!start) {
           start = newStart(state.ran ? "resume" : "start", event.occurredAt);
         }
+        // lux's running is its init and harness both: a setup script is the first part, the agent's start after it.
+        if (stage === "setup" && start.stage === "running") {
+          start.stage = null;
+          start.stageSince = null;
+        }
         enterStage(start, stage, since);
+        if (stage === "setup") start.setup = { repository: typeof payload.repository === "string" && payload.repository ? payload.repository : null, line: null };
         // A stage past the park: the Run has stopped for its move.
         if (start.machine && stage !== "park") start.machine.stopped = true;
         start.luxReason = reason;
         state.start = start;
         state.startStaged = true;
+        break;
+      }
+
+      case EventTypes.RunSetupProgress: {
+        // The setup script's latest line, under its stage while it runs.
+        const setup = state.start?.stage === "setup" ? state.start.setup : undefined;
+        if (setup && typeof payload.line === "string") {
+          setup.line = payload.line;
+          if (typeof payload.repository === "string" && payload.repository) setup.repository = payload.repository;
+        }
         break;
       }
 
@@ -1082,12 +1122,14 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.RunStarted:
-        endStart(state, event);
+        // A setup script running ends with the agent's first record, not with lux's report of the Run running.
+        if (!state.start?.setup) endStart(state, event);
         break;
 
       case EventTypes.RunCompleted:
         // Ended without its agent coming up (its container stopped for good): the start is over, its messages unread.
         state.start = null;
+        state.endedStart = null;
         state.startMessages = [];
         state.heldUnpark = null;
         state.heldTold = null;
@@ -1259,8 +1301,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         }
 
         if (state.activeTool?.name === tool) {
-          state.activity = "thinking";
           state.activeTool = null;
+          think(state, event.occurredAt);
         }
         break;
       }
@@ -1347,6 +1389,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.PromptDelivered: {
         const lands = landsOf(payload.lands);
         if (lands) state.lands = lands;
+        // The agent has its input: it is working on it from now, before its first model request completes.
+        promptLanded(state, event.occurredAt);
         const text = typeof payload.text === "string" ? payload.text : "";
         const attachments = attachmentsOf(payload.attachments);
         if ((!text.trim() && attachments.length === 0) || state.briefed) break;
@@ -1482,6 +1526,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveDelivered: {
+        // A steer, an answer or a send-back the agent took: its turn is under way.
+        if (payload.interruptOnly !== true) promptLanded(state, event.occurredAt);
         if (typeof payload.directiveId === "string") {
           const key = `${event.runId}:${payload.directiveId}`;
           const cohort = state.cohortDeliveries.get(key);
@@ -1560,7 +1606,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (payload.turn === true) {
           state.activity = null;
           state.activeTool = null;
-        } else if (!state.activeTool) state.activity = "thinking";
+        } else if (!state.activeTool) think(state, event.occurredAt);
         break;
       }
 
@@ -1722,6 +1768,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activeTool = null;
           state.untimedUnpark = null;
           state.start = null;
+          state.endedStart = null;
         }
         if (notice === "unparked") {
           if (typeof payload.epoch === "number") state.untimedUnparks.set(payload.epoch, turn);
@@ -1739,11 +1786,12 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.activity = null;
           state.activeTool = null;
         } else if (state.start && !state.start.failed) state.start = null;
+        state.endedStart = null;
         break;
 
       case EventTypes.ServersChanged:
         // lux reports the Run running (after a wait for a host, a resume or a move): it is up. Not a move's Run before its stop.
-        if (payload.change === "state" && payload.luxState === "running" && !moveNotStopped(state)) endStart(state, event);
+        if (payload.change === "state" && payload.luxState === "running" && !moveNotStopped(state) && !state.start?.setup) endStart(state, event);
         break;
 
       case EventTypes.RunResumeTimed: {
@@ -1825,6 +1873,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
           state.startMessages = [];
         }
         state.start = null;
+        state.endedStart = null;
         // A failed resume or move shows its failure, never "Taken back up" or words the agent never read.
         // A move whose agent never came up has no row for late timing to update.
         if (state.lastMove?.epoch != null && state.heldUnpark === state.lastMove.turn) {
@@ -2027,8 +2076,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       conductorRequestId: [...state.conductorRequests].at(-1) ?? null,
       openRequest: openRequest(state),
       openWait: [...state.peerWaits.values()].findLast((w) => w.ended === null) ?? null,
-      activity: state.activity,
-      activeTool: state.activeTool,
+      ...liveActivity(state, runStatus),
       toolCounts: state.toolCounts,
       dudeToolCounts: state.dudeToolCounts,
       lands: state.lands,
@@ -2082,6 +2130,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     openWait: null,
     activity: null,
     activeTool: null,
+    thinkingSince: null,
     toolCounts: state.toolCounts,
     dudeToolCounts: state.dudeToolCounts,
     lands: state.lands,
@@ -2099,11 +2148,43 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
  */
 function shownStart(start: StartState | null, runStatus: RunStatus | undefined): StartState | null {
   if (!start || start.failed) return start;
-  if (start.kind === "start" && runStatus === "running") return null;
+  // Past lux's report of it running, a setup script's start lasts until the agent is up.
+  if (start.kind === "start" && runStatus === "running" && !start.setup) return null;
   // A machine move is paused by dude between its park and its resume, once its park is done. A Run already
   // paused (a person's pause, or an idle park) moves at its next resume: nothing is shown until that resume's stages.
   if (runStatus === "paused" && !start.machine?.stopped) return null;
   return start;
+}
+
+/**
+ * What the agent is doing as the screens show it. A paused Run (a person's pause, confirmed) is not thinking,
+ * whatever the last delivery said: nothing ended its turn in the ledger, but nothing is working on it.
+ */
+function liveActivity(state: Projection, runStatus: RunStatus | undefined): Pick<Conversation, "activity" | "activeTool" | "thinkingSince"> {
+  if (state.activity === "thinking" && runStatus === "paused") return { activity: null, activeTool: null, thinkingSince: null };
+  return { activity: state.activity, activeTool: state.activeTool, thinkingSince: state.activity === "thinking" ? state.thinkingSince : null };
+}
+
+/** The activity row's props: the open tool and its time, or how long the agent has been thinking. */
+export function activityPropsOf(c: Pick<Conversation, "activity" | "activeTool" | "thinkingSince">): { label?: string; since: string } | undefined {
+  if (c.activeTool) return { label: c.activeTool.name, since: c.activeTool.since };
+  if (c.activity === "thinking" && c.thinkingSince) return { since: c.thinkingSince };
+  return undefined;
+}
+
+/** The agent is thinking from `at`, unless it already was (its time runs from then). */
+function think(state: Projection, at: string): void {
+  if (state.activity !== "thinking") state.thinkingSince = at;
+  state.activity = "thinking";
+}
+
+/**
+ * The agent got its input (a prompt, a directive): it is thinking, unless a tool is open, its start is still
+ * live (it is not up), or it waits on a question or a request its conductor holds.
+ */
+function promptLanded(state: Projection, at: string): void {
+  if (state.activeTool || state.start || state.conductorQuestionId || state.conductorRequests.size > 0) return;
+  think(state, at);
 }
 
 /** The Run's model cost: lux's latest once it reported one, else the harness's sum. */
@@ -2572,23 +2653,53 @@ const AGENT_UP: ReadonlySet<string> = new Set([
  */
 function endStart(state: Projection, event: PersistedEvent): void {
   const start = state.start;
+  const ran = state.ran;
   state.ran = true;
   // A refused move's words wait with no start live (an older lux reports none).
   if (!start) placeHeldUnpark(state, event.occurredAt);
   if (!start || start.failed) return;
   state.start = null;
-  for (const m of state.startMessages) if (m.deliveredAt === null && !m.failed) m.deliveredAt = event.occurredAt;
+  const messages = state.startMessages.filter((m) => m.deliveredAt === null && !m.failed);
+  for (const m of messages) m.deliveredAt = event.occurredAt;
   state.startMessages = [];
   placeHeldUnpark(state, event.occurredAt);
-  if (start.kind !== "start" || !state.startStaged) return;
-  const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
-  if (start.stage && start.stageSince) {
-    lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(msBetween(start.stageSince, event.occurredAt))}`);
+  // Ended by lux's report of it running, not by the agent: a setup script may still come (reopenStart).
+  const byLux = !AGENT_UP.has(event.eventType);
+  let notice: NoticeTurn | null = null;
+  if (start.kind === "start" && state.startStaged) {
+    const lines = start.done.map((d) => `${START_STAGE_WORDS[d.stage].done} ${formatDuration(d.tookMs)}`);
+    if (start.stage && start.stageSince) {
+      lines.push(`${START_STAGE_WORDS[start.stage].done} ${formatDuration(msBetween(start.stageSince, event.occurredAt))}`);
+    }
+    notice = {
+      kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
+      text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
+    };
+    state.turns.push(notice);
   }
-  state.turns.push({
-    kind: "notice", id: `${event.eventId}:started`, notice: "notice", at: event.occurredAt, title: lines.join("\n"),
-    text: `Started in ${formatDuration(msBetween(start.startedAt, event.occurredAt))}.`,
-  });
+  state.endedStart = byLux && !start.setup ? { start, notice, ran, messages } : null;
+}
+
+/**
+ * A setup script reported after lux's report of the Run running ended its start, before any record of its agent:
+ * that start goes on (its init runs before the harness), its "Started in" notice taken back. It ends, with the
+ * setup's time in its notice, at the agent's first record.
+ */
+function reopenStart(state: Projection): void {
+  const ended = state.endedStart!;
+  state.endedStart = null;
+  if (ended.notice) {
+    const at = state.turns.lastIndexOf(ended.notice);
+    if (at >= 0) {
+      state.turns.splice(at, 1);
+      if (state.progressIndex !== null && state.progressIndex > at) state.progressIndex -= 1;
+    }
+  }
+  state.start = ended.start;
+  // The briefing's messages are read once the agent is up, not when lux said running.
+  state.ran = ended.ran;
+  for (const m of ended.messages) m.deliveredAt = null;
+  state.startMessages = ended.messages;
 }
 
 /**

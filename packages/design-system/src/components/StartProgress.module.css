@@ -209,8 +209,10 @@
 .step[data-state="current"] .stepGlyph {
   color: var(--ds-tone-info-mark);
 }
-/* The one loop: divided by --ds-motion-live, so reduced motion freezes it in place. */
-.step[data-state="current"] .stepGlyph svg {
+/* The one loop, the current stage's glyph and its part of the bar: divided by --ds-motion-live, so reduced motion
+   freezes it in place. */
+.step[data-state="current"] .stepGlyph svg,
+.barNow {
   animation: global(ds-pulse) calc(var(--ds-cadence-breathe) / max(var(--ds-motion-live), 0.0001)) ease-in-out infinite;
 }
 .step[data-state="current"] .stepLabel,
@@ -227,6 +229,53 @@
 }
 .stepFailed {
   color: var(--ds-tone-danger-fg);
+}
+
+/* The current stage's latest line (a setup script's output): muted mono, one line, cut with an ellipsis. */
+.detail,
+.stepDetail {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ds-color-text-muted);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+}
+.detail {
+  margin-top: var(--ds-space-2);
+}
+.stepDetail {
+  grid-column: 2 / 4;
+  padding-bottom: var(--ds-space-2);
+}
+
+/* The progress bar under the stages: done stages filled, the current one breathing. */
+.bar {
+  position: relative;
+  display: block;
+  max-width: 420px;
+  height: 2px;
+  margin: var(--ds-space-4) 0 var(--ds-space-2);
+  border-radius: var(--ds-radius-mark);
+  background: var(--ds-color-border-subtle);
+  overflow: hidden;
+}
+.barFill,
+.barNow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--ds-radius-mark);
+}
+.barFill {
+  left: 0;
+  background: var(--ds-tone-success-mark);
+  transition: width var(--ds-duration-slow) var(--ds-ease-standard);
+}
+.barNow {
+  background: var(--ds-tone-info-mark);
 }
 
 /* StartChip: StatusMark's grammar, then the words, then the clock. */

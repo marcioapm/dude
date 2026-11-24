@@ -143,6 +143,13 @@ type InitOutput struct {
 	Running bool          `json:"running,omitempty"`
 	Tail    string        `json:"tail,omitempty"`
 	Failed  *SetupFailure `json:"failed,omitempty"`
+	// A setup script ran in this init: its setup stage was written
+	// (setupProgress), naming Repository; Line is the latest line written
+	// of its output, at LineAt.
+	Staged     bool      `json:"staged,omitempty"`
+	Repository string    `json:"repository,omitempty"`
+	Line       string    `json:"line,omitempty"`
+	LineAt     time.Time `json:"lineAt,omitzero"`
 }
 
 // SetupFailure is a repository's setup script that failed: which, with
@@ -179,6 +186,7 @@ func (o *InitOutput) Record(f lux.Frame) {
 				o.Failed = setupFailed(o.Tail, d.ExitCode, f.Epoch)
 			}
 			o.Tail = ""
+			o.Staged, o.Repository, o.Line, o.LineAt = false, "", "", time.Time{}
 		}
 		return
 	}

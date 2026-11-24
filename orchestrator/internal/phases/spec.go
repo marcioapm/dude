@@ -167,7 +167,9 @@ type specInput struct {
 	CheckLogs string
 	// Every repository the task names, each at the commit this phase
 	// starts from.
-	Repos      []specRepo
+	Repos []specRepo
+	// No setup scripts: no SetupSpec, no manifest (setupFor).
+	NoSetup    bool
 	PushBranch string
 	// A review limited to a range: why (delivery.RangeSimplify…), carried
 	// as the label dude.review_range; "" for the whole branch.
@@ -297,6 +299,15 @@ func repoRefs(repos []specRepo) map[string]string {
 	return refs
 }
 
+// noSetup says a brainstorm's Run (its agent, or a child it started) runs
+// no repository setup script: it reads, asks and proposes, and never
+// builds or tests. Only a new submission drops it: a Run lux holds whose
+// stored spec declares the manifest (submitted before) keeps being given
+// it, as every resume must give each declared secret.
+func noSetup(stored *lux.StoredSpec) bool {
+	return stored == nil || !DeclaresSetup(*stored)
+}
+
 // repoSetups are the repositories' setup scripts, in the spec's order.
 func repoSetups(repos []specRepo) []Setup {
 	out := make([]Setup, 0, len(repos))
@@ -414,7 +425,7 @@ func buildSpec(c AgentConfig, in specInput) lux.Spec {
 				spec.Secrets = append(spec.Secrets, sec)
 			}
 		}
-		if len(in.Repos) > 0 {
+		if len(in.Repos) > 0 && !in.NoSetup {
 			SetupSpec(&spec, repoSetups(in.Repos))
 		}
 	}
