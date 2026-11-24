@@ -23,7 +23,7 @@ const AutoPreviewActor = "auto-preview"
 // already — a repeat makes nothing.
 //
 // A project with nothing to start in previews (or no preview domain) gets
-// none: StartPreview would make an eager one, whose Run starts at once.
+// none: startPreview would make an eager one, whose Run starts at once.
 // A task that is over or gone is a quiet no-op too. Callers run it after
 // what they recorded committed; its error is logged here, for them to
 // drop: the pull request's record is what matters.
