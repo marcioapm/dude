@@ -46,14 +46,21 @@ func (w *world) agentPreview(task, run string) string {
 	return out.ID
 }
 
-// agentPreviewAsleep is agentPreview, waited for until it sleeps.
-func (w *world) agentPreviewAsleep(task, run string) string {
+// withServers waits for preview id's servers to exist in lux.
+func (w *world) withServers(id string) {
 	w.t.Helper()
-	id := w.agentPreview(task, run)
-	w.until("the preview to be asleep", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wakeable`, id) == 1
+	w.until("the preview's servers", func() bool {
+		return w.count(`SELECT count(*) FROM preview_servers WHERE run_id = $1 AND deleted_at IS NULL`, id) > 0
 	})
-	return id
+}
+
+// unopened: no URL request asked preview id to wake (lux's
+// server.wake_requested moves wake_event_id).
+func (w *world) unopened(id string) {
+	w.t.Helper()
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wake_event_id = 0`, id); n != 1 {
+		w.t.Fatalf("preview %s was woken by a request", id)
+	}
 }
 
 // readyMessages are the "Ready for your look" messages of preview runID.
@@ -98,10 +105,11 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task := w.task()
 	conductor := w.conductorOf(task)
-	runID := w.agentPreviewAsleep(task, conductor)
+	runID := w.agentPreview(task, conductor)
+	w.withServers(runID)
 	web := w.serverID(runID, "web")
 
-	// Not ready: pending, starting, failed say nothing.
+	// Not ready: starting, waking, failed, stopped say nothing.
 	for i, state := range []string{"starting", "waking", "failed", "stopped"} {
 		w.feedState(web, state, int64(1<<41+i))
 	}
@@ -109,8 +117,9 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 		t.Fatalf("%d ready messages before ready", n)
 	}
 
-	w.open(web)
+	// Nobody opens it: the agent's preview starts by itself.
 	w.until("ready announced", func() bool { return len(w.readyMessages(runID)) == 1 })
+	w.unopened(runID)
 	got := w.readyMessages(runID)[0]
 	url := w.str(`SELECT url FROM preview_servers WHERE run_id = $1 AND name = 'web'`, runID)
 	if got.run != conductor || got.task != task || got.session != "" || got.actor != ledger.ActorAgent {
@@ -132,25 +141,32 @@ func TestAConductorStartedPreviewSaysReadyOnceInItsTask(t *testing.T) {
 	w.until("parked", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND lux_state = 'stopped'`, runID) == 1
 	})
+	// Parked, it stays asleep: only its first start was automatic.
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL`, runID); n != 1 {
+		t.Fatal("a parked agent preview woke by itself")
+	}
 	w.open(web)
 	w.pump()
 	if n := len(w.readyMessages(runID)); n != 1 || w.allReadyMessages() != 1 {
 		t.Fatalf("%d ready messages for the preview, %d in all, want 1", n, w.allReadyMessages())
 	}
 
-	// A new preview of the task, once the first ended, says its own.
+	// A new preview of the task, once the first ended, starts and says its own.
 	if _, err := w.previews.StopPreview(context.Background(), w.org, task, conductor, ledger.ActorAgent, ""); err != nil {
 		t.Fatal(err)
 	}
 	w.until("the first preview over", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND ended_at IS NOT NULL`, runID) == 1
 	})
-	next := w.agentPreviewAsleep(task, conductor)
+	next := w.agentPreview(task, conductor)
 	if next == runID {
 		t.Fatal("no new preview")
 	}
-	w.open(w.serverID(next, "web"))
 	w.until("the new preview announced", func() bool { return len(w.readyMessages(next)) == 1 })
+	w.unopened(next)
 	w.pump()
 	if n := w.allReadyMessages(); n != 2 || len(w.readyMessages(runID)) != 1 {
 		t.Fatalf("%d ready messages in all, want one per preview", n)
@@ -173,14 +189,12 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.until("asleep", func() bool {
-		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wakeable`, b.ID) == 1
-	})
 	if n := w.allReadyMessages(); n != 0 {
 		t.Fatalf("%d ready messages before ready", n)
 	}
-	w.open(w.serverID(b.ID, "web"))
+	// Nobody opens it.
 	w.until("ready announced", func() bool { return len(w.readyMessages(b.ID)) == 1 })
+	w.unopened(b.ID)
 	got := w.readyMessages(b.ID)[0]
 	if got.run != agent || got.session != session || got.task != "" {
 		t.Fatalf("said on run %q session %q task %q, want %s in session %s", got.run, got.session, got.task, agent, session)
@@ -201,12 +215,25 @@ func TestABrainstormStartedBranchPreviewSaysReadyInItsSession(t *testing.T) {
 	}
 }
 
-func TestAPersonStartedPreviewSaysNothingWhenReady(t *testing.T) {
+// A preview a person starts sleeps until opened, and says nothing when
+// ready.
+func TestAPersonStartedPreviewSleepsUntilOpenedAndSaysNothing(t *testing.T) {
 	w := newWorld(t)
 	w.wakeable()
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task, runID := w.declare()
 	w.conductorOf(task) // a conductor there, which did not start it
+	for range 10 {
+		w.pump()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL
+		AND lux_run_id IS NULL AND preview_ready_at IS NULL`, runID); n != 1 || len(w.luxRuns()) != 0 {
+		t.Fatalf("a person's unopened preview woke (%d lux runs)", len(w.luxRuns()))
+	}
+	if n := w.allReadyMessages(); n != 0 {
+		t.Fatalf("%d ready messages before it was opened", n)
+	}
 	w.open(w.serverID(runID, "web"))
 	w.until("ready", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
@@ -227,7 +254,8 @@ func TestTwoFollowersOfOneReadySayItOnce(t *testing.T) {
 	w.previews.PreviewDomain = previewDomain
 	w.recipe("web", 3000, "npm run dev", "", nil, true)
 	task := w.task()
-	runID := w.agentPreviewAsleep(task, w.conductorOf(task))
+	runID := w.agentPreview(task, w.conductorOf(task))
+	w.withServers(runID)
 	web := w.serverID(runID, "web")
 	const followers = 4
 	var wg sync.WaitGroup

@@ -749,6 +749,12 @@ row held by a follower. Keep the lock order.
   branch preview. `preview_ready_at` is the once-only record, so replays,
   two followers and park→wake never repeat it; a new preview Run has its
   own. A preview whose `run.created` actor is not an agent says nothing.
+  An agent's preview starts itself: its insert sets `runs.wake_wanted_at`
+  (`agentWakes`), which `createServers` keeps when it moves the Run from
+  `pending` to `paused`, and the next sweep wakes it as it would a URL's
+  request; nobody has to open it for the first ready. A person's preview is
+  inserted with no wake and sleeps until opened. Only that first start is
+  automatic: once parked, an agent's preview wakes on request like any other.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
