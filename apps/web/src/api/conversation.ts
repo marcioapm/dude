@@ -741,6 +741,8 @@ export interface Conversation {
   activity: Extract<ActivityKind, "thinking" | "streaming" | "tool"> | null;
   /** The tool being waited on, when activity is "tool". */
   activeTool: { name: string; since: string } | null;
+  /** When the agent began thinking, when activity is "thinking": the row's elapsed time. */
+  thinkingSince: string | null;
   /** How often it called each tool, by the tool's name as the harness gives it. */
   toolCounts: ReadonlyMap<string, number>;
   /** How often dude recorded a call of each of its tools (`agent.tool.dude`), by the tool's name. */
@@ -820,6 +822,7 @@ export interface Projection {
   contextWindow: number;
   activity: Conversation["activity"];
   activeTool: Conversation["activeTool"];
+  thinkingSince: string | null;
   toolCounts: Map<string, number>;
   dudeToolCounts: Map<string, number>;
   lands: SteerLands | null;
@@ -933,6 +936,7 @@ export function emptyProjection(briefedBefore?: string): Projection {
     contextWindow: 0,
     activity: null,
     activeTool: null,
+    thinkingSince: null,
     toolCounts: new Map(),
     dudeToolCounts: new Map(),
     lands: null,
@@ -1259,8 +1263,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         }
 
         if (state.activeTool?.name === tool) {
-          state.activity = "thinking";
           state.activeTool = null;
+          think(state, event.occurredAt);
         }
         break;
       }
@@ -1347,6 +1351,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       case EventTypes.PromptDelivered: {
         const lands = landsOf(payload.lands);
         if (lands) state.lands = lands;
+        // The agent has its input: it is working on it from now, before its first model request completes.
+        promptLanded(state, event.occurredAt);
         const text = typeof payload.text === "string" ? payload.text : "";
         const attachments = attachmentsOf(payload.attachments);
         if ((!text.trim() && attachments.length === 0) || state.briefed) break;
@@ -1482,6 +1488,8 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
       }
 
       case EventTypes.DirectiveDelivered: {
+        // A steer, an answer or a send-back the agent took: its turn is under way.
+        if (payload.interruptOnly !== true) promptLanded(state, event.occurredAt);
         if (typeof payload.directiveId === "string") {
           const key = `${event.runId}:${payload.directiveId}`;
           const cohort = state.cohortDeliveries.get(key);
@@ -1560,7 +1568,7 @@ export function apply(state: Projection, events: readonly PersistedEvent[]): Pro
         if (payload.turn === true) {
           state.activity = null;
           state.activeTool = null;
-        } else if (!state.activeTool) state.activity = "thinking";
+        } else if (!state.activeTool) think(state, event.occurredAt);
         break;
       }
 
@@ -2027,8 +2035,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
       conductorRequestId: [...state.conductorRequests].at(-1) ?? null,
       openRequest: openRequest(state),
       openWait: [...state.peerWaits.values()].findLast((w) => w.ended === null) ?? null,
-      activity: state.activity,
-      activeTool: state.activeTool,
+      ...liveActivity(state, runStatus),
       toolCounts: state.toolCounts,
       dudeToolCounts: state.dudeToolCounts,
       lands: state.lands,
@@ -2082,6 +2089,7 @@ export function snapshot(state: Projection, runStatus?: RunStatus): Conversation
     openWait: null,
     activity: null,
     activeTool: null,
+    thinkingSince: null,
     toolCounts: state.toolCounts,
     dudeToolCounts: state.dudeToolCounts,
     lands: state.lands,
@@ -2104,6 +2112,37 @@ function shownStart(start: StartState | null, runStatus: RunStatus | undefined):
   // paused (a person's pause, or an idle park) moves at its next resume: nothing is shown until that resume's stages.
   if (runStatus === "paused" && !start.machine?.stopped) return null;
   return start;
+}
+
+/**
+ * What the agent is doing as the screens show it. A paused Run (a person's pause, confirmed) is not thinking,
+ * whatever the last delivery said: nothing ended its turn in the ledger, but nothing is working on it.
+ */
+function liveActivity(state: Projection, runStatus: RunStatus | undefined): Pick<Conversation, "activity" | "activeTool" | "thinkingSince"> {
+  if (state.activity === "thinking" && runStatus === "paused") return { activity: null, activeTool: null, thinkingSince: null };
+  return { activity: state.activity, activeTool: state.activeTool, thinkingSince: state.activity === "thinking" ? state.thinkingSince : null };
+}
+
+/** The activity row's props: the open tool and its time, or how long the agent has been thinking. */
+export function activityPropsOf(c: Pick<Conversation, "activity" | "activeTool" | "thinkingSince">): { label?: string; since: string } | undefined {
+  if (c.activeTool) return { label: c.activeTool.name, since: c.activeTool.since };
+  if (c.activity === "thinking" && c.thinkingSince) return { since: c.thinkingSince };
+  return undefined;
+}
+
+/** The agent is thinking from `at`, unless it already was (its time runs from then). */
+function think(state: Projection, at: string): void {
+  if (state.activity !== "thinking") state.thinkingSince = at;
+  state.activity = "thinking";
+}
+
+/**
+ * The agent got its input (a prompt, a directive): it is thinking, unless a tool is open, its start is still
+ * live (it is not up), or it waits on a question or a request its conductor holds.
+ */
+function promptLanded(state: Projection, at: string): void {
+  if (state.activeTool || state.start || state.conductorQuestionId || state.conductorRequests.size > 0) return;
+  think(state, at);
 }
 
 /** The Run's model cost: lux's latest once it reported one, else the harness's sum. */

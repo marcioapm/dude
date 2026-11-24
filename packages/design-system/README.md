@@ -299,6 +299,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
 - Under reduced motion every loop freezes in a legible pose (the ring stays
   dashed, the caret stays lit, the sweep becomes a stripe) and the clocks keep
   ticking as text. Motion here is state, not decoration.
+- An agent with its input is shown thinking until its first output: the row
+  says **thinking** from the moment its prompt or a delivered message lands
+  (`agent.prompt.delivered`, `run.directive.delivered`), its clock timed from
+  then, not from its first completed model request. A tool, a message, the
+  turn's end, a park, a pause or the Run's end replace or clear it.
 - Errors are never behind a click: a failed `ToolCallCard` opens by default
   and repeats the error's first line, in primary ink on the danger tint, in
   its collapsed row. A non-zero exit code is a danger chip in the collapsed

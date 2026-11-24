@@ -12,7 +12,7 @@ import { ChatMessage, ChatAside, ChatTranscript, FeedDelivery, LogStream, summar
 import { formatDuration, Icon } from "@dude/design-system";
 import type { AgentRole, AutomationRunDetail, PersistedEvent } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
-import { project, resultFrom, type ToolTurn, type Turn } from "../api/conversation.ts";
+import { activityPropsOf, project, resultFrom, type ToolTurn, type Turn } from "../api/conversation.ts";
 import { useEventStream } from "../hooks/useEventStream.ts";
 import { usePeople } from "../people.tsx";
 import { asides, interleaved, renderTurn, type Speaker } from "./transcriptTurns.tsx";
@@ -148,7 +148,7 @@ export function AutomationFeed({ run, events, name, role, live, onDelivery }: {
       {streaming ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
         content={streaming} streaming data-testid="automation-streaming" /> : live && conversation.activity ? <ChatMessage role={role} name={name} roleLabel="Automation" avatar={speaker.avatar}
         activity={conversation.activity} data-testid="automation-activity"
-        activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} /> : null}
+        activityProps={activityPropsOf(conversation)} /> : null}
     </ChatTranscript>
   );
 }

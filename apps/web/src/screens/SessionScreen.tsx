@@ -22,7 +22,7 @@ import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type Attach
 import { ApiError, type ApiClient, type Artifact } from "../api/client.ts";
 import { modelChangeWords, organizationOf, pickerTier, useTiers } from "../sessionModel.ts";
 import { ArtifactViewer, filesOf, save } from "./FilesSection.tsx";
-import { apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type QuestionTurn, type Turn } from "../api/conversation.ts";
+import { activityPropsOf, apply, emptyProjection, readWhen, snapshot, steerWait, toolUsage, TOOL_USAGE_NOTE, type QuestionTurn, type Turn } from "../api/conversation.ts";
 import { StartHeaderChip, StartRow, retryRefusal } from "../startCue.tsx";
 import type { QuestionSubmission } from "@dude/design-system/components";
 import { dudeName } from "../DudeMark.tsx";
@@ -460,7 +460,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
               {starting ? <StartRow start={starting} role="brainstorm" /> : null}
               {conversation.activity ? (
                 <ChatMessage role="brainstorm" activity={conversation.activity}
-                  activityProps={conversation.activeTool ? { label: conversation.activeTool.name, since: conversation.activeTool.since } : undefined} />
+                  activityProps={activityPropsOf(conversation)} />
               ) : null}
             </ChatTranscript>
             {imageViewing ? (
