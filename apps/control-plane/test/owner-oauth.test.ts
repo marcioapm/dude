@@ -220,6 +220,11 @@ test("githubConnected is a live authorization at the App's version: connected, n
   await owner`UPDATE forge_credentials SET oauth_version = oauth_version + 1 WHERE id = 'fc_owner'`;
   const after = await (await people.handle(new Request("https://dude.example/v1/people"))).json() as { people: Array<{ id: string; githubConnected: boolean }> };
   expect(after.people.find((p) => p.id === "per_owner")?.githubConnected).toBe(false);
+  // An organization with no GitHub App: nobody connects, so it is not said.
+  const elsewhere = new Router(async () => ({ credentialKind: "person", organizationId: "org_other", personId: "per_otherorg", kind: "user", name: "Other org", role: "admin", resolved: true }));
+  registerPeopleRoutes(elsewhere);
+  const other = await (await elsewhere.handle(new Request("https://dude.example/v1/people"))).json() as { people: Array<{ id: string; githubConnected: boolean | null }> };
+  expect(other.people.map((p) => [p.id, p.githubConnected])).toEqual([["per_otherorg", null]]);
 });
 
 test("a task's credentialWait shows while its delivery waits on the frozen owner, and clears as the step goes on", async () => {
@@ -236,6 +241,14 @@ test("a task's credentialWait shows while its delivery waits on the frozen owner
   const shown = await read();
   expect({ ...shown, askedAt: undefined, person: shown.person.id }).toEqual({ reason: "owner_github", person: "per_owner", branch: "dude/cw-1-1",
     reconnect: false, askedAt: undefined });
+  // GET /v1/tasks/:id carries it.
+  const { registerWorkRoutes } = await import("../src/api/routes/work.ts");
+  const work = new Router(async () => ({ credentialKind: "person", organizationId: "org_owner", personId: "per_owner", kind: "user", name: "Owner", role: "admin", resolved: true }));
+  registerWorkRoutes(work);
+  const got = await work.handle(new Request("https://dude.example/v1/tasks/tsk_cw"));
+  expect(got.status).toBe(200);
+  const task = await got.json() as { credentialWait: { person: { id: string }; reconnect: boolean } | null };
+  expect([task.credentialWait?.person.id, task.credentialWait?.reconnect]).toEqual(["per_owner", false]);
   // GitHub refused the token she connected: the latest ask, to reconnect, is the one shown, since the first ask.
   await owner`INSERT INTO events (id,organization_id,event_type,project_id,task_id,actor_type,actor_id,source,payload) VALUES
     ('evt_cw_again','org_owner','question.asked','prj_cw','tsk_cw','system','workflow','control-plane',
@@ -247,6 +260,11 @@ test("a task's credentialWait shows while its delivery waits on the frozen owner
   await owner`UPDATE pr_publications SET owner_person_id = 'per_other' WHERE task_id = 'tsk_cw'`;
   expect(await read()).toBeNull();
   await owner`UPDATE pr_publications SET owner_person_id = 'per_owner' WHERE task_id = 'tsk_cw'`;
+  expect(await read()).not.toBeNull();
+  // Waiting, but on its pull request's feedback, not on GitHub: nothing waits on her.
+  await owner`UPDATE workflow_runs SET status = 'waiting', step = 'awaitPullRequest', awaiting_signals = '["pr.feedback"]' WHERE id = 'wfr_cw'`;
+  expect(await read()).toBeNull();
+  await owner`UPDATE workflow_runs SET step = 'openPullRequest', awaiting_signals = '["github.authorized"]' WHERE id = 'wfr_cw'`;
   expect(await read()).not.toBeNull();
   // The step went on (connected): nothing waits.
   await owner`UPDATE workflow_runs SET status = 'running', awaiting_signals = '[]' WHERE id = 'wfr_cw'`;
