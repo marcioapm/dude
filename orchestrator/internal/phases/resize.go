@@ -207,9 +207,8 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 // ValidateResize checks the exact sized resume without stopping the Run.
 // Older lux refuses validateOnly with 400: the real resume keeps its safe
 // fallback, so lack of dry-run support never fails the agent's Run. A plan
-// lux's pools could not be read for is delivery.ErrPoolsUnread, one whose
-// read pools name no default delivery.ErrNoDefaultPool: there is nothing to
-// check, and nothing may be parked.
+// that could not be made returns its reason: there is nothing to check, and
+// nothing may be parked.
 func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *ResizePlan) error {
 	if plan != nil && plan.reason != nil {
 		return plan.reason
@@ -436,8 +435,8 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 		return err
 	}
 	if plan.reason != nil {
-		// The move's size cannot be planned without lux's pools, and an
-		// unsized resume would never settle it: the resume is retried.
+		// The move's size cannot be planned without a pool to move to, and
+		// an unsized resume would never settle it: the resume is retried.
 		return fmt.Errorf("machine move %s: %w", move.ID, plan.reason)
 	}
 	if plan.moveTo == "" && plan.Target != nil {
