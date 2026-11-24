@@ -263,7 +263,10 @@ describe("a project's servers", () => {
   test("a task's own choice on automatic task previews: null follows the project, any member edits it", async () => {
     await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
                 VALUES ('wi_auto', ${ORG}, ${PROJECT}, 901, 'Greet', 'Say hello to each person who comes in')`;
-    expect((await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).autoTaskPreview).toBeNull();
+    expect(await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).toMatchObject({ autoTaskPreview: null, projectAutoTaskPreview: false });
+    await owner`UPDATE projects SET auto_task_preview = true WHERE id = ${PROJECT}`;
+    expect((await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).projectAutoTaskPreview).toBe(true);
+    await owner`UPDATE projects SET auto_task_preview = false WHERE id = ${PROJECT}`;
     for (const value of [false, true, null] as const) {
       const res = await call(memberKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: value });
       expect(res.status).toBe(200);

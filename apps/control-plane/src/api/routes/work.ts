@@ -101,7 +101,11 @@ function taskSelect(origin: string): string {
   (SELECT cp.key_prefix || '-' || c.number FROM task_relations r JOIN tasks c ON c.id = r.to_task_id JOIN projects cp ON cp.id = c.project_id
     WHERE r.from_task_id = tasks.id AND r.kind = 'duplicates') AS "duplicateOf",
   (SELECT key_prefix FROM projects p WHERE p.id = tasks.project_id) || '-' || number AS key, -- see navigation.ts
-  requested_by AS "requestedBy", auto_task_preview AS "autoTaskPreview", ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
+  requested_by AS "requestedBy",
+  -- Automatic task previews (migration 272): the task's own choice (null: the project's), and the project's.
+  auto_task_preview AS "autoTaskPreview",
+  (SELECT p.auto_task_preview FROM projects p WHERE p.id = tasks.project_id) AS "projectAutoTaskPreview",
+  ${ownerJson()}, ${peopleJson()}, ${DECIDING_JSON}, created_at AS "createdAt", updated_at AS "updatedAt"`;
 }
 
 // A Run's columns, as a fragment of `sql`: the builder's offline threshold
