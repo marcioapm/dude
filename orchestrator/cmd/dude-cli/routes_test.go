@@ -320,6 +320,9 @@ var routeCases = []routeCase{
 	{[]string{"memory", "archive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/archive", ``},
 	{[]string{"memory", "unarchive", "mem_1"}, "POST", "/v1/memory/memories/mem_1/restore", ``},
 	{[]string{"task", "update", "wi_12", "--repo", "web"}, "PATCH", "/v1/tasks/wi_12", `{"repositories":[{"access":"write","id":"rep_web"}]}`},
+	{[]string{"task", "update", "wi_12", "--auto-preview", "off"}, "PATCH", "/v1/tasks/wi_12", `{"autoTaskPreview":false}`},
+	{[]string{"task", "update", "wi_12", "--auto-preview", "on"}, "PATCH", "/v1/tasks/wi_12", `{"autoTaskPreview":true}`},
+	{[]string{"task", "update", "wi_12", "--auto-preview", "project"}, "PATCH", "/v1/tasks/wi_12", `{"autoTaskPreview":null}`},
 	{[]string{"task", "create", "ABS", "--title", "New", "--goal", "A goal long enough to save.", "--repo", "web", "--related", "ABS-12"}, "POST", "/v1/tasks/wi_13/relations", `{"kind":"related","task":"ABS-12"}`},
 }
 

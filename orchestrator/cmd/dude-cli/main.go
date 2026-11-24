@@ -923,9 +923,10 @@ var commands = map[string]command{
 				return out, nil
 			}
 		}},
-	"task update": {"TASK", "change a task's title, goal, criteria, epic, repositories or owner",
+	"task update": {"TASK", "change a task's title, goal, criteria, epic, repositories, owner or automatic preview",
 		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "a new title")
+			autoPreview := fs.String("auto-preview", "", "on, off or project: whether dude prepares its preview when it opens or reopens its pull request")
 			goal := fs.String("goal", "", "a new goal; - reads stdin")
 			noCriteria := fs.Bool("no-criteria", false, "remove all criteria")
 			epic := fs.String("epic", "", "epic id, or none")
@@ -957,6 +958,15 @@ var commands = map[string]command{
 				}
 				if *owner != "" {
 					body["ownerId"] = *owner
+				}
+				switch *autoPreview {
+				case "":
+				case "on", "off":
+					body["autoTaskPreview"] = *autoPreview == "on"
+				case "project":
+					body["autoTaskPreview"] = nil
+				default:
+					return nil, errors.New("task update: --auto-preview is on, off or project")
 				}
 				if len(body) == 0 && len(repos) == 0 {
 					return nil, errors.New("task update: nothing to change")
