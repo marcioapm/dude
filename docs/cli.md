@@ -204,7 +204,7 @@ noun is what it acts on.
 | `task verification TASK` | How its work was verified, criterion by criterion |
 | `task create PROJECT --title T --goal G [--criterion C]... [--repo NAME[:read]]... [--epic ID] [--blocked-by T]... [--blocks T]... [--related T]... [--start \| --talk]` | Records a task. The goal needs 16+ characters. `--repo` is needed when the project has more than one repository. |
 | `task create … --repo NAME --from-pr N [--mode continue\|review]` / `--from-branch B [--base B]` | A task that takes over existing work in that repository: a pull request (number or URL) or a branch. `review` only reviews it. |
-| `task update TASK [--title] [--goal] [--criterion C]... [--no-criteria] [--epic ID\|none] [--repo R]... [--owner PERSON] [--auto-preview on\|off\|project]` | Changes a task. `--criterion` and `--repo` replace all. `--auto-preview` sets whether dude prepares its preview when it opens or reopens its pull request (`project` follows the project's setting). |
+| `task update TASK [--title] [--goal] [--criterion C]... [--no-criteria] [--epic ID\|none] [--repo R]... [--owner PERSON] [--auto-preview on\|off\|project]` | Changes a task. `--criterion` and `--repo` replace all. `--auto-preview` sets whether dude prepares its preview when its pull request opens or reopens (`project` follows the project's setting). |
 | `task start TASK [--override --note N]` | Delivery: agents implement, review, and open a PR |
 | `task talk TASK [--override --note N]` | Its conductor plans it with you in Chat; nothing is built yet |
 | `task chat TASK TEXT [--aside]` | Tells the task's conductor; `--aside` is for people only |

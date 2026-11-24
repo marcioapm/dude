@@ -926,7 +926,7 @@ var commands = map[string]command{
 	"task update": {"TASK", "change a task's title, goal, criteria, epic, repositories, owner or automatic preview",
 		func(fs *flag.FlagSet) doer {
 			title := fs.String("title", "", "a new title")
-			autoPreview := fs.String("auto-preview", "", "on, off or project: whether dude prepares its preview when it opens or reopens its pull request")
+			autoPreview := fs.String("auto-preview", "", "on, off or project: whether dude prepares its preview when its pull request opens or reopens")
 			goal := fs.String("goal", "", "a new goal; - reads stdin")
 			noCriteria := fs.Bool("no-criteria", false, "remove all criteria")
 			epic := fs.String("epic", "", "epic id, or none")
