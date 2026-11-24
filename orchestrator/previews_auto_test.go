@@ -382,23 +382,8 @@ func TestAutoPreviewForAnAdoptedPullRequest(t *testing.T) {
 		t.Fatalf("AutoPreview called %d times, seeing %d adopted records committed; want once, after the commit", calls.Load(), committed.Load())
 	}
 	runID := w.onlyPreview(task)
-	w.withServers(runID)
-	for range 5 {
-		w.pump()
-	}
-	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wakeable AND wake_wanted_at IS NULL AND lux_run_id IS NULL`, runID); n != 1 {
-		t.Fatalf("the adopted pull request's preview %s is not asleep", runID)
-	}
-	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND actor_type = $2 AND actor_id = $3`,
-		runID, ledger.ActorSystem, servers.AutoPreviewActor); n != 1 {
-		t.Fatal("the adopted pull request's preview was not made by the system as auto-preview")
-	}
-	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages for an automatic preview", n)
-	}
-	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
-		t.Fatalf("%d previews (%d live), want one", all, live)
-	}
+	w.dormant(runID)
+	w.openedNotAnnounced(runID)
 }
 
 // 7b. An adopted pull request closed and reopened ensures the task's
