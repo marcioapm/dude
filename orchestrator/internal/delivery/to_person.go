@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -110,13 +111,18 @@ const ReasonOwnerGitHub = "owner_github"
 // request waits on the owner's GitHub.
 const WakeOwnerGitHub = "owner_github"
 
-// ownerGitHubLine tells a conductor the pull request waits on owner (a
-// first name) connecting GitHub; reconnect, connecting again.
+// ownerGitHubLine tells a conductor the pull request waits on owner (their
+// name; its first word is said) connecting GitHub; reconnect, connecting
+// again. With no name it is the task's owner.
 func ownerGitHubLine(owner, branch string, reconnect bool) string {
+	who := "the task's owner"
+	if f := strings.Fields(owner); len(f) > 0 {
+		who = f[0]
+	}
 	return render(ownerGitHubTmpl, struct {
 		Owner, Branch string
 		Reconnect     bool
-	}{owner, branch, reconnect})
+	}{who, branch, reconnect})
 }
 
 // ToPersonTx is the one way anything on a task reaches a person: it
@@ -216,7 +222,7 @@ func tellOwnerGitHubTx(ctx context.Context, tx pgx.Tx, org string, st *State, c 
 		COALESCE((SELECT name FROM people WHERE id = $2), '')`, st.TaskID, c.PersonID).Scan(&live, &name); err != nil || !live {
 		return err
 	}
-	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, WakeOwnerGitHub, "owner_github:"+c.Key, ownerGitHubLine(firstName(name), c.Branch, c.Reconnect))
+	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, WakeOwnerGitHub, "owner_github:"+c.Key, ownerGitHubLine(name, c.Branch, c.Reconnect))
 	return err
 }
 

@@ -68,6 +68,16 @@ test("the header chip: Needs you for the owner, Needs <first name> for everyone 
   expect(credentialLabel({ ...wait, reconnect: true }, ana.id)).toBe("Needs you · Reconnect GitHub");
 });
 
+test("a wait whose person is not known names the task's owner, never a bare article", async () => {
+  const nobody = { ...wait, person: null };
+  expect(credentialLabel(nobody, tom.id)).toBe("Needs the owner · Connect GitHub");
+  const { container, unmount } = await mount(<TooltipProvider><ToastProvider>
+    <CredentialWaitPanel client={new FixtureClient("a")} taskId="t_142" wait={nobody} people={as(tom, true)} onChanged={() => {}} />
+  </ToastProvider></TooltipProvider>);
+  cleanup.push(unmount);
+  expect(container.querySelector("[data-testid=credential-wait-title]")!.textContent).toBe("Waiting for the task's owner to connect GitHub");
+});
+
 test("on the board and in the tree it waits for Connect GitHub", () => {
   const projects = withWaitingFor([{ id: "p", name: "Web", tasks: [{ id: "t", key: "WEB-1", title: "T", status: "awaiting_input",
     people: [ana], escalation: null, credentialWait: { person: ana, reconnect: false } }] }] as unknown as NavProject[]);
@@ -87,7 +97,7 @@ test("the warning before work starts: only for an owner known not to have connec
   expect(mine.querySelector("[data-testid=credential-warning-connect]")).not.toBeNull();
   const theirs = await draw({ you: tom.id, byId: byId(ana, false) });
   expect(theirs.querySelector("[data-testid=credential-warning-connect]")).toBeNull();
-  expect(theirs.textContent).toContain("Pick another owner");
+  expect(theirs.textContent).toContain("Pick an owner who has connected GitHub, or ask Ana to connect.");
   for (const known of [true, null, undefined]) {
     const none = await draw({ you: tom.id, byId: byId(ana, known) });
     expect(none.querySelector("[data-testid=credential-warning]")).toBeNull();

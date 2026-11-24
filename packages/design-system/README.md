@@ -555,10 +555,10 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
 - **A credential wait is a person item.** It is the owner's like an
   answer is: the header chip (`StatusMark` attention, label "Needs you ·
   Connect GitHub"), Waiting, push. Its card is a QuestionCard-family turn
-  at the position where the delivery parked: the attention wash and bar,
-  the GitHub glyph in the avatar gutter and a label tag in its header, so
-  it never means by hue alone. "Reconnect" replaces "Connect" when their
-  connection stopped working.
+  in the task's notices, where an escalation's panel sits: the attention
+  wash and bar, the GitHub glyph in the avatar gutter and a label tag in
+  its header, so it never means by hue alone. "Reconnect" replaces
+  "Connect" when their connection stopped working.
 - **Owner vs. others.** The owner reads "Connect GitHub to open the pull
   request", the pushed branch, a primary **Connect GitHub** that comes back
   to the task, and a quiet "Why as me?" that opens one sentence. Everyone
@@ -570,9 +570,10 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
 - **It never blocks a person who has connected.** The warning before work
   starts (`CredentialWarning`, an attention Callout under the owner) is
   shown only for an owner known not to have connected; it never refuses
-  anything. The owner gets Connect GitHub in it; anyone else is told to
-  pick another owner. An organisation that opens pull requests another way
-  shows none of this.
+  anything. The owner gets Connect GitHub in it; anyone else reads, in the
+  Callout's own ink, "Pick an owner who has connected GitHub, or ask
+  <first name> to connect." An organisation that opens pull requests
+  another way shows none of this.
 
 ### A task's Chat (the conductor)
 

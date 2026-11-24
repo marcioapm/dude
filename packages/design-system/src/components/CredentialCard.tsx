@@ -20,8 +20,8 @@ import styles from "./CredentialCard.module.css";
  *           connected (`onTakeOver`); never a way that would wait again.
  */
 export interface CredentialCardProps extends Omit<HTMLAttributes<HTMLElement>, "children" | "title"> {
-  /** The person it waits on: their full name. */
-  readonly person: string;
+  /** The person it waits on: their full name; null for a person not known (the task's owner). */
+  readonly person: string | null;
   /** The reader is that person: the card is theirs to act on. */
   readonly yours: boolean;
   /** The task branch, pushed and ready. */
@@ -38,13 +38,19 @@ export interface CredentialCardProps extends Omit<HTMLAttributes<HTMLElement>, "
   readonly takingOver?: boolean | undefined;
 }
 
-/** The words a credential wait says, by whose it is: kept here so the card and its tests read the same. */
-export function credentialWords(person: string, yours: boolean, reconnect = false): { title: string; label: string } {
+/**
+ * The words a credential wait says, by whose it is: kept here so the card
+ * and its tests read the same. `person` is their full name, or null when
+ * the wait names nobody known: then it is the task's owner.
+ */
+export function credentialWords(person: string | null, yours: boolean, reconnect = false): { title: string; label: string } {
   const verb = reconnect ? "reconnect" : "connect";
   const Verb = reconnect ? "Reconnect" : "Connect";
-  return yours
-    ? { title: `${Verb} GitHub to open the pull request`, label: `Needs you · ${Verb} GitHub` }
-    : { title: `Waiting for ${person} to ${verb} GitHub`, label: `Needs ${person.split(/\s+/)[0] ?? person} · ${Verb} GitHub` };
+  const first = person?.trim().split(/\s+/)[0] || null;
+  if (yours) return { title: `${Verb} GitHub to open the pull request`, label: `Needs you · ${Verb} GitHub` };
+  return first
+    ? { title: `Waiting for ${person} to ${verb} GitHub`, label: `Needs ${first} · ${Verb} GitHub` }
+    : { title: `Waiting for the task's owner to ${verb} GitHub`, label: `Needs the owner · ${Verb} GitHub` };
 }
 
 export function CredentialCard({ person, yours, branch, reconnect = false, askedAt, onConnect, connecting, onTakeOver, takingOver,
@@ -53,6 +59,7 @@ export function CredentialCard({ person, yours, branch, reconnect = false, asked
   const whyId = useId();
   const words = credentialWords(person, yours, reconnect);
   const asked = toMs(askedAt);
+  const who = person?.trim() || "The task's owner";
   const body: ReactNode = yours ? (
     <p className={styles["body"]}>
       dude opens pull requests as the task's owner, and {reconnect ? "your GitHub connection no longer works" : "you haven't connected your GitHub account"}.
@@ -61,7 +68,7 @@ export function CredentialCard({ person, yours, branch, reconnect = false, asked
   ) : (
     <p className={styles["body"]}>
       The pull request opens as its owner.{" "}
-      {asked !== null ? <>{person} was notified <Duration ms={Math.max(0, Date.now() - asked)} format="age" /> ago.</> : <>{person} was notified.</>}
+      {asked !== null ? <>{who} was notified <Duration ms={Math.max(0, Date.now() - asked)} format="age" /> ago.</> : <>{who} was notified.</>}
     </p>
   );
   return (
@@ -124,7 +131,7 @@ export function CredentialWarning({ person, yours, onConnect, className, ...rest
       {person} hasn't connected GitHub. The task will do its work and then stop before its pull request.{" "}
       {yours && onConnect ? (
         <Button size="sm" variant="quiet" leadingIcon="github" onClick={onConnect} data-testid="credential-warning-connect">Connect GitHub</Button>
-      ) : yours ? null : <span className={styles["hint"]}>Pick another owner to open it as them.</span>}
+      ) : yours ? null : <>Pick an owner who has connected GitHub, or ask {person.trim().split(/\s+/)[0] || person} to connect.</>}
     </Callout>
   );
 }

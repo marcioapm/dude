@@ -43,7 +43,7 @@ export function takeGithubReturn(outcome: string | null): string | null {
 /** The header chip's words while the pull request waits on a person's GitHub. */
 export function credentialLabel(wait: CredentialWait, you: string | null): string {
   const yours = wait.person !== null && wait.person.id === you;
-  return credentialWords(wait.person?.name ?? "the owner", yours, wait.reconnect).label;
+  return credentialWords(wait.person?.name ?? null, yours, wait.reconnect).label;
 }
 
 /**
@@ -73,7 +73,7 @@ export function CredentialWaitPanel({ client, taskId, wait, people, onChanged }:
     }
   };
   return (
-    <CredentialCard person={wait.person?.name ?? "The owner"} yours={yours} branch={wait.branch} reconnect={wait.reconnect} askedAt={wait.askedAt}
+    <CredentialCard person={wait.person?.name ?? null} yours={yours} branch={wait.branch} reconnect={wait.reconnect} askedAt={wait.askedAt}
       connecting={busy === "connect"} takingOver={busy === "take"}
       onConnect={yours ? () => void act("connect", () => connectGithubHere(client)) : undefined}
       onTakeOver={mayTakeOverAndOpen(wait, people) ? () => void act("take", () => client.reassignTask(taskId, people.you!)) : undefined} />

@@ -24,7 +24,7 @@ export function OwnerCredentialsSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="oc-card-owner" title="CredentialCard · the owner's" note="The owner's turn, where the step parked: what is pushed, a primary Connect GitHub that comes back to this task, and a quiet Why as me? that opens one sentence. Reconnect when their connection stopped working.">
+      <Block id="oc-card-owner" title="CredentialCard · the owner's" note="The owner's turn, in the task's notices where an escalation's panel sits: what is pushed, a primary Connect GitHub that comes back to this task, and a quiet Why as me? that opens one sentence. Reconnect when their connection stopped working.">
         <Panes mode={mode}>
           <div data-shot="oc-card-owner" style={{ display: "grid", gap: 12 }}>
             <CredentialCard person="Christophe Moreau" yours branch={BRANCH} askedAt={told} onConnect={noop} />
@@ -40,7 +40,7 @@ export function OwnerCredentialsSection({ mode }: { readonly mode: PaneMode }) {
           </div>
         </Panes>
       </Block>
-      <Block id="oc-warning" title="CredentialWarning · filing and starting" note="An attention Callout under the owner field, wherever a person files, starts or reads a task whose owner has not connected. The owner gets Connect GitHub; anyone else is told to pick another owner.">
+      <Block id="oc-warning" title="CredentialWarning · filing and starting" note="An attention Callout under the owner field, wherever a person files, starts or reads a task whose owner has not connected. The owner gets Connect GitHub; anyone else reads: pick an owner who has connected GitHub, or ask them to connect.">
         <Panes mode={mode}>
           <div data-shot="oc-warning" style={{ display: "grid", gap: 12 }}>
             <CredentialWarning person="Christophe Moreau" yours onConnect={noop} />

@@ -67,18 +67,29 @@ describe("CredentialCard", () => {
     expect(credentialWords("Ana Lima", true, true)).toEqual({ title: "Reconnect GitHub to open the pull request", label: "Needs you · Reconnect GitHub" });
     expect(credentialWords("Ana Lima", false, true).title).toBe("Waiting for Ana Lima to reconnect GitHub");
   });
+
+  test("a wait on nobody known names the task's owner", async () => {
+    expect(credentialWords(null, false)).toEqual({ title: "Waiting for the task's owner to connect GitHub", label: "Needs the owner · Connect GitHub" });
+    expect(credentialWords("", false, true)).toEqual({ title: "Waiting for the task's owner to reconnect GitHub", label: "Needs the owner · Reconnect GitHub" });
+    const el = await mount(<CredentialCard person={null} yours={false} branch="b" askedAt={told} />);
+    expect(q(el, "credential-wait-label")!.textContent).toBe("Needs the owner · Connect GitHub");
+    expect(el.textContent).toContain("The task's owner was notified 42m ago.");
+  });
 });
 
 describe("CredentialWarning", () => {
-  test("the owner gets Connect GitHub; anyone else is told to pick another owner", async () => {
+  test("the owner gets Connect GitHub; anyone else is told to pick a connected owner or ask them", async () => {
     const mine = await mount(<CredentialWarning person="Christophe Moreau" yours onConnect={() => {}} />);
     expect(mine.textContent).toContain("Christophe Moreau hasn't connected GitHub. The task will do its work and then stop before its pull request.");
     expect(q(mine, "credential-warning-connect")).not.toBeNull();
     expect(q(mine, "credential-warning")!.getAttribute("data-tone")).toBe("attention");
+    expect(mine.textContent).not.toContain("Pick an owner");
     await act(async () => root?.unmount());
     host?.remove();
     const theirs = await mount(<CredentialWarning person="Christophe Moreau" yours={false} />);
     expect(q(theirs, "credential-warning-connect")).toBeNull();
-    expect(theirs.textContent).toContain("Pick another owner");
+    expect(theirs.textContent).toContain("before its pull request. Pick an owner who has connected GitHub, or ask Christophe to connect.");
+    // Plain body text in the Callout's own ink: no muted span.
+    expect(q(theirs, "credential-warning")!.querySelector("span")).toBeNull();
   });
 });
