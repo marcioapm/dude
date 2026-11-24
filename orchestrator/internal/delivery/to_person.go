@@ -83,7 +83,28 @@ type ToPerson struct {
 	// request.
 	reviewQuestion *reviewQuestionAsk
 	repository     *repositoryAsk
+	// Credential, on a hold for WhyCredential: what only that person can
+	// give (Connect GitHub), said as question.asked of kind credential once
+	// per Key.
+	Credential *CredentialWait
 }
+
+// CredentialWait is a hold on one person's credential: the pull request
+// opens as PersonID, who has no live GitHub authorization (Reconnect: one
+// that no longer serves).
+type CredentialWait struct {
+	// What it is: "owner_github".
+	Reason   string
+	PersonID string
+	Branch   string
+	// Reconnect: they had connected, and must connect again.
+	Reconnect bool
+	// Once per Key: a sweep of the same wait asks nobody again.
+	Key string
+}
+
+// ReasonOwnerGitHub is a credential wait on the task owner's GitHub.
+const ReasonOwnerGitHub = "owner_github"
 
 // ToPersonTx is the one way anything on a task reaches a person: it
 // inserts an open question addressed to a person, moves the task to
@@ -135,11 +156,33 @@ func ToPersonTx(ctx context.Context, tx pgx.Tx, p ToPerson) (string, error) {
 		// A hold of the task the Ref names (an idle park's).
 		st = &State{ProjectID: p.Ref.ProjectID, TaskID: p.Ref.TaskID}
 	}
-	if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil || e == nil {
+	if _, err := SetTaskStatusTx(ctx, tx, p.Ref.Org, st.ProjectID, st.TaskID, "", "awaiting_input", p.Reason); err != nil {
 		return "", err
+	}
+	if c := p.Credential; c != nil && e == nil {
+		if p.Why != WhyCredential {
+			return "", fmt.Errorf("to person: a credential wait is WhyCredential")
+		}
+		return "", askCredentialTx(ctx, tx, p.Ref.Org, st, c)
+	}
+	if e == nil {
+		return "", nil
 	}
 	return "", emitTx(ctx, tx, p.Ref.Org, st, EvQuestionAsked,
 		map[string]any{"kind": "escalation", "reason": e.Reason, "detail": e.Detail, "actions": e.Actions()})
+}
+
+// askCredentialTx says a credential wait to its person: question.asked of
+// kind credential, which pushes to them and is their item while the
+// delivery waits for it. Once per c.Key.
+func askCredentialTx(ctx context.Context, tx pgx.Tx, org string, st *State, c *CredentialWait) error {
+	var asked bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE task_id = $1 AND event_type = $2
+		AND payload->>'kind' = 'credential' AND payload->>'key' = $3)`, st.TaskID, EvQuestionAsked, c.Key).Scan(&asked); err != nil || asked {
+		return err
+	}
+	return emitTx(ctx, tx, org, st, EvQuestionAsked, map[string]any{"kind": "credential", "reason": c.Reason,
+		"personId": c.PersonID, "branch": c.Branch, "reconnect": c.Reconnect, "key": c.Key})
 }
 
 // askReviewQuestionTx asks the person a reviewer's question the conductor

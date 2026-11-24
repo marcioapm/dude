@@ -1459,7 +1459,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				}); invalidateErr != nil {
 					return "", invalidateErr
 				}
-				return "", forge.OwnerAuthorizationError{}
+				return "", forge.OwnerAuthorizationError{Reconnect: true}
 			}
 			fresh = err == nil
 		}

@@ -314,6 +314,9 @@ func TestARevokedOwnerTokenRequiresReconnectThenOpensOnce(t *testing.T) {
 	if w.attempts(task) != 0 || len(w.gh.Pulls()) != 0 {
 		t.Fatalf("revocation spent retries or opened: attempt=%d pulls=%d", w.attempts(task), len(w.gh.Pulls()))
 	}
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" true" {
+		t.Fatalf("credential asks %q, want one to reconnect for Ana", got)
+	}
 	mustExec(t, w.owner, `UPDATE github_user_authorizations SET access_token = 'fresh-token', reconnect_required = false WHERE person_id = $1`, ana)
 	w.authorizeAgain(task, ana)
 	w.until("a pull request", func() bool { return len(w.gh.Pulls()) == 1 })
@@ -440,5 +443,76 @@ func TestAnOwnersRepositoryRefusalIsShownWithoutFallback(t *testing.T) {
 	}
 	if len(w.gh.Pulls()) != 0 {
 		t.Fatal("refused owner opened a pull request")
+	}
+}
+
+// credentialAsks are the task's question.asked of kind credential, each
+// as "personId reconnect".
+func (w *world) credentialAsks(task string) []string {
+	w.t.Helper()
+	rows, err := w.owner.Query(context.Background(), `SELECT payload->>'personId' || ' ' || (payload->>'reconnect')
+		FROM events WHERE task_id = $1 AND event_type = 'question.asked' AND payload->>'kind' = 'credential'
+		  AND payload->>'reason' = 'owner_github' ORDER BY cursor`, task)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	asks, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return asks
+}
+
+// waitingOnAuthorization: the delivery is parked at openPullRequest for
+// github.authorized.
+func (w *world) waitingOnAuthorization(task string) bool {
+	return w.count(`SELECT count(*) FROM workflow_runs WHERE task_id = $1 AND status = 'waiting'
+		AND step = 'openPullRequest' AND awaiting_signals ? $2`, task, delivery.SignalGitHubAuthorized) == 1
+}
+
+// A pull request waiting on its owner's GitHub is the owner's item: one
+// question.asked of kind credential, addressed to them, which a sweep of
+// the step while they still have not connected does not repeat. Connecting
+// opens the pull request, and the wait is over.
+func TestAnOwnerWithoutGitHubIsAskedOnceThenThePullRequestOpens(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" false" {
+		t.Fatalf("credential asks %q, want one for Ana", got)
+	}
+	var branch string
+	_ = w.owner.QueryRow(context.Background(), `SELECT payload->>'branch' FROM events WHERE task_id = $1 AND payload->>'kind' = 'credential'`, task).Scan(&branch)
+	if branch != delivery.BranchFor(task, 1) {
+		t.Fatalf("the ask names branch %q", branch)
+	}
+	// The step runs again with Ana still not connected: nobody is told twice.
+	w.authorizeAgain(task, ana)
+	w.until("the step swept again", func() bool {
+		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
+	})
+	if got := w.credentialAsks(task); len(got) != 1 {
+		t.Fatalf("a second sweep asked again: %q", got)
+	}
+	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+	w.connectOwner(ana, "ana-token", 1)
+	w.authorizeAgain(task, ana)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if w.waitingOnAuthorization(task) {
+		t.Fatal("still waiting on the authorization")
+	}
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer ana-token" {
+		t.Fatalf("creation auth %v", got)
+	}
+	if got := w.credentialAsks(task); len(got) != 1 {
+		t.Fatalf("credential asks after opening %q", got)
 	}
 }
