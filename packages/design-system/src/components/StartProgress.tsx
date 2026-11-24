@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { FRESH_START_STAGES, START_STAGES, START_STAGE_WORDS, type StartStage } from "@dude/domain";
+import { FRESH_START_STAGES, OPTIONAL_START_STAGES, START_STAGES, START_STAGE_WORDS, type StartStage } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Icon } from "../icons/index.tsx";
 import { Button } from "../primitives/Button.tsx";
@@ -22,6 +22,8 @@ export interface StartStep {
   readonly tookMs?: number | undefined;
   /** Current (or failed): since when, lux's `stageSince`. */
   readonly since?: string | number | Date | undefined;
+  /** Current: what it is doing now, under its label in muted mono (a setup script's latest line). */
+  readonly detail?: string | undefined;
 }
 
 /** What kind of start it is: names the default verb and the failure's words. */
@@ -39,29 +41,34 @@ export interface StartStepsInput {
   readonly stages?: readonly StartStage[] | undefined;
   /** The pool it waits in: `waiting` reads "Waiting for a machine in <pool>" while current or pending. */
   readonly pool?: string | null | undefined;
+  /** The current stage's words in place of the shared ones ("Running abs's setup script"). */
+  readonly label?: string | null | undefined;
+  /** The current stage's latest line (StartStep.detail). */
+  readonly detail?: string | null | undefined;
 }
 
 /**
  * The steps of a start from the shared words and a stage list. A stage
  * lux reports that the list leaves out (a resume that pulled its image
  * after all) is drawn in its place in lux's order; stages that never
- * occur are not drawn.
+ * occur are not drawn, nor an optional one (a setup script) not reported.
  */
-export function startSteps({ stage, since, done = [], failed, stages = FRESH_START_STAGES, pool }: StartStepsInput): StartStep[] {
-  const present = new Set<StartStage>(stages);
+export function startSteps({ stage, since, done = [], failed, stages = FRESH_START_STAGES, pool, label: nowLabel, detail }: StartStepsInput): StartStep[] {
+  const present = new Set<StartStage>(stages.filter((s) => !OPTIONAL_START_STAGES.includes(s)));
   if (stage) present.add(stage);
   for (const d of done) present.add(d.stage);
   const order = START_STAGES.filter((s) => present.has(s));
   const at = stage ? order.indexOf(stage) : -1;
   return order.map((id, i) => {
     const words = START_STAGE_WORDS[id];
-    const label = id === "waiting" && pool ? `${words.now} in ${pool}` : words.now;
+    const label = i === at && nowLabel ? nowLabel : id === "waiting" && pool ? `${words.now} in ${pool}` : words.now;
     const state: StartStepState = at < 0 ? "pending" : i < at ? "done" : i === at ? (failed ? "failed" : "current") : "pending";
     const tookMs = state === "done" ? done.find((d) => d.stage === id)?.tookMs : undefined;
     return {
       id, label, doneLabel: words.done, state,
       ...(tookMs !== undefined ? { tookMs } : {}),
       ...(i === at && since !== null && since !== undefined ? { since } : {}),
+      ...(i === at && state === "current" && detail ? { detail } : {}),
     };
   });
 }
@@ -150,6 +157,7 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
               : st.state === "current" && st.since !== undefined ? <Clock since={st.since} />
               : st.state === "failed" ? <span className={styles["stepFailed"]}>failed</span> : null}
           </span>
+          {st.detail ? <code className={styles["stepDetail"]} data-testid="start-step-detail">{st.detail}</code> : null}
         </li>
       ))}
     </ol>
@@ -225,7 +233,15 @@ export function StartProgress({ kind = "start", verb: verbProp, steps, startedAt
             </span>
           </div>
         ) : null}
+        {current?.detail && !open ? <code className={styles["detail"]} title={current.detail} data-testid="start-detail">{current.detail}</code> : null}
         {current ? stepper : null}
+        {current ? (
+          // How far through its stages: done stages fill it, the current one breathes (frozen under reduced motion).
+          <span className={styles["bar"]} aria-hidden data-testid="start-bar">
+            <span className={styles["barFill"]} style={{ width: `${(100 * steps.filter((st) => st.state === "done").length) / steps.length}%` }} />
+            <span className={styles["barNow"]} style={{ left: `${(100 * steps.filter((st) => st.state === "done").length) / steps.length}%`, width: `${100 / steps.length}%` }} />
+          </span>
+        ) : null}
         <span className="ds-sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="start-announce">{announce}</span>
       </div>
     </section>

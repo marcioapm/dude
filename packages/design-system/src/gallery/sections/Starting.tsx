@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MOVE_STAGES, RESUME_STAGES, type StartStage } from "@dude/domain";
+import { MOVE_STAGES, RESUME_STAGES, setupStageWords, type StartStage } from "@dude/domain";
 import { Block, Label, Panes, Section, type PaneMode } from "../Frame.tsx";
 import { WhenNear } from "./Relations.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
@@ -38,13 +38,13 @@ function Playing() {
   );
 }
 
-function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow, failed, plain, open, role = "brainstorm", id }: {
+function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow, failed, plain, open, role = "brainstorm", id, label, detail }: {
   kind?: StartKind; verb?: string; stage: StartStage | null; since: number; startedAt: number;
   done?: ReadonlyArray<{ stage: StartStage; tookMs: number }>; stages?: readonly StartStage[]; pool?: string;
   slow?: { note: string; reason?: string }; failed?: string | null; plain?: boolean; open?: boolean;
-  role?: "brainstorm" | "implementer" | "conductor"; id: string;
+  role?: "brainstorm" | "implementer" | "conductor"; id: string; label?: string; detail?: string;
 }) {
-  const steps = startSteps({ stage, since, done, failed: failed !== undefined, stages, pool });
+  const steps = startSteps({ stage, since, done, failed: failed !== undefined, stages, pool, label, detail });
   return (
     <StartProgress kind={kind} verb={verb} steps={steps} startedAt={startedAt} avatar={<AgentAvatar role={role} size="chat" />}
       slowNote={slow?.note} slowReason={slow?.reason} defaultOpen={open} data-testid={id}
@@ -55,7 +55,11 @@ function Example({ kind, verb, stage, since, startedAt, done, stages, pool, slow
 const RESUME_DONE = [{ stage: "waiting" as const, tookMs: 9_400 }, { stage: "image" as const, tookMs: 600 },
   { stage: "volumes" as const, tookMs: 8_000 }, { stage: "repositories" as const, tookMs: 900 }];
 
-const startingBlockIds: ReadonlySet<string> = new Set(["st-play", "st-states", "st-failed", "st-move", "st-chip"]);
+/** A fresh start's stages up to the container, as the prod brainstorm that ran abs's setup script took them. */
+const TO_CONTAINER = [{ stage: "waiting" as const, tookMs: 2_000 }, { stage: "image" as const, tookMs: 15_000 },
+  { stage: "volumes" as const, tookMs: 4_000 }, { stage: "repositories" as const, tookMs: 14_000 }, { stage: "container" as const, tookMs: 9_900 }];
+
+const startingBlockIds: ReadonlySet<string> = new Set(["st-play", "st-states", "st-setup", "st-failed", "st-move", "st-chip"]);
 
 export function StartingSection({ mode }: { readonly mode: PaneMode }) {
   return (
@@ -79,11 +83,29 @@ export function StartingSection({ mode }: { readonly mode: PaneMode }) {
           <Example id="start-legacy" stage={null} since={ago(12)} startedAt={ago(12)} />
         </Panes>
       </Block>
+      <Block id="st-setup" title="StartProgress: a repository's setup script"
+        note={`A start lists every stage until the agent's first turn, a repository's setup script included: dude's own stage between the container and the agent, named for its repository, with its clock and its latest line in muted mono (redacted, at most 200 characters, at most every 3 s). It is drawn only when a script runs: none, or one its checkout already ran, and the stage is not there. "Starting the agent" follows it and ends when the agent is up, not when lux says running; the "Started in" line then counts both, the setup's time on its own line.`}>
+        <Panes mode={mode}>
+          <Label>setup running, its latest line under it</Label>
+          <Example id="start-setup" stage="setup" since={ago(152)} startedAt={ago(198)} done={TO_CONTAINER}
+            label={setupStageWords("abs")} detail="abs setup: npm ci (frontend) — added 1412 packages in 38s" />
+          <Label>opened: the stages, the line under the current one, the next greyed</Label>
+          <Example id="start-setup-open" stage="setup" since={ago(152)} startedAt={ago(198)} done={TO_CONTAINER}
+            label={setupStageWords("abs")} detail="abs setup: prisma generate" open />
+          <Label>setup done: starting the agent</Label>
+          <Example id="start-setup-agent" stage="running" since={ago(3)} startedAt={ago(325)} done={[...TO_CONTAINER, { stage: "setup", tookMs: 275_000 }]} open />
+          <Label>no setup script (or it already ran in this checkout): no setup stage</Label>
+          <Example id="start-setup-skipped" stage="running" since={ago(4)} startedAt={ago(50)} done={TO_CONTAINER} open />
+        </Panes>
+      </Block>
       <Block id="st-failed" title="StartProgress: failed"
         note="The transcript's danger Callout, naming the stage and lux's reason, with Try again; the stages folded under it, the failed one crossed.">
         <Panes mode={mode}>
           <Example id="start-failure" stage="image" since={ago(47)} startedAt={ago(53)} done={[{ stage: "waiting", tookMs: 5_800 }]}
             failed="pull failed: manifest unknown" role="implementer" open />
+          <Label>its setup script failed (the app's sentence; the app shows the script's output under it)</Label>
+          <Example id="start-failure-setup" stage="setup" since={ago(60)} startedAt={ago(106)} done={TO_CONTAINER} plain open
+            label={setupStageWords("abs")} failed="The setup script of abs failed with exit code 1: npm ERR! missing lockfile" />
           <Label>before lux, the app's own sentence (plain)</Label>
           <Example id="start-failure-plain" stage={null} since={ago(2)} startedAt={ago(2)} plain
             failed="The Brainstorm runs on Fast, which names no model yet. An admin sets it in Models." />

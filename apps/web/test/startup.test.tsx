@@ -680,3 +680,97 @@ describe("a conductor's Chat", () => {
     expect(page.querySelectorAll("[data-testid=start-retry]").length).toBe(0);
   });
 });
+
+/**
+ * Prod brainstorm ssn_0mwun910m5bbb8ce3c2768023 (Run run_0mwun910u5f2ae86ca2219247), as its events came: lux's
+ * stages to running at 12:02:07.86, run.started at 12:02:08, then the abs setup script (4m36s) before the harness,
+ * the agent's session and prompt at 12:06:44, its first message at 12:06:53.
+ */
+describe("a repository's setup script in the start (prod sequence)", () => {
+  const P0 = Date.parse("2026-11-24T12:01:22Z");
+  const t = (hms: string) => Date.parse(`2026-11-24T${hms}Z`) - T0;
+  const since = (hms: string) => new Date(P0 - Date.parse("2026-11-24T12:01:22Z") + Date.parse(`2026-11-24T${hms}Z`)).toISOString();
+  const luxStage = (s: string, hms: string) => ev("run.stage", { stage: s, since: since(hms), epoch: 1 }, t(hms));
+  const prod = () => [
+    ev("run.created", { role: "brainstorm" }, t("12:01:22")),
+    message("where does metering go?", t("12:01:22.2")),
+    ev("session.briefed", { text: "the briefing" }, t("12:01:22.5")),
+    luxStage("waiting", "12:01:23"),
+    luxStage("image", "12:01:25"),
+    luxStage("volumes", "12:01:40"),
+    luxStage("repositories", "12:01:44"),
+    luxStage("container", "12:01:58"),
+    luxStage("running", "12:02:07.860"),
+    ev("run.started", { status: "running" }, t("12:02:08")),
+    ev("run.stage", { stage: "setup", since: since("12:02:08.400"), epoch: 1, repository: "abs" }, t("12:02:08.400")),
+    ev("run.setup.progress", { repository: "abs", line: "abs setup: npm ci (backend)", epoch: 1 }, t("12:02:11")),
+    ev("run.setup.progress", { repository: "abs", line: "abs setup: generate:api", epoch: 1 }, t("12:06:30")),
+    ev("run.stage", { stage: "running", since: since("12:06:43.500"), epoch: 1, setup: true }, t("12:06:43.500")),
+    ev("agent.session.started", { role: "brainstorm", externalSessionId: "ses_x" }, t("12:06:44")),
+    ev("agent.prompt.delivered", { text: "the briefing" }, t("12:06:44.200")),
+    ev("agent.message", { text: "Looking at the metering code." }, t("12:06:53")),
+  ];
+  const upTo = (type: string, nth = 1) => {
+    const events = prod();
+    let seen = 0;
+    return events.slice(0, events.findIndex((e) => e.eventType === type && ++seen === nth) + 1);
+  };
+
+  test("setup, then Starting the agent until agent.session.started, then thinking until the first message", () => {
+    // Setup running, after run.started: still starting, in setup, naming abs, with its latest line.
+    const inSetup = project(upTo("run.setup.progress", 2), "running");
+    expect(inSetup.start).toMatchObject({ kind: "start", stage: "setup", stageSince: since("12:02:08.400"),
+      setup: { repository: "abs", line: "abs setup: generate:api" } });
+    expect(inSetup.start!.done.map((d) => d.stage)).toEqual(["waiting", "image", "volumes", "repositories", "container"]);
+    expect(inSetup.turns.some((t) => t.kind === "notice" && t.text.startsWith("Started in"))).toBe(false);
+    expect(inSetup.activity).toBeNull();
+    // The message its briefing carries is read once the agent is up, not when lux said running.
+    const asked = (c: ReturnType<typeof project>) => c.turns.find((t) => t.kind === "human");
+    expect(asked(inSetup)).toMatchObject({ deliveredAt: null });
+    // Setup done: Starting the agent, lux reporting it running all along.
+    const harness = project(upTo("run.stage", 8), "running");
+    expect(harness.start).toMatchObject({ stage: "running", stageSince: since("12:06:43.500") });
+    expect(harness.start!.done.at(-1)).toEqual({ stage: "setup", tookMs: 275_100 });
+    // The agent's session: the start is over; "Started in" counts setup and the harness.
+    const up = project(upTo("agent.session.started"), "running");
+    expect(up.start).toBeNull();
+    const line = up.turns.find((t) => t.kind === "notice" && t.text.startsWith("Started in"));
+    expect(line).toMatchObject({ text: "Started in 5m 22s." });
+    expect(line && line.kind === "notice" ? line.title!.split("\n") : []).toContain("Setup script ran 4m 35s");
+    expect(asked(up)).toMatchObject({ deliveredAt: at(t("12:06:44")) });
+    // Its prompt landed: thinking, timed from it, until the first message.
+    const prompted = project(upTo("agent.prompt.delivered"), "running");
+    expect(prompted).toMatchObject({ activity: "thinking", thinkingSince: at(t("12:06:44.200")) });
+    const said = project(prod(), "running");
+    expect(said.activity).toBeNull();
+    // Folded one event at a time, the same.
+    const live = emptyProjection();
+    for (const e of prod()) apply(live, [e]);
+    expect(snapshot(live, "running").turns.filter((t) => t.kind === "notice").map((t) => t.kind === "notice" && t.text)).toEqual(["Started in 5m 22s."]);
+  });
+
+  test("an older stream with no setup and no agent.session.started renders as before: run.started ends the start", () => {
+    const old = [created(), stage("waiting", 0), stage("image", 4_000), stage("running", 9_000), ev("run.started", {}, 12_000),
+      ev("agent.message", { text: "hi" }, 40_000)];
+    const c = project(old, "running");
+    expect(c.start).toBeNull();
+    const notices = c.turns.filter((t) => t.kind === "notice");
+    expect(notices).toEqual([expect.objectContaining({ text: "Started in 12s.", title: "Machine found 4.0s\nImage ready 5.0s\nAgent started 3.0s", at: at(12_000) })]);
+    expect(project(old.slice(0, 5)).start).toBeNull();
+  });
+
+  test("a start with no setup script (none, or skipped by its marker) never shows the setup stage", () => {
+    const c = project([created(), stage("waiting", 0), stage("container", 3_000)], "scheduled");
+    expect(c.start!.stage).toBe("container");
+    expect(c.start!.setup).toBeUndefined();
+  });
+
+  test("a setup script that fails fails the start in setup, its stages and output kept", () => {
+    const events = [...upTo("run.setup.progress", 1), ev("run.failed", { error: "The setup script of abs failed with exit code 1: npm ERR! boom",
+      reason: "exit code 1", setup: { repository: "abs", exitCode: 1, output: "npm ERR! boom" } }, t("12:03:00"))];
+    const c = project(events, "failed");
+    const ended = c.turns.find((t) => t.kind === "ended");
+    expect(ended && ended.kind === "ended" ? ended.start : null).toMatchObject({ stage: "setup", failed: { source: "dude", setup: { repository: "abs" } } });
+    expect(c.startFailed).toMatchObject({ stage: "setup" });
+  });
+});
