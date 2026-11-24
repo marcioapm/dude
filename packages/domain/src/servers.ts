@@ -161,9 +161,6 @@ export const previewSettingsSchema = z.object({
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 
-/** A task's own choice on automatic task previews: null follows its project's (PATCH /v1/tasks/:id). */
-export const taskAutoPreviewSchema = z.boolean().nullable();
-
 export type ServerState = "stopped" | "starting" | "ready" | "unreachable" | "exited";
 
 /**

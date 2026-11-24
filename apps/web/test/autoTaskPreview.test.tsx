@@ -18,7 +18,7 @@ import type { Task, TaskDetail, TaskFields } from "../src/api/client.ts";
 import { PeopleProvider } from "../src/people.tsx";
 import { ProjectSettingsScreen } from "../src/screens/ProjectSettingsScreen.tsx";
 import { TaskScreen } from "../src/screens/TaskScreen.tsx";
-import { AutoPreviewControl, autoPreviewInEffect } from "../src/screens/AutoPreviewControl.tsx";
+import { AutoPreviewControl } from "../src/screens/AutoPreviewControl.tsx";
 
 let unmount: (() => Promise<void>) | undefined;
 const remount = async () => { await unmount?.(); unmount = undefined; document.body.innerHTML = ""; };
@@ -132,9 +132,7 @@ test("a task following its project says which way the project goes, and what is 
     await click(select);
     const options = await until(() => { const o = allByRole(document.body, "option"); return o.length ? o : undefined; }, "options");
     expect(options.map(accessibleName)).toEqual([`Use project default (${project ? "On" : "Off"})`, "On", "Off"]);
-    await unmount?.();
-    unmount = undefined;
-    document.body.innerHTML = "";
+    await remount();
   }
 });
 
@@ -142,8 +140,7 @@ test("a task's own On or Off wins over its project's, and each choice is saved a
   const off = await taskRow(new TaskRecording("a"), { id: "wi_1", autoTaskPreview: false, projectAutoTaskPreview: true });
   expect(byRole(off, "combobox", "Automatic preview").textContent).toBe("Off");
   expect(effect(off)).toBe("Effective: Off · task override");
-  await unmount?.();
-  document.body.innerHTML = "";
+  await remount();
 
   const client = new TaskRecording("a");
   const row = await taskRow(client, { id: "wi_1", autoTaskPreview: true, projectAutoTaskPreview: false });
@@ -196,9 +193,4 @@ test("the task's Overview shows the choice in its This task block, and saves it"
   await pick(row, "Automatic preview", "Off");
   await until(() => client.changes.length === 1 || undefined, "saved");
   expect(client.changes).toEqual([{ autoTaskPreview: false }]);
-});
-
-test("in effect: the task's own choice, else the project's", () => {
-  expect([autoPreviewInEffect(null, true), autoPreviewInEffect(null, false), autoPreviewInEffect(false, true), autoPreviewInEffect(true, false)])
-    .toEqual([true, false, false, true]);
 });

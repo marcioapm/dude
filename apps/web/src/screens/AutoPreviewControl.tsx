@@ -21,15 +21,10 @@ type Choice = "project" | "on" | "off";
 const toChoice = (v: boolean | null | undefined): Choice => (v === true ? "on" : v === false ? "off" : "project");
 const onOff = (v: boolean) => (v ? "On" : "Off");
 
-/** What the task's choice comes to: its own, else its project's. */
-export function autoPreviewInEffect(own: boolean | null | undefined, project: boolean): boolean {
-  return own ?? project;
-}
-
-/** The hint under the choice: what it governs, and what is in effect. */
-export function autoPreviewHint(own: boolean | null, project: boolean): string {
+/** The hint under the choice: what it governs, and what is in effect (its own, else its project's). */
+function autoPreviewHint(own: boolean | null, project: boolean): string {
   return "Only whether dude prepares this task’s preview when it opens or reopens the pull request. A preview someone asks for still starts. "
-    + `Effective: ${onOff(autoPreviewInEffect(own, project))} · ${own === null ? "project default" : "task override"}`;
+    + `Effective: ${onOff(own ?? project)} · ${own === null ? "project default" : "task override"}`;
 }
 
 export function AutoPreviewControl({ client, task, onChanged }: {
@@ -51,9 +46,10 @@ export function AutoPreviewControl({ client, task, onChanged }: {
     if (to === value) return;
     setShown(to);
     setBusy(true);
+    const next = to === "project" ? null : to === "on";
     try {
-      await client.updateTask(task.id, { autoTaskPreview: to === "project" ? null : to === "on" });
-      toast({ title: `Automatic preview ${onOff(autoPreviewInEffect(to === "project" ? null : to === "on", project)).toLowerCase()} for this task`, tone: "success" });
+      await client.updateTask(task.id, { autoTaskPreview: next });
+      toast({ title: `Automatic preview ${onOff(next ?? project).toLowerCase()} for this task`, tone: "success" });
       onChanged();
     } catch (err) {
       setShown(null);

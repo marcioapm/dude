@@ -12,7 +12,7 @@ import { z } from "zod";
 import { SQL } from "bun";
 import {
   EventTypes, TASK_GOAL_TOO_SHORT, TASK_GOAL_TOO_SHORT_DETAILS, epicState, epicStateSchema, newId, setupScriptInput,
-  taskAutoPreviewSchema, taskCriteriaInput, taskGoalInput, taskGoalShortBy, type EpicState,
+  taskCriteriaInput, taskGoalInput, taskGoalShortBy, type EpicState,
 } from "@dude/domain";
 import { withOrg, type OrgScope } from "../../db/client.ts";
 import { badRequest, conflict, json, noContent, notFound, parseBody } from "../http.ts";
@@ -362,7 +362,7 @@ const updateTaskInput = z.object({
   /** The answer to superseded_required for its source (createTask's). */
   supersede: supersedeInput,
   /** Automatic task previews: true or false, or null to follow its project's; never fixed by a delivery. */
-  autoTaskPreview: taskAutoPreviewSchema,
+  autoTaskPreview: z.boolean().nullable(),
 }).partial();
 
 /**
