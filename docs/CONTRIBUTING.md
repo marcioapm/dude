@@ -741,20 +741,17 @@ row held by a follower. Keep the lock order.
   `StartBranchPreview` of a project linked to its session, refused before
   the service is asked for any other. Both record the agent's Run as actor
   (`run.created`, actor type `agent`), and a repeat returns the live preview.
-  Its first ready (`Feed.Apply`'s `server.state` ready, setting
-  `runs.preview_ready_at` from NULL under the Run's row lock) also posts one
-  `agent.message` `{text, previewReady}` "Ready for your look" with each
-  server's name and URL (`servers/announce.go`): on the task's latest
+  Its first ready (`Feed.Apply` setting `runs.preview_ready_at` from NULL
+  under the Run's row lock) posts one `agent.message` `{text, previewReady}`
+  "Ready for your look" (`servers/announce.go`): on the task's latest
   conductor for a task preview, on the starting session agent's Run for a
-  branch preview. `preview_ready_at` is the once-only record, so replays,
-  two followers and park→wake never repeat it; a new preview Run has its
-  own. A preview whose `run.created` actor is not an agent says nothing.
+  branch preview. `preview_ready_at` makes it once per preview Run, across
+  replays, followers and park→wake. A preview whose `run.created` actor is
+  not an agent says nothing.
   An agent's preview starts itself: its insert sets `runs.wake_wanted_at`
-  (`agentWakes`), which `createServers` keeps when it moves the Run from
-  `pending` to `paused`, and the next sweep wakes it as it would a URL's
-  request; nobody has to open it for the first ready. A person's preview is
-  inserted with no wake and sleeps until opened. Only that first start is
-  automatic: once parked, an agent's preview wakes on request like any other.
+  (`agentWakes`), which `createServers` keeps (`pending` → `paused`), and
+  the next sweep wakes it. A person's sleeps until opened. Only that first
+  start is automatic.
 - **A wakeable preview** (`runs.wakeable`, lux#41) is lux servers of its
   own (`preview_servers`), one per recipe marked to start in previews, at
   `<server>-<task key>-<project slug>.<preview domain>` — one DNS label
