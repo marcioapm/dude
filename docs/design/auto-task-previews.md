@@ -64,8 +64,14 @@ automatic preview; nothing reconciles it.
   all), the row's help adds a hint linking to **Definitions**. It still
   saves; nothing warns at run time.
 - Task Overview → This task: **Automatic preview**, `Use project default
-  (On|Off)` / `On` / `Off`, and what is in effect. Its help says it governs
-  only the automatic preparation; a preview someone asks for still starts.
+  (On|Off)` / `On` / `Off`, rendered with the rail's task-choice component
+  (`BeforePullRequestFact`, as Before the pull request is). Its hint says it
+  governs only the automatic preparation (a preview someone asks for still
+  starts) and ends with `Effective: On|Off · project default|task override`.
+  Disabled with the reason once the task is done, failed or aborted.
 
-Built from existing design-system components (`SettingRow`, `Select`); no
-design-system change.
+Built from existing design-system components (`SettingRow`, `Select`,
+`BeforePullRequestFact`); no design-system change.
+
+Previews must sleep and wake on the deployment (lux's relative hostnames, or
+a preview domain): otherwise `wakeable` is false and nothing is prepared.

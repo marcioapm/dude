@@ -32,7 +32,7 @@ export function autoPreviewInEffect(own: boolean | null | undefined, project: bo
 /** The hint under the choice: what it governs, and what is in effect. */
 export function autoPreviewHint(own: boolean | null, project: boolean): string {
   return "Only whether dude prepares this task’s preview when it opens or reopens the pull request. A preview someone asks for still starts. "
-    + `In effect: ${onOff(autoPreviewInEffect(own, project))} · ${own === null ? "project default" : "this task"}`;
+    + `Effective: ${onOff(autoPreviewInEffect(own, project))} · ${own === null ? "project default" : "task override"}`;
 }
 
 export function AutoPreviewControl({ client, task, onChanged }: {

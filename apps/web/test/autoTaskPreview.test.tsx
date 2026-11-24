@@ -80,7 +80,7 @@ test("on with no server starting in previews: a hint to Definitions, and it save
   expect(hint(row)).toBeNull();
   await pick(row, "Automatic task previews", "On");
   const shown = await until(() => hint(row) ?? undefined, "the hint");
-  expect(shown.textContent).toContain("Mark a server to start in previews");
+  expect(shown.textContent).toContain("Choose a server to start in previews");
   const link = byRole(shown, "link", "Definitions");
   expect(link.getAttribute("href")).toBe("#definitions");
   expect(document.getElementById("definitions")).not.toBeNull();
@@ -118,14 +118,14 @@ async function taskRow(client: FixtureClient, given: RowTask) {
 }
 
 // The in-effect line, the end of the choice's hint.
-const effect = (row: HTMLElement) => /In effect: .*$/.exec(row.textContent ?? "")?.[0] ?? "";
+const effect = (row: HTMLElement) => /Effective: .*$/.exec(row.textContent ?? "")?.[0] ?? "";
 
 test("a task following its project says which way the project goes, and what is in effect", async () => {
   for (const project of [false, true]) {
     const row = await taskRow(new TaskRecording("a"), { id: "wi_1", autoTaskPreview: null, projectAutoTaskPreview: project });
     const select = byRole(row, "combobox", "Automatic preview");
     expect(select.textContent).toBe(`Use project default (${project ? "On" : "Off"})`);
-    expect(effect(row)).toBe(`In effect: ${project ? "On" : "Off"} · project default`);
+    expect(effect(row)).toBe(`Effective: ${project ? "On" : "Off"} · project default`);
     expect(row.textContent).toContain("when it opens or reopens the pull request");
     expect(row.textContent).toContain("A preview someone asks for still starts.");
     await click(select);
@@ -140,20 +140,20 @@ test("a task following its project says which way the project goes, and what is 
 test("a task's own On or Off wins over its project's, and each choice is saved as true, false or null", async () => {
   const off = await taskRow(new TaskRecording("a"), { id: "wi_1", autoTaskPreview: false, projectAutoTaskPreview: true });
   expect(byRole(off, "combobox", "Automatic preview").textContent).toBe("Off");
-  expect(effect(off)).toBe("In effect: Off · this task");
+  expect(effect(off)).toBe("Effective: Off · task override");
   await unmount?.();
   document.body.innerHTML = "";
 
   const client = new TaskRecording("a");
   const row = await taskRow(client, { id: "wi_1", autoTaskPreview: true, projectAutoTaskPreview: false });
   expect(byRole(row, "combobox", "Automatic preview").textContent).toBe("On");
-  expect(effect(row)).toBe("In effect: On · this task");
+  expect(effect(row)).toBe("Effective: On · task override");
   await pick(row, "Automatic preview", "Off");
   await until(() => client.changes.length === 1 || undefined, "saved");
-  expect(effect(row)).toBe("In effect: Off · this task");
+  expect(effect(row)).toBe("Effective: Off · task override");
   await pick(row, "Automatic preview", "Use project default (Off)");
   await until(() => client.changes.length === 2 || undefined, "saved");
-  expect(effect(row)).toBe("In effect: Off · project default");
+  expect(effect(row)).toBe("Effective: Off · project default");
   expect(client.changes).toEqual([{ autoTaskPreview: false }, { autoTaskPreview: null }]);
 });
 
@@ -188,7 +188,7 @@ test("the task's Overview shows the choice in its This task block, and saves it"
   await settle();
   const row = await until(() => block.querySelector<HTMLElement>("[data-testid=task-auto-preview]"), "the automatic preview choice");
   expect(byRole(row, "combobox", "Automatic preview").textContent).toBe("Use project default (On)");
-  expect(effect(row)).toBe("In effect: On · project default");
+  expect(effect(row)).toBe("Effective: On · project default");
   await pick(row, "Automatic preview", "Off");
   await until(() => client.changes.length === 1 || undefined, "saved");
   expect(client.changes).toEqual([{ autoTaskPreview: false }]);

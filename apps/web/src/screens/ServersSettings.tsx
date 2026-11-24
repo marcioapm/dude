@@ -131,10 +131,10 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             Prepare a task’s preview when dude opens or reopens the task’s pull request. It starts only when someone opens it. A task can say otherwise.
             {previews.autoTaskPreview && !recipes.some((r) => r.autostartInPreviews) ? (
               <span className="autoPreviewHint" data-testid="auto-task-preview-hint">
-                {recipes.length === 0 ? "Add a server that starts in previews; until then no preview is prepared. " : "Mark a server to start in previews; until then no preview is prepared. "}
+                {recipes.length === 0 ? "Add a server that starts in previews; until then no preview is prepared. " : "Choose a server to start in previews; until then no preview is prepared. "}
                 <a href="#definitions" onClick={(e) => {
                   e.preventDefault();
-                  document.getElementById("definitions")?.scrollIntoView({ block: "start" });
+                  document.getElementById("definitions")?.scrollIntoView({ block: "center", behavior: "smooth" });
                 }}>Definitions</a>
               </span>
             ) : null}
@@ -186,7 +186,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             {secrets.filter((s) => s.recipients.includes("previews")).length} reach previews{" "}
             <a href="#secrets" onClick={(e) => {
               e.preventDefault();
-              document.getElementById("secrets")?.scrollIntoView({ block: "start" });
+              document.getElementById("secrets")?.scrollIntoView({ block: "center", behavior: "smooth" });
             }}>Manage</a>
           </span>
         </SettingRow>

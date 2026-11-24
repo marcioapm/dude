@@ -50,6 +50,8 @@ With **Automatic task previews** on, when dude opens a pull request for a task â
 
 It needs a server that starts in previews. With none, nothing is prepared and nothing complains; the setting shows a hint pointing to **Definitions** instead.
 
+It also needs previews that sleep and wake on this deployment: a lux that names preview hostnames itself (relative previews), or a preview domain set for dude. Without either, no automatic preview is prepared, whatever the setting says; ask whoever runs dude.
+
 Each task can say otherwise, in its Overview under **This task â†’ Automatic preview**: **Use project default** (it says which way the project goes), **On** or **Off**. It only decides that automatic preparation: a task set to **Off** still gets a preview when someone, or its conductor, asks for one. From the CLI: `dude task update TASK --auto-preview on|off|project`.
 
 ## Commenting on a preview
