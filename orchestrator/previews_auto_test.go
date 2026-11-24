@@ -144,6 +144,9 @@ func TestAutoPreviewOffByDefaultPreparesNothing(t *testing.T) {
 func TestAutoPreviewOnPreparesOneDormantTaskPreview(t *testing.T) {
 	w := autoWorld(t, true)
 	task := w.task()
+	// The task's conductor: without one announceReady stays quiet for any
+	// preview, and "no ready message" would prove nothing.
+	w.conductorOf(task)
 	committed := -1
 	w.store.AutoPreview = func(ctx context.Context, org, taskID string) error {
 		// Read on another connection: only a committed record is seen.
@@ -163,13 +166,20 @@ func TestAutoPreviewOnPreparesOneDormantTaskPreview(t *testing.T) {
 		t.Fatalf("%d branch previews for a task's pull request", n)
 	}
 	w.dormant(runID)
+	w.openedNotAnnounced(runID)
+}
+
+// openedNotAnnounced: automatic preview runID, its URL opened, gets ready
+// and says nothing — though its task has a conductor to say it.
+func (w *world) openedNotAnnounced(runID string) {
+	w.t.Helper()
 	w.open(w.serverID(runID, "web"))
 	w.until("ready once opened", func() bool {
 		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
 	})
 	w.pump()
 	if n := w.allReadyMessages(); n != 0 {
-		t.Fatalf("%d ready messages for an automatic preview opened by a person", n)
+		w.t.Fatalf("%d ready messages for an automatic preview opened by a person", n)
 	}
 }
 
@@ -210,6 +220,7 @@ func TestAutoPreviewFollowsTheTaskThenTheProject(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			w := autoWorld(t, c.project)
 			task := w.task()
+			w.conductorOf(task)
 			w.taskOverride(task, c.task)
 			w.openTaskPR(task)
 			if !c.wantMaybe {
@@ -255,6 +266,7 @@ func TestAutoPreviewTaskOffDoesNotBlockAnExplicitPreview(t *testing.T) {
 func TestAutoPreviewOnReopenEnsuresOnePreview(t *testing.T) {
 	w := autoWorld(t, true)
 	task := w.task()
+	w.conductorOf(task)
 	id, number := w.openTaskPR(task)
 	first := w.livePreviewID(task)
 
@@ -294,6 +306,7 @@ func TestAutoPreviewOnReopenEnsuresOnePreview(t *testing.T) {
 		t.Fatalf("%d previews (%d live) after reopening, want a new one beside the ended", all, live)
 	}
 	w.dormant(w.livePreviewID(task))
+	w.openedNotAnnounced(w.livePreviewID(task))
 }
 
 // 6b. The pull request step finding on GitHub a pull request that is
