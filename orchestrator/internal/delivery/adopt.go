@@ -168,6 +168,7 @@ func (w *steps) keepAdoptedPullRequest(ctx context.Context, sc workflow.StepCont
 func (s *Store) recordAdopted(ctx context.Context, org string, st *State, repo Repository, pr forge.Status) (string, error) {
 	src := st.Source
 	id := ids.New(ids.PullRequest)
+	announcedNow := false
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
 		// The task's now: an attempt started over takes it from the last.
 		tag, err := tx.Exec(ctx, `
@@ -199,7 +200,14 @@ func (s *Store) recordAdopted(ctx context.Context, org string, st *State, repo R
 		if err != nil {
 			return err
 		}
+		announcedNow = true
 		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
+	// After the commit, and only by the call that announced the adoption
+	// (a replay finds it announced), as openPullRequest does. One already
+	// merged or closed when taken over gets none.
+	if err == nil && announcedNow && (pr.State == forge.StateOpen || pr.State == forge.StateDraft) && s.AutoPreview != nil {
+		_ = s.AutoPreview(ctx, org, st.TaskID)
+	}
 	return id, err
 }

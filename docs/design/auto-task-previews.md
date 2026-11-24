@@ -1,8 +1,8 @@
 # Automatic Task Previews
 
-A project setting, off by default: when dude opens a pull request for one of
-the project's tasks, or a person reopens one dude opened, dude prepares that
-task's preview. Each task may say otherwise.
+A project setting, off by default: when a pull request of one of the
+project's tasks opens (dude opens it, or takes over a person's) or reopens,
+dude prepares that task's preview. Each task may say otherwise.
 
 ## Settings
 
@@ -29,12 +29,18 @@ task's preview. Each task may say otherwise.
   request already recorded — e.g. recorded closed, reopened on GitHub before
   a sync, and the branch moved: GitHub hands back the same number, the insert
   conflicts, and nothing is prepared (the reopen's sync is what prepares it).
+- **Adopted**: `delivery.Store.recordAdopted`, after the transaction that
+  recorded the taken-over pull request (`adopted = true`) commits, and only
+  when that call appended its `pull_request.opened`: a replay finds it
+  announced and prepares nothing (its `ON CONFLICT … DO UPDATE` affects the
+  row either way, so the announcement decides, not the row count). Only for
+  one open or a draft at adoption: one already merged or closed gets none
+  (the adopt step escalates `source_gone` for those first).
 - **Reopened**: `prs.Syncer.sync`, after the compare-and-set transaction
   that recorded the row going from `closed` to open or draft. Not on any
   other sync: a push (`synchronize`), checks, reviews, an open pull request
-  synced again.
-- Never for a pull request dude took over from a person (`adopted`), nor a
-  branch preview; every tracked pull request has a task.
+  synced again. Adopted or not.
+- Never for a branch preview; every tracked pull request has a task.
 
 ## What
 

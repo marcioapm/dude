@@ -1,7 +1,7 @@
 package orchestrator_test
 
-// Automatic task previews (migration 272): when dude opens a pull request
-// for a task, or a person reopens one dude opened, the task's preview is
+// Automatic task previews (migration 272): when the task's pull request
+// opens (dude opens it, or takes over a person's) or reopens, its preview is
 // prepared asleep — if the task (or, when it says nothing, its project)
 // wants one. Through the real delivery store, PR syncer and preview
 // service, against the fake GitHub and lux.
@@ -348,12 +348,65 @@ func TestAutoPreviewNotForAPullRequestRecordedAlready(t *testing.T) {
 	}
 }
 
-// 7. A pull request dude took over from a person (adopted) is not one dude
-// opened: its reopening prepares nothing. Nor does a branch preview of
-// the project, a brainstorm's, make a task preview.
-func TestAutoPreviewNotForAdoptedPullRequestsOrBranches(t *testing.T) {
+// 7. A pull request dude took over from a person (adopted) is the task's
+// as one dude opened is: its adoption, through the delivery's adopt step,
+// prepares the task's one preview asleep, made by the system, after the
+// adoption's record committed, and never announced though the task has a
+// conductor. (A replay of the record, and one merged before it, are
+// delivery's TestRecordAdoptedPreparesAPreviewOnlyWhenItAnnouncesAnOpenOne.)
+func TestAutoPreviewForAnAdoptedPullRequest(t *testing.T) {
+	w := autoWorld(t, true)
+	n := w.gh.OpenAsPerson("someone", "feature/theirs", "main", "Their work")
+	task := w.adopted("pr", n, "feature/theirs", "main", delivery.ModeReview)
+	w.conductorOf(task)
+	var calls, committed atomic.Int32
+	committed.Store(-1)
+	w.store.AutoPreview = func(ctx context.Context, org, taskID string) error {
+		calls.Add(1)
+		// Read in a transaction of its own: only a committed record is seen.
+		// (Not w.count: this runs on the workflow's goroutine.)
+		var n int32
+		if err := w.app.InOrg(ctx, org, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT count(*) FROM pull_requests WHERE task_id = $1 AND adopted`, taskID).Scan(&n)
+		}); err == nil {
+			committed.Store(n)
+		}
+		return w.previews.AutoPreview(ctx, org, taskID)
+	}
+	w.startDelivery(task)
+	w.until("the adopted pull request's preview", func() bool {
+		all, _ := w.taskPreviews(task)
+		return all > 0
+	})
+	if calls.Load() != 1 || committed.Load() != 1 {
+		t.Fatalf("AutoPreview called %d times, seeing %d adopted records committed; want once, after the commit", calls.Load(), committed.Load())
+	}
+	runID := w.onlyPreview(task)
+	w.withServers(runID)
+	for range 5 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND wakeable AND wake_wanted_at IS NULL AND lux_run_id IS NULL`, runID); n != 1 {
+		t.Fatalf("the adopted pull request's preview %s is not asleep", runID)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.created' AND actor_type = $2 AND actor_id = $3`,
+		runID, ledger.ActorSystem, servers.AutoPreviewActor); n != 1 {
+		t.Fatal("the adopted pull request's preview was not made by the system as auto-preview")
+	}
+	if n := w.allReadyMessages(); n != 0 {
+		t.Fatalf("%d ready messages for an automatic preview", n)
+	}
+	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
+		t.Fatalf("%d previews (%d live), want one", all, live)
+	}
+}
+
+// 7b. An adopted pull request closed and reopened ensures the task's
+// preview, as one dude opened does.
+func TestAutoPreviewOnAnAdoptedPullRequestsReopen(t *testing.T) {
 	w := autoWorld(t, true)
 	task := w.task()
+	w.conductorOf(task)
 	number := w.gh.OpenAsPerson("someone", "feature/theirs", "main", "Their work")
 	mustExec(t, w.owner, `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url,
 		head_branch, base_branch, head_sha, title, state, adopted)
@@ -363,8 +416,17 @@ func TestAutoPreviewNotForAdoptedPullRequestsOrBranches(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM pull_requests WHERE id = 'pr_adopted' AND state = 'open'`); n != 1 {
 		t.Fatal("the adopted pull request's reopening was not recorded")
 	}
-	w.noTaskPreview(task, "an adopted pull request reopened")
+	runID := w.onlyPreview(task)
+	w.dormant(runID)
+	w.openedNotAnnounced(runID)
+}
 
+// 7c. A branch preview of the project, a brainstorm's, makes no task
+// preview.
+func TestAutoPreviewNotForBranches(t *testing.T) {
+	w := autoWorld(t, true)
+	task := w.task()
+	w.conductorOf(task)
 	w.gh.Branch("feature/look", "main", "a look")
 	_, agent := w.brainstormer()
 	w.agentBranchPreview("feature/look", agent)

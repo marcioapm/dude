@@ -2,8 +2,8 @@
  * Automatic task previews, as the Overview rail's "This task" block shows
  * them, with the rail's task-choice component (BeforePullRequestFact): the
  * task's own choice — its project's (saying what that is now), On or Off —
- * with what is in effect in its hint. Only what dude does when it opens or
- * reopens the task's pull request: a preview someone asks for starts
+ * with what is in effect in its hint. Only what dude does when the task's
+ * pull request opens or reopens: a preview someone asks for starts
  * whatever this says. Anyone on the organisation changes it, as they edit
  * the task; once the task is done it is disabled, saying so, as
  * BeforePullRequestControl is (a failed or aborted task can come back).
@@ -23,7 +23,7 @@ const onOff = (v: boolean) => (v ? "On" : "Off");
 
 /** The hint under the choice: what it governs, and what is in effect (its own, else its project's). */
 function autoPreviewHint(own: boolean | null, project: boolean): string {
-  return "Only whether dude prepares this task’s preview when it opens or reopens the pull request. A preview someone asks for still starts. "
+  return "Only whether dude prepares this task’s preview when its pull request opens or reopens. A preview someone asks for still starts. "
     + `Effective: ${onOff(own ?? project)} · ${own === null ? "project default" : "task override"}`;
 }
 
