@@ -348,8 +348,9 @@ func TestAReviewOnlySuggestionNextToAnOpenMediumStillRequestsChanges(t *testing.
 			FROM runs WHERE task_id=$1 AND phase='review' AND category='correctness' AND status='completed' ORDER BY created_at DESC LIMIT 1`, wi, c.id, c.title)
 	}
 	w.must(wi, "dismiss_finding", `{"id":"kept","reason":"suggestion: gate 2: only DEV_MODE=1 reaches it, a local opt-in"}`)
-	if g := w.dismissedWith(wi, "kind", "suggestion") + w.dismissedWith(wi, "gate", "2"); g != 2 {
-		t.Fatalf("%d/2 grounds of the suggestion recorded", g)
+	if g := w.dismissedWith(wi, "kind", "suggestion") + w.dismissedWith(wi, "gate", "2") +
+		w.dismissedWith(wi, "why", "only DEV_MODE=1 reaches it, a local opt-in"); g != 3 {
+		t.Fatalf("%d/3 grounds of the suggestion recorded", g)
 	}
 	w.must(wi, "decide", `{"action":"next"}`)
 	w.agentsDone(wi, "dude's review", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })

@@ -112,6 +112,12 @@ type settledThread struct {
 	Replied, Settled bool
 }
 
+// kept says the thread's finding was kept as a suggestion (keptSuggestion).
+func (t settledThread) kept() bool {
+	_, _, ok := keptSuggestion(t.Note)
+	return ok && t.Status == "accepted"
+}
+
 // syncThreads replies in and resolves dude's threads whose findings are
 // settled, after the verdict at head was posted.
 func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *State, gh *forge.GitHub, pr PullRequestState, head string) {
@@ -140,8 +146,10 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 			}
 			// A comment made for a finding already kept as a suggestion
 			// says so itself (inlineText): its thread is left open, for
-			// the author, with no reply of dude's.
-			if _, _, kept := keptSuggestion(t.Note); kept && t.Status == "accepted" && bornKept {
+			// the author, with no reply of dude's. One kept after its
+			// comment was posted is replied to once and left open too:
+			// replied, it is done with.
+			if t.kept() && (bornKept || t.Replied) {
 				continue
 			}
 			if t.Status != "open" && !t.Settled {
@@ -188,6 +196,11 @@ func (w *steps) syncThreads(ctx context.Context, sc workflow.StepContext, st *St
 				slog.Warn("recording dude's thread reply failed", "task", st.TaskID, "error", err)
 				continue
 			}
+		}
+		if t.kept() {
+			// A suggestion is the author's to take or leave: its thread
+			// stays open.
+			continue
 		}
 		if err := gh.ResolveReviewThread(ctx, pr.Slug, thread.ID); err != nil {
 			failed("resolve", err)
@@ -282,13 +295,15 @@ func OwnThreadReplies(ctx context.Context, gh *forge.GitHub, t *forge.Threads, l
 }
 
 // threadFindingTx is the finding dude's thread is about, as the wake of
-// a reply in it names it: nil when it is no finding's.
+// a reply in it names it: nil when it is no finding's. One kept as a
+// suggestion carries its note (Kept), so the wake shows it as one.
 func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdictFinding, error) {
 	if findingID == "" {
 		return nil, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id, severity::text, title, description, suggested_fix, COALESCE(acceptance, ''),
-			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, '', ''
+			COALESCE(file, ''), COALESCE(line, 0), COALESCE(trivial, false), introduced, false, '',
+			CASE WHEN status = 'accepted' THEN COALESCE(resolution_note, '') ELSE '' END
 		FROM review_findings WHERE id = $1`, findingID)
 	if err != nil {
 		return nil, err
@@ -296,6 +311,10 @@ func threadFindingTx(ctx context.Context, tx pgx.Tx, findingID string) (*verdict
 	f, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[verdictFinding])
 	if db.IsNotFound(err) {
 		return nil, nil
+	}
+	if _, _, kept := f.suggestion(); !kept {
+		// Withdrawn as wrong or a duplicate: shown as it was filed.
+		f.Kept = ""
 	}
 	return &f, err
 }

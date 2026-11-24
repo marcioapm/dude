@@ -1,6 +1,9 @@
 package delivery
 
 import (
+	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -132,7 +135,7 @@ func TestAFindingKeptAsASuggestionHoldsNothing(t *testing.T) {
 	// Commented on earlier: listed with its link, not commented on again.
 	kept.earlier = &inlinePost{Head: "1111111aaaa", URL: "u1"}
 	body, inline, _ = verdictReviewOf(verdictDecision{Headline: "Approved"}, "a8f3e1c0ffee", "main", nil, []verdictFinding{kept}, "")
-	if len(inline) != 0 || strings.Contains(body, "Still open") || !strings.Contains(body, "(shipped path): only DEV_MODE=1 reaches it, cmd/dev.go:12 u1") {
+	if len(inline) != 0 || strings.Contains(body, "Still open") || !strings.Contains(body, "(shipped path): only DEV_MODE=1 reaches it, cmd/dev.go:12: u1") {
 		t.Fatalf("earlier: %+v\n%s", inline, body)
 	}
 }
@@ -175,5 +178,25 @@ func TestSuggestionGrounds(t *testing.T) {
 		if got := threadReplyText("accepted", note, "abc1234"); got != want {
 			t.Errorf("reply %q, want %q", got, want)
 		}
+	}
+}
+
+// The gates a finding may be kept as a suggestion for are the contract's
+// numbered gates, by number and title: the reply and the review name a
+// gate as the conductor was told it.
+func TestSuggestionGatesAreTheContractsGates(t *testing.T) {
+	contract := render(reviewOnlyContractTmpl, 7)
+	_, rubric, ok := strings.Cut(contract, "### What holds the verdict")
+	if !ok {
+		t.Fatal("the contract has no rubric")
+	}
+	rubric, _, _ = strings.Cut(rubric, "\n### ")
+	titles := map[int]string{}
+	for _, m := range regexp.MustCompile(`(?m)^(\d+)\. \*\*([^*]+)\*\*`).FindAllStringSubmatch(rubric, -1) {
+		n, _ := strconv.Atoi(m[1])
+		titles[n] = strings.ToLower(m[2])
+	}
+	if !reflect.DeepEqual(titles, suggestionGates) {
+		t.Fatalf("the contract's gates %v, suggestionGates %v", titles, suggestionGates)
 	}
 }

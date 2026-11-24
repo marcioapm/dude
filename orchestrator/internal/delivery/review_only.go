@@ -148,7 +148,7 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 			return nil, refusef(rReviewOnlyDismissDuplicateOf, cmp.Or(of, "no finding"))
 		}
 		return map[string]any{"kind": kind, "duplicateOf": of}, nil
-	case "suggestion":
+	case kindSuggestion:
 		gate, why, ok := suggestionGrounds(rest)
 		if !ok {
 			return nil, refuseText(rReviewOnlyDismissSuggestion)
@@ -158,9 +158,15 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 	return nil, refuseText(rReviewOnlyDismissGrounds)
 }
 
+// kindSuggestion is the word a review-only conductor's reason starts with
+// to keep a finding as a suggestion ("suggestion: gate <N>: <why>"), and
+// the kind its grounds are recorded as.
+const kindSuggestion = "suggestion"
+
 // suggestionGates are the gates of contracts/review-only's rubric a
-// finding may fail to be kept as a suggestion, by number: gate 1
-// (introduced, medium or above) is what makes it a candidate at all.
+// finding may fail to be kept as a suggestion, by number, named as the
+// contract titles them (lower case): being introduced at medium or above
+// is what makes a finding a candidate at all.
 var suggestionGates = map[int]string{
 	2: "shipped path",
 	3: "proof",
@@ -199,7 +205,7 @@ func suggestionGrounds(rest string) (gate int, why string, ok bool) {
 func keptSuggestion(note string) (gate, why string, ok bool) {
 	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
 	word, rest, found := strings.Cut(reason, ":")
-	if !conductor || !found || !strings.EqualFold(strings.TrimSpace(word), "suggestion") {
+	if !conductor || !found || !strings.EqualFold(strings.TrimSpace(word), kindSuggestion) {
 		return "", "", false
 	}
 	n, why, ok := suggestionGrounds(rest)

@@ -226,6 +226,7 @@ func TestAWithdrawalApprovesAtTheSameHead(t *testing.T) {
 func TestASuggestionApprovesAtTheSameHead(t *testing.T) {
 	w := newWorld(t)
 	w.withTools()
+	w.reRounds(time.Second)
 	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
 	root := w.dudeLineComments(n)[0]
 	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi)
@@ -245,7 +246,24 @@ func TestASuggestionApprovesAtTheSameHead(t *testing.T) {
 	if len(r) != 1 || r[0].Body != "Kept as a suggestion (shipped path): only the local greet mode reaches it, docs/dev.md:4." {
 		t.Fatalf("replies in dude's thread: %+v", r)
 	}
+	// A suggestion is the author's to take or leave: replied to, its
+	// thread stays open.
+	thread := w.gh.ThreadID(root.ID)
+	if w.gh.ResolvedThreads[thread] {
+		t.Fatal("the suggestion's thread was resolved")
+	}
 	if c := w.dudeLineComments(n); len(c) != 1 {
 		t.Fatalf("the suggestion was commented on inline again: %+v", c)
+	}
+	// Replied to, it is done with: the next verdict does not read its
+	// thread again (a read would fail, and be recorded), nor reply again.
+	w.gh.Set(func(s *fakegithub.Server) { s.ThreadsStatus = 502 })
+	h2 := w.push("more.md")
+	w.agentsDone(wi, "reviewed H2", func() bool { w.sync(); return len(reviewsAt(w.dudeReviews(wi, n), h2)) == 1 && w.waitingOnPR(wi) })
+	if e := w.events(wi, delivery.EvReviewThreadSyncFailed); e != 0 {
+		t.Fatalf("the replied suggestion's thread was read again: %d failures recorded", e)
+	}
+	if r := repliesTo(w.gh.Pull(n), root.ID); len(r) != 1 || w.gh.ResolvedThreads[thread] {
+		t.Fatalf("after H2: replies %+v, resolved %v", r, w.gh.ResolvedThreads[thread])
 	}
 }

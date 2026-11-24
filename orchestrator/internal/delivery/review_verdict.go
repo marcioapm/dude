@@ -455,7 +455,7 @@ func verdictReviewOf(d verdictDecision, head, base string, lenses []string, find
 			// is commented on inline, marked as a suggestion, too.
 			line := fmt.Sprintf("- %s (%s)%s: kept as a suggestion (%s): %s", f.Title, f.Severity, where(f), gate, why)
 			if e := f.earlier; e != nil && e.URL != "" {
-				line += " " + e.URL
+				line += ": " + e.URL
 			}
 			suggestions = append(suggestions, line)
 			if f.earlier == nil && f.File != "" && len(comments) < maxInline {
@@ -1196,6 +1196,10 @@ func lensOutcomesTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string
 // such Run of its category must list it in finding_ids (what it was given
 // to judge; the findings it raised are not there) with fixed or still.
 // Simply having run the category at H is not proof it checked an old one.
+// Besides the open ones (and those fixed at H), it has the findings the
+// conductor kept as a suggestion (keptSuggestion), with their note in
+// Kept: they hold nothing, and the review lists them; a conductor's
+// wrong or duplicate dismissal is withdrawn and left out.
 func incompleteFindingsTx(ctx context.Context, tx pgx.Tx, st *State, repo, head string) ([]verdictFinding, error) {
 	rows, err := tx.Query(ctx, `SELECT f.id, f.severity::text, f.title, f.description, f.suggested_fix, COALESCE(f.acceptance, ''),
 		COALESCE(f.file, ''), COALESCE(f.line, 0), COALESCE(f.trivial, false), f.introduced,
