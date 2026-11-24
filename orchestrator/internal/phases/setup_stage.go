@@ -77,6 +77,15 @@ func setupLine(tail string, cut bool) string {
 		tail = tail[j+1:]
 	}
 	lines := strings.Split(tail, "\n")
+	// What follows the last newline is still being written (a frame can
+	// end mid-line, a value split across two): only what a carriage
+	// return already ended of it is whole.
+	last := lines[len(lines)-1]
+	if j := strings.LastIndex(last, "\r"); j >= 0 {
+		lines[len(lines)-1] = last[:j]
+	} else {
+		lines = lines[:len(lines)-1]
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		if i == 0 && cut {
 			return ""

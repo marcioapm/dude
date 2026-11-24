@@ -456,6 +456,11 @@ func TestSetupLine(t *testing.T) {
 		{"half a lin", true, ""},
 		{"half a line\nwhole line\n", true, "whole line"},
 		{setupRunningPrefix + "api\nfirst\n" + setupRunningPrefix + "web\n", false, ""},
+		// A line still being written is not whole: a value in it may go on in the next frame.
+		{setupRunningPrefix + "abs\nnpm ci\nnpm notice auth s3cr3t-token-v", false, "npm ci"},
+		{setupRunningPrefix + "abs\nnpm notice auth s3cr3t-token-v", false, ""},
+		{setupRunningPrefix + "abs\nnpm ci\nprogress 10%\rprogress 9", false, "progress 10%"},
+		{"half a line\nwhole line\nhalf", true, "whole line"},
 	} {
 		if got := setupLine(tc.tail, tc.cut); got != tc.want {
 			t.Errorf("setupLine(%q) = %q, want %q", tc.tail, got, tc.want)
@@ -466,5 +471,81 @@ func TestSetupLine(t *testing.T) {
 	}
 	if got := setupRunning("echo " + setupRunningPrefix + "api\n"); got != "" {
 		t.Errorf("setupRunning mid-line %q", got)
+	}
+}
+
+// assertNoSecretPrefix fails when a setup line written for runID, in an
+// event or in harness_state's init, holds the first min or more bytes of
+// value.
+func assertNoSecretPrefix(t *testing.T, owner *pgx.Conn, runID, value string, min int) {
+	t.Helper()
+	var lines []string
+	rows, err := owner.Query(context.Background(), `SELECT payload::text FROM events WHERE run_id = $1
+		UNION ALL SELECT COALESCE(harness_state->'init'->>'line', '') FROM runs WHERE id = $1`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err = pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range lines {
+		if strings.Contains(l, value[:min]) {
+			t.Errorf("holds a prefix of the secret: %s", l)
+		}
+	}
+}
+
+// A value split across two frames is never whole in the first: the line
+// it is in is not written until its end comes, then redacted whole.
+func TestASecretSplitAcrossFramesNeverReachesTheSetupLine(t *testing.T) {
+	const value = "s3cr3t-token-value-not-real-1"
+	s, r, owner := setupStageRun(t, value)
+	t0 := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	frames := []lux.Frame{
+		initEvent(1, "start", 0),
+		output(1, "stderr", setupRunningPrefix+"abs\n"),
+		output(1, "stdout", "npm ci\nnpm notice auth "+value[:14]),
+		output(1, "stdout", value[14:]+"\n"),
+	}
+	for i, f := range frames {
+		applyEach(t, s, r, []lux.Frame{f}, []time.Time{t0.Add(time.Duration(i*4) * time.Second)})
+		assertNoSecretPrefix(t, owner, r.ID, value, 6)
+	}
+	var lines []string
+	for _, e := range stageEvents(t, owner, r.ID) {
+		if e.Type == EvRunSetupProgress {
+			lines = append(lines, e.Payload["line"].(string))
+		}
+	}
+	if want := "npm ci|npm notice auth [REDACTED:TOKEN]"; strings.Join(lines, "|") != want {
+		t.Errorf("lines %q, want %q", lines, want)
+	}
+}
+
+// A value that runs past setupLineMax is redacted before the line is
+// shortened: no part of it is left to see. The Run's own redactor is the
+// only one that knows it, and the ledger's redaction of the whole payload
+// cannot match the part a shortening leaves, so the line written is what
+// setupProgress made of it.
+func TestASecretAtTheSetupLinesLimitIsRedactedBeforeItIsCut(t *testing.T) {
+	const value = "s3cr3t-token-value-not-real-2"
+	s, r, owner := setupStageRun(t, value)
+	t0 := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	frames := []lux.Frame{
+		initEvent(1, "start", 0),
+		output(1, "stderr", setupRunningPrefix+"abs\n"),
+		output(1, "stdout", strings.Repeat("y", 185)+value+"\n"),
+	}
+	for i, f := range frames {
+		applyEach(t, s, r, []lux.Frame{f}, []time.Time{t0.Add(time.Duration(i*4) * time.Second)})
+		assertNoSecretPrefix(t, owner, r.ID, value, 10)
+	}
+	var line string
+	if err := owner.QueryRow(context.Background(), `SELECT COALESCE(harness_state->'init'->>'line', '') FROM runs WHERE id = $1`, r.ID).Scan(&line); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(line, strings.Repeat("y", 185)+"[REDACTED:") || utf8.RuneCountInString(line) != setupLineMax {
+		t.Errorf("line %q", line)
 	}
 }
