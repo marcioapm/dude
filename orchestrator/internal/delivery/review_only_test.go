@@ -149,7 +149,7 @@ var insertIntoRuns = regexp.MustCompile(`(?i)\binsert\s+into\s+(public\.)?runs\b
 // notPhaseRuns are the inserts into runs that make no phase writer, keyed
 // by "file:func" (the file relative to the orchestrator's root).
 var notPhaseRuns = map[string]string{
-	"internal/servers/previews.go:StartPreview":                  "a preview Run: no phase, no checkout to write",
+	"internal/servers/previews.go:startPreview":                  "a preview Run: no phase, no checkout to write",
 	"internal/servers/branches.go:StartBranchPreview":            "a branch preview Run: no task",
 	"internal/delivery/session_swap.go:RetryBrainstorm":          "a session's brainstorm: no task",
 	"internal/delivery/session.go:startBrainstorm":               "a session's brainstorm: no task",
