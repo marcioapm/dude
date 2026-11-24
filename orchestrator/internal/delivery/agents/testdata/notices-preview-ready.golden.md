@@ -19,4 +19,3 @@ Ready for your look:
 - web
 
 Check this task's change there, on its branch as it is now.
-
