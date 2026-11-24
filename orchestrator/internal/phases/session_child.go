@@ -78,6 +78,7 @@ func (s *Syncer) sessionChildSpec(ctx context.Context, r phaseRun, stored *lux.S
 		for _, repo := range repos {
 			in.Repos = append(in.Repos, specRepo{Name: repo.SpecName(), URL: repo.URL, Ref: repo.DefaultBranch, ReadOnly: true, Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 		}
+		in.NoSetup = noSetup(stored)
 		in.Image, in.NestedContainers = image.Ref, image.Nested
 		if stored != nil {
 			in.Image = stored.Image.Ref

@@ -137,6 +137,7 @@ func (s *Syncer) brainstormSpec(ctx context.Context, r phaseRun, stored *lux.Sto
 			Path: delivery.SessionRepoPath(repo.Key, repo.Name), Setup: repo.SetupScript})
 	}
 	in.RunID, in.OrganizationID, in.SessionID = r.ID, r.Org, r.SessionID
+	in.NoSetup = noSetup(stored)
 	s.logIgnoredOptions(r, in)
 	if m, ok := sizes.ForRole(role, raised, nil, orgModels); ok {
 		if m.Raised != nil {

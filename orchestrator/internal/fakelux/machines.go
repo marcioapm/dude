@@ -106,6 +106,22 @@ func (s *Server) SpecOf(id string) json.RawMessage {
 	return nil
 }
 
+// DeclareSecret adds a secret, with no value, to a Run's stored spec, as
+// lux keeps one a Run was submitted with: a Run submitted by an older dude.
+func (s *Server) DeclareSecret(id string, sec lux.Secret) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[id]
+	if run == nil {
+		return
+	}
+	var spec map[string]any
+	_ = json.Unmarshal(run.Spec, &spec)
+	secrets, _ := spec["secrets"].([]any)
+	spec["secrets"] = append(secrets, map[string]any{"name": sec.Name, "as": sec.As, "path": sec.Path})
+	run.Spec, _ = json.Marshal(spec)
+}
+
 // ResumeResourcesOf is the resources each accepted resume of a Run carried,
 // as received, in order: nil for a resume that carried none.
 func (s *Server) ResumeResourcesOf(id string) []json.RawMessage {
