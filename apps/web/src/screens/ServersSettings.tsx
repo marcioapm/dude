@@ -2,7 +2,8 @@
  * Project settings → Servers: the project's server definitions (a table,
  * with a dialog to add or edit one), and how its branch previews run —
  * the image (from the library), the egress allowlist, how many secrets
- * they get, the idle timeout, who may open one — and the project's
+ * they get, the idle timeout, who may open one, whether dude prepares a
+ * task's preview when it opens the task's pull request — and the project's
  * secrets, given to previews and agent roles (ProjectSecrets.tsx).
  */
 
@@ -97,7 +98,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
       </SettingsNote>
       {problem ? <Callout tone="danger">{problem}</Callout> : null}
 
-      <SettingsSection title="Definitions" data-testid="server-recipes"
+      <SettingsSection title="Definitions" id="definitions" data-testid="server-recipes"
         actions={last?.updatedBy ? <SettingsMeta>Last changed by {last.updatedBy.name} · {formatTimestamp(last.updatedAt, "relative")}</SettingsMeta> : undefined}>
         {recipes.length === 0 ? (
           <EmptyState compact icon="globe" title="No servers yet"
@@ -125,6 +126,27 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
       <SettingsSection title="Branch previews" data-testid="preview-settings">
         {recipes.length === 0 ? <Callout tone="neutral">Previewing a branch needs at least one server. Add one above.</Callout> : null}
         {previewSave.problem ? <Callout tone="danger">{previewSave.problem}</Callout> : null}
+        <SettingRow label="Automatic task previews" htmlFor="auto-task-preview" data-testid="auto-task-preview-row"
+          help={<>
+            Prepare a task’s preview when dude opens or reopens the task’s pull request. It starts only when someone opens it. A task can say otherwise.
+            {previews.autoTaskPreview && !recipes.some((r) => r.autostartInPreviews) ? (
+              <span className="autoPreviewHint" data-testid="auto-task-preview-hint">
+                {recipes.length === 0 ? "Add a server that starts in previews; until then no preview is prepared. " : "Choose a server to start in previews; until then no preview is prepared. "}
+                <a href="#definitions" onClick={(e) => {
+                  e.preventDefault();
+                  document.getElementById("definitions")?.scrollIntoView({ block: "center", behavior: "smooth" });
+                }}>Definitions</a>
+              </span>
+            ) : null}
+          </>}>
+          <Select id="auto-task-preview" aria-label="Automatic task previews" value={previews.autoTaskPreview ? "on" : "off"}
+            disabled={!canEdit || previewSave.busy}
+            onValueChange={(v) => savePreviews({ autoTaskPreview: v === "on" }, v === "on" ? "Automatic task previews on" : "Automatic task previews off")}
+            options={[
+              { value: "off", label: "Off", description: "Default · no automatic preparation" },
+              { value: "on", label: "On", description: "Prepare a sleeping task preview on pull request open or reopen" },
+            ]} />
+        </SettingRow>
         <SettingRow label="Machine" help="The size a preview runs on: one run with every server that starts in previews." htmlFor="preview-machine" data-testid="preview-machine-row"
           source={previews.machineSize && sizes?.some((s) => s.id === previews.machineSize)
             ? <SettingSource source="project" from={orgName} inherited={defaultSize ? `default size, ${defaultSize.name}` : "default size"}
@@ -164,7 +186,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
             {secrets.filter((s) => s.recipients.includes("previews")).length} reach previews{" "}
             <a href="#secrets" onClick={(e) => {
               e.preventDefault();
-              document.getElementById("secrets")?.scrollIntoView({ block: "start" });
+              document.getElementById("secrets")?.scrollIntoView({ block: "center", behavior: "smooth" });
             }}>Manage</a>
           </span>
         </SettingRow>

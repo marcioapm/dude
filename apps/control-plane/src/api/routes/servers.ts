@@ -44,10 +44,10 @@ import { requireSize } from "./machines.ts";
 import { requireImage } from "./images.ts";
 import type { RequestContext, Router } from "../router.ts";
 
-/** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055). */
+/** A project's recipes and preview settings, as the API shows them (server_recipe, preview_settings: migration 055; auto_task_preview: 272). */
 async function projectServers(scope: OrgScope, projectId: string): Promise<{ servers: Recipe[]; previews: PreviewSettings }> {
   const [row] = (await scope.sql`
-    SELECT preview_settings(p) AS previews,
+    SELECT preview_settings(p)::jsonb || jsonb_build_object('autoTaskPreview', p.auto_task_preview) AS previews,
       (SELECT COALESCE(json_agg(server_recipe(s) ORDER BY s.name), '[]') FROM project_servers s WHERE s.project_id = p.id) AS servers
     FROM projects p WHERE p.id = ${projectId}`) as Array<{ previews: PreviewSettings; servers: Recipe[] }>;
   if (!row) throw notFound(`project ${projectId} not found`);
@@ -150,9 +150,10 @@ async function putPreviewSettings(ctx: RequestContext): Promise<Response> {
     if (input.machineSize) await requireSize(scope, input.machineSize);
     if (input.imageId) await requireImage(scope, input.imageId, current.imageId);
     await scope.sql`
-      UPDATE projects SET preview_settings = ${stored}::jsonb, preview_image_id = ${input.imageId}, updated_at = now()
+      UPDATE projects SET preview_settings = ${stored}::jsonb, preview_image_id = ${input.imageId},
+        auto_task_preview = ${input.autoTaskPreview}, updated_at = now()
       WHERE id = ${projectId}`;
-    await recordChange(scope, ctx, projectId, { previews: { ...stored, imageId: input.imageId } });
+    await recordChange(scope, ctx, projectId, { previews: { ...stored, imageId: input.imageId, autoTaskPreview: input.autoTaskPreview } });
     return (await projectServers(scope, projectId)).previews;
   });
   return json(previews);

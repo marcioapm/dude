@@ -361,6 +361,8 @@ const updateTaskInput = z.object({
   source: taskSourceInput,
   /** The answer to superseded_required for its source (createTask's). */
   supersede: supersedeInput,
+  /** Automatic task previews: true or false, or null to follow its project's; never fixed by a delivery. */
+  autoTaskPreview: z.boolean().nullable(),
 }).partial();
 
 /**
@@ -425,6 +427,8 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
         acceptance_criteria = CASE WHEN ${input.acceptanceCriteria !== undefined}
                                    THEN ${input.acceptanceCriteria ?? []}::jsonb ELSE acceptance_criteria END,
         epic_id = CASE WHEN ${input.epicId !== undefined} THEN ${input.epicId ?? null} ELSE epic_id END,
+        auto_task_preview = CASE WHEN ${input.autoTaskPreview !== undefined} THEN ${input.autoTaskPreview ?? null}::boolean
+                                 ELSE auto_task_preview END,
         updated_at = now()
       WHERE id = ${id}`;
     // Its images are what its text references: fixed with it while a delivery runs (refused above).
@@ -447,7 +451,7 @@ async function updateTask(ctx: RequestContext): Promise<Response> {
       SELECT id, project_id AS "projectId", epic_id AS "epicId", ${scope.sql.unsafe(REPOSITORIES_JSON)},
         ${scope.sql.unsafe(SOURCE_JSON)}, title, goal,
         acceptance_criteria AS "acceptanceCriteria", status, ${scope.sql.unsafe(ownerJson())},
-        ${scope.sql.unsafe(peopleJson())}, updated_at AS "updatedAt"
+        ${scope.sql.unsafe(peopleJson())}, auto_task_preview AS "autoTaskPreview", updated_at AS "updatedAt"
       FROM tasks WHERE id = ${id}`) as Array<Record<string, unknown>>;
     return { task: rows[0]! };
   });
@@ -471,7 +475,8 @@ type EditRefusal = { missing: true } | { started: string } | { shortGoal: true }
 async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiven: string | undefined, sourceChanges: boolean):
   Promise<EditRefusal | { ok: true; current: TaskRow; input: EditInput; ownerId: string | undefined }> {
   const rows = (await scope.sql`
-    SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria"
+    SELECT project_id AS "projectId", epic_id AS "epicId", status, title, goal, acceptance_criteria AS "acceptanceCriteria",
+      auto_task_preview AS "autoTaskPreview"
     FROM tasks WHERE id = ${id} FOR UPDATE`) as TaskRow[];
   const current = rows[0];
   if (!current) return { missing: true as const };
@@ -482,6 +487,7 @@ async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiv
   const input = { ...given };
   if (input.title === current.title) delete input.title;
   if (input.goal === current.goal) delete input.goal;
+  if (input.autoTaskPreview === current.autoTaskPreview) delete input.autoTaskPreview;
   if (input.acceptanceCriteria !== undefined &&
     JSON.stringify(input.acceptanceCriteria) === JSON.stringify(current.acceptanceCriteria)) delete input.acceptanceCriteria;
   const changesTheTask = input.title !== undefined || input.goal !== undefined ||
@@ -513,7 +519,8 @@ async function checkEdit(scope: OrgScope, id: string, given: EditInput, ownerGiv
   return { ok: true as const, current, input, ownerId };
 }
 
-type TaskRow = { projectId: string; epicId: string | null; status: string; title: string; goal: string; acceptanceCriteria: string[] };
+type TaskRow = { projectId: string; epicId: string | null; status: string; title: string; goal: string; acceptanceCriteria: string[];
+  autoTaskPreview: boolean | null };
 
 /** Throws checkEdit's refusal as the API answers it; anything else passes. */
 function refuseEdit(result: object, id: string): void {

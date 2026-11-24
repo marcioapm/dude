@@ -129,7 +129,7 @@ describe("a project's servers", () => {
   test("start empty, with the default preview settings", async () => {
     const res = await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`);
     expect(res.status).toBe(200);
-    expect(await body(res)).toEqual({ servers: [], previews: { image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null } });
+    expect(await body(res)).toEqual({ servers: [], previews: { image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null, autoTaskPreview: false } });
   });
 
   test("a maintainer saves one, and everyone reads it with who changed it", async () => {
@@ -214,9 +214,10 @@ describe("a project's servers", () => {
       firstWakeTimeoutMinutes: 15,
       wakeTimeoutMinutes: 5,
       machineSize: null,
+      autoTaskPreview: false,
     });
     const reset = await body(await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, {}));
-    expect(reset).toEqual({ image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null });
+    expect(reset).toEqual({ image: null, imageId: null, egress: [], idleTimeoutMinutes: 15, firstWakeTimeoutMinutes: 15, wakeTimeoutMinutes: 5, machineSize: null, autoTaskPreview: false });
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { idleTimeoutMinutes: 0 })).status).toBe(400);
     expect((await call(adminKey, "PUT", `/v1/projects/${PROJECT}/preview-settings`, { image: "ghcr.io/acme/new:1" })).status).toBe(400);
   });
@@ -236,6 +237,58 @@ describe("a project's servers", () => {
     const reset = await body(await call(adminKey, "PUT", path, {}));
     expect(reset.firstWakeTimeoutMinutes).toBe(15);
     expect(reset.wakeTimeoutMinutes).toBe(5);
+  });
+
+  test("automatic task previews: off by default, saved by a maintainer, read by everyone, a boolean only", async () => {
+    const path = `/v1/projects/${PROJECT}/preview-settings`;
+    const [stored] = await owner`SELECT auto_task_preview FROM projects WHERE id = ${PROJECT}`;
+    expect(stored.auto_task_preview).toBe(false);
+    expect((await call(memberKey, "PUT", path, { autoTaskPreview: true })).status).toBe(403);
+    expect((await call(otherKey, "PUT", path, { autoTaskPreview: true })).status).toBe(404);
+    const on = await call(adminKey, "PUT", path, { autoTaskPreview: true, idleTimeoutMinutes: 20 });
+    expect(on.status).toBe(200);
+    expect(await body(on)).toMatchObject({ autoTaskPreview: true, idleTimeoutMinutes: 20 });
+    expect((await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`))).previews.autoTaskPreview).toBe(true);
+    const [event] = await owner`SELECT payload FROM events WHERE project_id = ${PROJECT} AND event_type = 'settings.updated'
+                                ORDER BY cursor DESC LIMIT 1`;
+    expect(event.payload.changed.previews.autoTaskPreview).toBe(true);
+    for (const junk of ["true", 1, null, "on", {}]) {
+      expect((await call(adminKey, "PUT", path, { autoTaskPreview: junk })).status).toBe(400);
+    }
+    expect((await body(await call(memberKey, "GET", `/v1/projects/${PROJECT}/servers`))).previews.autoTaskPreview).toBe(true);
+    // Replaced whole, as every preview setting: left out, it is off again.
+    expect((await body(await call(adminKey, "PUT", path, {}))).autoTaskPreview).toBe(false);
+  });
+
+  test("a task's own choice on automatic task previews: null follows the project, any member edits it", async () => {
+    await owner`INSERT INTO tasks (id, organization_id, project_id, number, title, goal)
+                VALUES ('wi_auto', ${ORG}, ${PROJECT}, 901, 'Greet', 'Say hello to each person who comes in')`;
+    expect(await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).toMatchObject({ autoTaskPreview: null, projectAutoTaskPreview: false });
+    await owner`UPDATE projects SET auto_task_preview = true WHERE id = ${PROJECT}`;
+    expect((await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).projectAutoTaskPreview).toBe(true);
+    await owner`UPDATE projects SET auto_task_preview = false WHERE id = ${PROJECT}`;
+    for (const value of [false, true, null] as const) {
+      const res = await call(memberKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: value });
+      expect(res.status).toBe(200);
+      expect((await body(res)).autoTaskPreview).toBe(value);
+      expect((await body(await call(memberKey, "GET", "/v1/tasks/wi_auto"))).autoTaskPreview).toBe(value);
+      const [row] = await owner`SELECT auto_task_preview FROM tasks WHERE id = 'wi_auto'`;
+      expect(row.auto_task_preview).toBe(value);
+    }
+    // Each change is recorded as a task edit; saying what it already says records nothing.
+    const edits = async () => (await owner`SELECT count(*)::int AS n FROM events WHERE task_id = 'wi_auto' AND event_type = 'task.updated'
+                                           AND payload ? 'autoTaskPreview'`)[0].n;
+    expect(await edits()).toBe(3);
+    expect((await call(memberKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: null })).status).toBe(200);
+    expect(await edits()).toBe(3);
+    for (const junk of ["true", 1, "inherit", {}]) {
+      expect((await call(memberKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: junk })).status).toBe(400);
+    }
+    expect((await call(otherKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: true })).status).toBe(404);
+    // Not fixed by a delivery: the task's ask is, this is not.
+    await owner`INSERT INTO workflow_runs (id, organization_id, workflow_type, idempotency_key, task_id, status, step)
+                VALUES ('wf_auto', ${ORG}, 'task.delivery', 'delivery:wi_auto', 'wi_auto', 'running', 'start')`;
+    expect((await call(memberKey, "PATCH", "/v1/tasks/wi_auto", { autoTaskPreview: false })).status).toBe(200);
   });
 
   test("egress lux would refuse is refused, saying why", async () => {

@@ -153,6 +153,11 @@ export const previewSettingsSchema = z.object({
   wakeTimeoutMinutes: z.number().int().min(1).max(PREVIEW_WAKE_TIMEOUT_MAX_MINUTES).default(PREVIEW_WAKE_TIMEOUT_DEFAULT_MINUTES),
   /** The machine size a preview runs on (an organization's size id); null: the organization's default size. */
   machineSize: z.string().min(1).max(100).nullable().default(null),
+  /**
+   * Automatic task previews (projects.auto_task_preview): when dude opens or reopens a pull request it opened for a
+   * task, it prepares the task's preview, asleep until someone opens it. A task may say otherwise.
+   */
+  autoTaskPreview: z.boolean().default(false),
 });
 export type PreviewSettings = z.infer<typeof previewSettingsSchema>;
 

@@ -106,6 +106,7 @@ import { SourceLine } from "./StartsFrom.tsx";
 import { HeldPanel } from "./HeldPanel.tsx";
 import { heldAtGate, sentBackFromGate } from "../beforePullRequest.ts";
 import { BeforePullRequestControl } from "./BeforePullRequestControl.tsx";
+import { AutoPreviewControl } from "./AutoPreviewControl.tsx";
 import { DriverEnded, DriverSwitch, driverMode } from "@dude/design-system/components";
 import { DriverConfirmation, useDriverSwitch } from "./DriverSwitch.tsx";
 import { EarlierFeedbackTab, FeedbackTab, FeedbackTray, MergeHoldChip, useTaskFeedbackPage } from "./FeedbackSection.tsx";
@@ -848,6 +849,7 @@ export function TaskScreen({ client, taskId, runId, onOpenRun, onNavigate, tab: 
           ...(many ? [{ label: "Attempt", value: String(shown) }] : []),
         ]} />
         {!earlier ? <BeforePullRequestControl client={client} task={item} you={people.you} onChanged={() => void load()} /> : null}
+        {!earlier ? <AutoPreviewControl client={client} task={item} onChanged={() => void load()} /> : null}
       </section>
       <TaskMachineRaises client={client} task={item} by={firstName(people.names.get(people.you ?? "") ?? "you")} onChanged={reload} />
       {showServers ? (

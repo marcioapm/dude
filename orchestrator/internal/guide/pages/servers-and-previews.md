@@ -35,6 +35,7 @@ A preview sleeps when nobody uses it, and wakes when someone opens its URL. Its 
 
 | Setting | What it does | Default |
 | --- | --- | --- |
+| Automatic task previews | Prepare a task's preview when dude opens or reopens the task's pull request | Off |
 | Machine | The size a preview runs on | the default size |
 | Image | What a preview starts in | the project's runtime image |
 | Egress allowlist | Hosts a preview may reach, beyond the repository; `*` allows anywhere | — |
@@ -42,6 +43,16 @@ A preview sleeps when nobody uses it, and wakes when someone opens its URL. Its 
 | Idle timeout | With no request for this long, the preview is parked | 15 minutes |
 | First wake timeout | How long a wake waits until the preview has served once; its first start may build images | 15 minutes |
 | Wake timeout | How long every later wake waits | 5 minutes |
+
+## Automatic task previews
+
+With **Automatic task previews** on, when dude opens a pull request for a task — or someone reopens one dude opened — dude prepares the task's preview. It is prepared asleep: nothing runs, and no message says it is ready, until someone opens its URL. If the task already has a live preview (its conductor started one, say), that one is kept: a task never gets a second. Nothing happens on a push to the pull request, on a pull request dude took over from someone, or for a branch preview.
+
+It needs a server that starts in previews. With none, nothing is prepared and nothing complains; the setting shows a hint pointing to **Definitions** instead.
+
+It also needs previews that sleep and wake on this deployment: a lux that names preview hostnames itself (relative previews), or a preview domain set for dude. Without either, no automatic preview is prepared, whatever the setting says; ask whoever runs dude.
+
+Each task can say otherwise, in its Overview under **This task → Automatic preview**: **Use project default** (it says which way the project goes), **On** or **Off**. It only decides that automatic preparation: a task set to **Off** still gets a preview when someone, or its conductor, asks for one. From the CLI: `dude task update TASK --auto-preview on|off|project`.
 
 ## Commenting on a preview
 

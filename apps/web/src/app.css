@@ -1352,6 +1352,15 @@ body {
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+/* Project settings → Servers → Automatic task previews: the calm hint when nothing would start. */
+.autoPreviewHint {
+  display: block;
+  margin-top: var(--ds-space-8);
+  color: var(--ds-color-text-secondary);
+}
+.autoPreviewHint a {
+  white-space: nowrap;
+}
 /* Settings → Network: the small headings between a row's chip lists. */
 .networkLabel {
   font-size: var(--ds-text-xs);

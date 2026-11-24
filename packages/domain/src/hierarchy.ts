@@ -511,6 +511,10 @@ export const taskSchema = z.object({
   acceptanceCriteria: z.array(z.string()).default([]),
   status: taskStatusSchema,
   requestedBy: z.string().nullable().default(null),
+  /** Automatic task previews (tasks.auto_task_preview): true or false, or null to follow its project's. */
+  autoTaskPreview: z.boolean().nullable().default(null),
+  /** Its project's automatic task previews, as its settings say now: what null follows. */
+  projectAutoTaskPreview: z.boolean().default(false),
   /**
    * Who drives it: told when it waits on someone, and the only one who
    * answers its agents. Null for a task nobody owns, which anyone may
