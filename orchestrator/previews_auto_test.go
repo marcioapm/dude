@@ -7,11 +7,9 @@ package orchestrator_test
 // service, against the fake GitHub and lux.
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,13 +24,15 @@ import (
 )
 
 // autoWorld is a world whose previews wake, with a web server to start in
-// previews, the delivery store and PR syncer wired to AutoPreview as the
-// orchestrator's main wires them, and the project's setting as given.
+// previews, the delivery store and PR syncer wired to AutoPreview as main
+// wires them; projectOn turns the project's setting on (off is the default).
 func autoWorld(t *testing.T, projectOn bool) *world {
 	w := readyWorld(t, "npm run dev")
 	w.store.AutoPreview = w.previews.AutoPreview
 	w.prs.AutoPreview = w.previews.AutoPreview
-	mustExec(t, w.owner, `UPDATE projects SET auto_task_preview = $2 WHERE id = $1`, w.project, projectOn)
+	if projectOn {
+		mustExec(t, w.owner, `UPDATE projects SET auto_task_preview = true WHERE id = $1`, w.project)
+	}
 	return w
 }
 
@@ -78,19 +78,36 @@ func (w *world) syncPRByID(id string) {
 	}
 }
 
-// previews counts task's preview Runs, and its live ones.
+const liveTaskPreview = `FROM runs WHERE task_id = $1 AND kind = 'preview' AND ended_at IS NULL
+	AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`
+
+// taskPreviews counts task's preview Runs, and its live ones.
 func (w *world) taskPreviews(task string) (all, live int) {
 	w.t.Helper()
-	all = w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'preview'`, task)
-	live = w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'preview' AND ended_at IS NULL
-		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, task)
-	return all, live
+	return w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND kind = 'preview'`, task),
+		w.count(`SELECT count(*) `+liveTaskPreview, task)
 }
 
 // livePreviewID is task's one live preview.
 func (w *world) livePreviewID(task string) string {
-	return w.str(`SELECT id FROM runs WHERE task_id = $1 AND kind = 'preview' AND ended_at IS NULL
-		AND status IN ('pending', 'scheduled', 'starting', 'running', 'paused')`, task)
+	return w.str(`SELECT id `+liveTaskPreview, task)
+}
+
+// onlyPreview is task's preview, failing unless it has exactly one, live.
+func (w *world) onlyPreview(task string) string {
+	w.t.Helper()
+	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
+		w.t.Fatalf("%d previews (%d live), want one", all, live)
+	}
+	return w.livePreviewID(task)
+}
+
+// stopPreview is a person stopping task's preview for good.
+func (w *world) stopPreview(task string) {
+	w.t.Helper()
+	if _, err := w.previews.StopPreview(context.Background(), w.org, task, "person", ledger.ActorHuman, ""); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 func (w *world) noTaskPreview(task, why string) {
@@ -128,9 +145,7 @@ func (w *world) dormant(runID string) {
 
 // 1. Off by default: dude opening a task's pull request prepares nothing.
 func TestAutoPreviewOffByDefaultPreparesNothing(t *testing.T) {
-	w := readyWorld(t, "npm run dev")
-	w.store.AutoPreview = w.previews.AutoPreview
-	w.prs.AutoPreview = w.previews.AutoPreview
+	w := autoWorld(t, false)
 	if n := w.count(`SELECT count(*) FROM projects WHERE id = $1 AND NOT auto_task_preview`, w.project); n != 1 {
 		t.Fatal("a project's automatic task previews are not off by default")
 	}
@@ -160,11 +175,7 @@ func TestAutoPreviewOnPreparesOneDormantTaskPreview(t *testing.T) {
 	if committed != 1 {
 		t.Fatalf("the preview was prepared before the pull request's record committed (%d seen)", committed)
 	}
-	all, live := w.taskPreviews(task)
-	if all != 1 || live != 1 {
-		t.Fatalf("%d previews (%d live), want one", all, live)
-	}
-	runID := w.livePreviewID(task)
+	runID := w.onlyPreview(task)
 	if n := w.count(`SELECT count(*) FROM runs WHERE preview_branch IS NOT NULL AND project_id = $1`, w.project); n != 0 {
 		t.Fatalf("%d branch previews for a task's pull request", n)
 	}
@@ -230,10 +241,7 @@ func TestAutoPreviewFollowsTheTaskThenTheProject(t *testing.T) {
 				w.noTaskPreview(task, c.name)
 				return
 			}
-			if all, live := w.taskPreviews(task); all != 1 || live != 1 {
-				t.Fatalf("%d previews (%d live), want one", all, live)
-			}
-			w.dormant(w.livePreviewID(task))
+			w.dormant(w.onlyPreview(task))
 		})
 	}
 }
@@ -271,7 +279,7 @@ func TestAutoPreviewOnReopenEnsuresOnePreview(t *testing.T) {
 	task := w.task()
 	w.conductorOf(task)
 	id, number := w.openTaskPR(task)
-	first := w.livePreviewID(task)
+	first := w.onlyPreview(task)
 
 	// Still live: closed and reopened, the same preview.
 	w.gh.Close(number)
@@ -283,9 +291,7 @@ func TestAutoPreviewOnReopenEnsuresOnePreview(t *testing.T) {
 	}
 
 	// Ended while open: a plain sync, a push and a replay make nothing.
-	if _, err := w.previews.StopPreview(context.Background(), w.org, task, "person", ledger.ActorHuman, ""); err != nil {
-		t.Fatal(err)
-	}
+	w.stopPreview(task)
 	w.syncPRByID(id)
 	w.gh.CommitOnTop(delivery.BranchFor(task, 1), "a person's push")
 	w.syncPRByID(id)
@@ -324,12 +330,8 @@ func TestAutoPreviewNotForAPullRequestRecordedAlready(t *testing.T) {
 	w := autoWorld(t, true)
 	task := w.task()
 	id, number := w.openTaskPR(task)
-	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
-		t.Fatalf("%d previews (%d live) on open, want one", all, live)
-	}
-	if _, err := w.previews.StopPreview(context.Background(), w.org, task, "person", ledger.ActorHuman, ""); err != nil {
-		t.Fatal(err)
-	}
+	w.onlyPreview(task)
+	w.stopPreview(task)
 	w.gh.Close(number)
 	w.syncPRByID(id)
 	w.gh.Reopen(number) // on GitHub only: not synced
@@ -391,24 +393,11 @@ func TestAutoPreviewSkipsQuietlyWithoutAServerOrForAFinishedTask(t *testing.T) {
 	}
 }
 
-// syncBuffer is a log sink a test reads while the loops write.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
-
 // 8. A failing preparation is logged and fails nothing: the pull request
 // is recorded on open, and its reopening synced.
 func TestAutoPreviewFailureLeavesThePullRequestRecorded(t *testing.T) {
 	w := autoWorld(t, true)
-	var logs syncBuffer
+	var logs lockedBuffer
 	svc := &servers.Service{DB: w.app, Lux: w.previews.Lux, PreviewDomain: previewDomain,
 		Log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	// The real preparation, on a context already over: its database work fails.
@@ -494,8 +483,5 @@ func TestAutoPreviewDoesNotAskLux(t *testing.T) {
 	if n := stuck.reads.Load(); n != 0 {
 		t.Fatalf("AutoPreview read lux %d times, want none", n)
 	}
-	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
-		t.Fatalf("%d previews (%d live), want one", all, live)
-	}
-	w.dormant(w.livePreviewID(task))
+	w.dormant(w.onlyPreview(task))
 }
