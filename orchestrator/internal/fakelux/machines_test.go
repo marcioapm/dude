@@ -56,6 +56,32 @@ func TestPoolsAndTheMemoryLimit(t *testing.T) {
 	}
 }
 
+// A Run that names no pool is bound where lux's resolvePool puts it: the
+// marked default, else the pool named default.
+func TestAnUnpinnedRunIsBoundAsLuxResolvesItsPool(t *testing.T) {
+	fake := New("", "k", func(map[string]any) Behaviour { return Behaviour{Hang: true} })
+	srv := httptest.NewServer(fake.Handler())
+	t.Cleanup(srv.Close)
+	client := lux.New(srv.URL, "k")
+	ctx := context.Background()
+	fake.mu.Lock()
+	fake.Pools = []lux.Pool{{ID: "pool_amd", Name: "amd64"}, {ID: "pool_dflt", Name: "default"}, {ID: "pool_arm", Name: "ondemand-arm64"}}
+	fake.mu.Unlock()
+	run, err := client.Submit(ctx, lux.Spec{Image: lux.Image{Ref: "agent:1"}, Workload: lux.Workload{Adapter: "generic", Command: []string{"true"}}}, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := client.Get(ctx, run.ID); got.PoolID != "pool_dflt" {
+		t.Errorf("no pool marked: poolId = %q, want the pool named default", got.PoolID)
+	}
+	fake.mu.Lock()
+	fake.Pools[0].IsDefault = true
+	fake.mu.Unlock()
+	if got, _ := client.Get(ctx, run.ID); got.PoolID != "pool_amd" {
+		t.Errorf("amd64 marked: poolId = %q, want the marked pool", got.PoolID)
+	}
+}
+
 // A placement.poolId the tenant has no pool for is refused at submit with
 // 422 unknown_pool, as lux refuses it: one never there, and one deleted
 // (DELETE /v1/pools/{name}) after a Run was placed in it. Nothing is made.

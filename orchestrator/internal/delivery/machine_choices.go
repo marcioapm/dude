@@ -52,10 +52,8 @@ func (c MachineChoices) Named(m Machine) Machine {
 func (s Sizes) Choices(current Machine, org string, pools []lux.Pool, run lux.Run) MachineChoices {
 	out := MachineChoices{Current: current, Org: org, Largest: true}
 	defaultPool := ""
-	for _, p := range pools {
-		if p.IsDefault {
-			defaultPool = p.ID
-		}
+	if p, ok := lux.DefaultPool(pools); ok {
+		defaultPool = p.ID
 	}
 	poolID := func(m Machine) string {
 		if m.PoolID != nil && *m.PoolID != "" {

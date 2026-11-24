@@ -679,6 +679,32 @@ func TestAgentMachineRequestResumesTheSameRun(t *testing.T) {
 	}
 }
 
+// A lux that marks no pool default still puts a Run that names none in the
+// pool named default: a request for a larger size there is raised, not
+// refused as unread pools.
+func TestAMoveIsRaisedWhenLuxMarksNoDefaultPool(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Pools = []lux.Pool{{ID: "pool_amd", Name: "amd64"}, {ID: defaultPool, Name: "default"},
+		{ID: "pool_od_amd", Name: "ondemand-amd64"}, {ID: "pool_od_arm", Name: "ondemand-arm64"}}
+	_, runID, liveID := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	if status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"suite killed at four workers"}`); status != 200 {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	w.until("move settled", func() bool {
+		return w.count(`SELECT count(*) FROM machine_moves WHERE run_id=$1 AND settled_at IS NOT NULL AND refused IS NULL`, runID) == 1
+	})
+	if got := w.machineOf(runID); got["name"] != "Bigger" {
+		t.Fatalf("machine=%v", got)
+	}
+	if w.count(`SELECT count(*) FROM events WHERE run_id=$1 AND event_type='machine.raised'`, runID) != 1 {
+		t.Fatal("missing machine.raised")
+	}
+	if r := w.lux.Runs(); len(r) != 1 || r[0].ID != liveID || r[0].Resumed != 1 {
+		t.Fatal("the move did not resume the same Run once")
+	}
+}
+
 // The scripted implementer asks for a larger machine in its first turn.
 // Accepted, that turn ends without the work being done or the phase
 // finishing: the Run is parked, resumed on the size, and its work is the

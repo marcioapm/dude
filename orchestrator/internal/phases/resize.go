@@ -188,15 +188,14 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 	if err != nil {
 		return "", err
 	}
-	for _, p := range pools {
-		if p.IsDefault {
-			if p.ID == current {
-				return "", nil
-			}
-			return p.ID, nil
-		}
+	p, ok := lux.DefaultPool(pools)
+	if !ok {
+		return "", fmt.Errorf("lux reports no default pool")
 	}
-	return "", fmt.Errorf("lux reports no default pool")
+	if p.ID == current {
+		return "", nil
+	}
+	return p.ID, nil
 }
 
 // ValidateResize checks the exact sized resume without stopping the Run.

@@ -205,9 +205,9 @@ func PoolNamesOf(pools []lux.Pool) PoolNames {
 	out := PoolNames{ByID: map[string]string{}}
 	for _, p := range pools {
 		out.ByID[p.ID] = p.Name
-		if p.IsDefault {
-			out.Default = p.Name
-		}
+	}
+	if p, ok := lux.DefaultPool(pools); ok {
+		out.Default = p.Name
 	}
 	return out
 }
