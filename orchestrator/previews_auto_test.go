@@ -409,8 +409,8 @@ func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return 
 func TestAutoPreviewFailureLeavesThePullRequestRecorded(t *testing.T) {
 	w := autoWorld(t, true)
 	var logs syncBuffer
-	svc := *w.previews.Service
-	svc.Log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	svc := &servers.Service{DB: w.app, Lux: w.previews.Lux, PreviewDomain: previewDomain,
+		Log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	// The real preparation, on a context already over: its database work fails.
 	failing := func(ctx context.Context, org, taskID string) error {
 		over, cancel := context.WithCancel(ctx)
@@ -480,8 +480,7 @@ func TestAutoPreviewDoesNotAskLux(t *testing.T) {
 	task := w.task()
 	stuck := &stuckLux{Client: w.previews.Lux, stuck: make(chan struct{})}
 	t.Cleanup(func() { close(stuck.stuck) })
-	svc := *w.previews.Service
-	svc.Lux = stuck
+	svc := &servers.Service{DB: w.app, Lux: stuck, Log: w.log, PreviewDomain: previewDomain}
 	done := make(chan error, 1)
 	go func() { done <- svc.AutoPreview(context.Background(), w.org, task) }()
 	select {
