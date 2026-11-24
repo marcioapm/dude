@@ -523,6 +523,53 @@ func TestASecretSplitAcrossFramesNeverReachesTheSetupLine(t *testing.T) {
 	}
 }
 
+// A tail cut inside a secret's rune must not publish its incomplete head line.
+func TestASecretCutInsideARuneNeverReachesTheSetupLine(t *testing.T) {
+	const suffix = "rd-not-real-secret-77"
+	for _, runeText := range []string{"ö", "o", "\U0001F600"} {
+		t.Run(runeText, func(t *testing.T) {
+			value := "pässw" + runeText + suffix
+			s, r, owner := setupStageRun(t, value)
+			// Cut after the rune's first byte; UTF-8 rounding drops its remainder.
+			dropped := len(runeText) - 1
+			blanks := initOutputMax - dropped - len(suffix) - 1
+			frames := []lux.Frame{
+				initEvent(1, "start", 0),
+				output(1, "stderr", setupRunningPrefix+"abs\n"),
+				output(1, "stdout", "auth "+value+"\n"+strings.Repeat("\n", blanks)),
+			}
+			t0 := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+			applyEach(t, s, r, frames, []time.Time{t0, t0.Add(time.Second), t0.Add(5 * time.Second)})
+			var tail, line string
+			if err := owner.QueryRow(context.Background(), `SELECT harness_state->'init'->>'tail',
+				COALESCE(harness_state->'init'->>'line', '') FROM runs WHERE id = $1`, r.ID).Scan(&tail, &line); err != nil {
+				t.Fatal(err)
+			}
+			if len(tail) != initOutputMax-dropped || !strings.HasPrefix(tail, suffix+"\n") {
+				t.Fatalf("cut tail: %d bytes, want %d starting with %q", len(tail), initOutputMax-dropped, suffix)
+			}
+			if strings.Contains(line, suffix) {
+				t.Errorf("persisted init.line holds secret suffix: %q", line)
+			}
+			if line != "" {
+				t.Errorf("persisted incomplete line: %q", line)
+			}
+			for _, e := range stageEvents(t, owner, r.ID) {
+				if e.Type == EvRunSetupProgress {
+					raw, err := json.Marshal(e.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(raw), suffix) {
+						t.Errorf("progress payload holds secret suffix: %s", raw)
+					}
+					t.Errorf("published incomplete line: %s", raw)
+				}
+			}
+		})
+	}
+}
+
 // A value that runs past setupLineMax is redacted before the line is
 // shortened: no part of it is left to see. The Run's own redactor is the
 // only one that knows it, and the ledger's redaction of the whole payload

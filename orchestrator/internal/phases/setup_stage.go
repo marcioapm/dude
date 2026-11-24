@@ -145,7 +145,9 @@ func (t *translator) setupProgress(ctx context.Context, tx pgx.Tx, s *Syncer, f 
 	if !o.LineAt.IsZero() && now.Sub(o.LineAt) < setupLineEvery {
 		return nil
 	}
-	line := setupLine(o.Tail, len(o.Tail) >= initOutputMax)
+	// keepTail can drop up to UTFMax-1 bytes at a UTF-8 cut; conservatively
+	// skip the head line even when a near-full tail was never cut.
+	line := setupLine(o.Tail, len(o.Tail) > initOutputMax-utf8.UTFMax)
 	if line == "" {
 		return nil
 	}
