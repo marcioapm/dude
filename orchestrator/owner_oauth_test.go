@@ -683,6 +683,68 @@ func TestAnOwnerRefusedAgainAfterReconnectingIsAskedAgain(t *testing.T) {
 	}
 }
 
+// A Connect that lands while the publication step is calling GitHub with
+// the previous token is not credited with that token's refusal: the step
+// asks to reconnect for the Connect it ran on, then runs on the new one,
+// and its refusal asks again.
+func TestAConnectDuringARefusedPublicationIsAskedAboutWhenRefused(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
+	consumed := func() int {
+		return w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized)
+	}
+	refused := func(token string) bool {
+		return w.count(`SELECT count(*) FROM github_user_authorizations WHERE person_id = $1 AND access_token = $2
+			AND reconnect_required`, ana, token) == 1
+	}
+	var reconnected atomic.Bool
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.OpenRefuse = map[string]int{"bad-token": 401, "bad-again": 401}
+		// While GitHub weighs the first token, Ana presses Connect again.
+		s.Intercept = func(r *http.Request) int {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pulls") &&
+				r.Header.Get("Authorization") == "Bearer bad-token" && reconnected.CompareAndSwap(false, true) {
+				w.connectThroughCallback(ana, "bad-again", 1)
+			}
+			return 0
+		}
+	})
+	w.connectThroughCallback(ana, "bad-token", 1)
+	w.until("both refusals swept", func() bool {
+		return consumed() == 2 && w.waitingOnAuthorization(task) && refused("bad-again")
+	})
+	if !reconnected.Load() {
+		t.Fatal("the second Connect never ran during the first token's request")
+	}
+	var auth []string
+	w.gh.Set(func(s *fakegithub.Server) { auth = slices.Clone(s.OpenAuth) })
+	if want := []string{"Bearer bad-token", "Bearer bad-again"}; !slices.Equal(auth, want) {
+		t.Fatalf("creation auth %q, want %q", auth, want)
+	}
+	want := []string{ana + " false", ana + " true", ana + " true"}
+	if got := w.credentialAsks(task); !slices.Equal(got, want) {
+		t.Fatalf("credential asks %q, want %q", got, want)
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub); n != 3 {
+		t.Fatalf("the conductor was told %d times, want three", n)
+	}
+	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
+		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
+	}
+}
+
 // takeOver makes person the task's owner through the control plane's real
 // PATCH /v1/tasks/:id over this test's database (testdata/take-over.ts).
 func (w *world) takeOver(task, person string) {
