@@ -22,11 +22,11 @@ import (
 // live, is not announced. No network work: everything is read in tx.
 func announceReady(ctx context.Context, tx pgx.Tx, log *slog.Logger, org, runID string) error {
 	var starter, projectID, taskID, branch string
-	// A Run has one run.created. Found by run_id (events_run_cursor_idx),
-	// not in cursor order: an ordered scan of a Run with a long history may
-	// be planned as a walk of events_pkey, here with the Run row held.
+	// run.created is a preview Run's first event (inserted with its runs
+	// row): one events_run_cursor_idx probe, whatever its history.
 	err := tx.QueryRow(ctx, `SELECT e.actor_id, r.project_id, COALESCE(r.task_id, ''), COALESCE(r.preview_branch, '')
-		FROM runs r JOIN events e ON e.run_id = $1 AND e.event_type = 'run.created' AND e.actor_type = $2
+		FROM runs r JOIN events e ON e.cursor = (SELECT min(cursor) FROM events WHERE run_id = $1)
+			AND e.event_type = 'run.created' AND e.actor_type = $2
 		WHERE r.id = $1 AND `+livePreview, runID, ledger.ActorAgent).Scan(&starter, &projectID, &taskID, &branch)
 	if db.IsNotFound(err) {
 		return nil
