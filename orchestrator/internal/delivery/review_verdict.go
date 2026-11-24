@@ -347,9 +347,6 @@ func (f verdictFinding) blocks() bool {
 // suggestion is the gate a finding kept as a suggestion fails and why
 // (keptSuggestion); ok is false for any other finding.
 func (f verdictFinding) suggestion() (gate, why string, ok bool) {
-	if f.Kept == "" {
-		return "", "", false
-	}
 	return keptSuggestion(f.Kept)
 }
 
@@ -408,7 +405,7 @@ func (f verdictFinding) inlineText() string {
 	extra := []string{f.Description, f.Fix, f.Acceptance}
 	if gate, why, ok := f.suggestion(); ok {
 		text = "Suggestion, not blocking: " + text
-		extra = append(extra, fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why))
+		extra = append(extra, keptText(gate, why))
 	} else if !f.blocks() {
 		text = "nit: " + text
 	}

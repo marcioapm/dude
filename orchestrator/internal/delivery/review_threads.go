@@ -254,7 +254,7 @@ func DudesThreadsTx(ctx context.Context, tx pgx.Tx, taskID string) (*forge.Threa
 func threadReplyText(status, note, head string) string {
 	if status == "accepted" {
 		if gate, why, ok := keptSuggestion(note); ok {
-			return fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why)
+			return keptText(gate, why)
 		}
 		return "Withdrawn: " + withdrawnNote(note) + "."
 	}

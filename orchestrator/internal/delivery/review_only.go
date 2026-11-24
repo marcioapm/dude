@@ -3,6 +3,7 @@ package delivery
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -119,6 +120,12 @@ func retryableLensFailure(reason string) bool {
 // minWrongEvidence is the fewest runes, trimmed, of "wrong:" evidence.
 const minWrongEvidence = 10
 
+// saysSomething says trimmed grounds ("wrong:" evidence, a suggestion's
+// why) are at least minWrongEvidence runes with a letter or digit.
+func saysSomething(s string) bool {
+	return len([]rune(s)) >= minWrongEvidence && strings.ContainsFunc(s, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+}
+
 // reviewOnlyGroundsTx reads a review-only task's dismissal reason (only
 // the reason: dismiss_finding's schema is the writing mode's) as its
 // grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
@@ -130,7 +137,7 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 	rest = strings.TrimSpace(rest)
 	switch kind := strings.ToLower(strings.TrimSpace(word)); kind {
 	case "wrong":
-		if len([]rune(rest)) < minWrongEvidence || !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		if !saysSomething(rest) {
 			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
 		}
 		return map[string]any{"kind": kind, "evidence": clip(oneLine(rest), 1000)}, nil
@@ -177,24 +184,25 @@ var suggestionGates = map[int]string{
 }
 
 // suggestionGrounds reads "gate <N>: <why>", the rest of a "suggestion:"
-// reason: N one of suggestionGates, why saying something (as "wrong:"
-// evidence must).
+// reason: N one of suggestionGates, why saying something.
 func suggestionGrounds(rest string) (gate int, why string, ok bool) {
 	word, rest, _ := strings.Cut(strings.TrimSpace(rest), " ")
-	if !strings.EqualFold(word, "gate") {
-		return 0, "", false
-	}
 	num, why, found := strings.Cut(rest, ":")
 	num, why = strings.TrimSpace(num), strings.TrimSpace(why)
-	if !found || len(num) != 1 || num[0] < '0' || num[0] > '9' {
+	if !strings.EqualFold(word, "gate") || !found || len(num) != 1 || num[0] < '0' || num[0] > '9' {
 		return 0, "", false
 	}
 	gate = int(num[0] - '0')
-	if _, known := suggestionGates[gate]; !known || len([]rune(why)) < minWrongEvidence ||
-		!strings.ContainsFunc(why, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+	if _, known := suggestionGates[gate]; !known || !saysSomething(why) {
 		return 0, "", false
 	}
 	return gate, why, true
+}
+
+// keptText is the sentence that gives a kept suggestion's gate and why,
+// in dude's thread reply and its inline comment.
+func keptText(gate, why string) string {
+	return fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why)
 }
 
 // keptSuggestion reads a finding's resolution note as a review-only
@@ -209,8 +217,5 @@ func keptSuggestion(note string) (gate, why string, ok bool) {
 		return "", "", false
 	}
 	n, why, ok := suggestionGrounds(rest)
-	if !ok {
-		return "", "", false
-	}
-	return suggestionGates[n], strings.TrimRight(why, "."), true
+	return suggestionGates[n], strings.TrimRight(why, "."), ok
 }

@@ -49,7 +49,7 @@ This task reviews pull request #12, its author's. dude changes no code here: the
 
 ### What holds the verdict
 
-An introduced finding at `medium` or above (the first bullet above) holds the verdict only when it clears **every** gate below, 2 to 7, judged per finding at the reviewed head. One that fails a gate is kept as a suggestion: still posted, with the gate and why, and it holds nothing. Its severity stays as filed; the gate decides only whether it holds the verdict. A finding that clears every gate stays open.
+An introduced finding at `medium` or above (the first bullet above) holds the verdict only when it clears **every** gate below, 2 to 7, judged per finding at the reviewed head. One that fails a gate is kept as a suggestion: still posted, with the gate and why, and it holds nothing. A finding that clears every gate stays open.
 
 2. **Shipped path**: reachable through a real entry point of what this pull request ships. The feature it adds or changes counts even behind a flag or off by default. Not shipped: a pre-existing toggle it does not change, dev-only or local opt-in paths, test-only tooling no CI job runs, unregistered or dead code, absurd inputs no real caller sends. A test-quality finding takes gate 4 instead.
 3. **Proof**: a failing test, a command and its output, a query plan, or a complete trace through named code (file:line steps from the entry point to the wrong outcome). A mutation counts only if the mutant changes observable behaviour; an equivalent mutant proves nothing. Proof you can obtain yourself (re-run the owner lens, trace the code) is no gate-3 failure: a thin report of a real shipped defect is grounds to get the proof, not to keep it as a suggestion.

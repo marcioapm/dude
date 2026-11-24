@@ -230,8 +230,7 @@ func TestASuggestionApprovesAtTheSameHead(t *testing.T) {
 	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
 	root := w.dudeLineComments(n)[0]
 	runs := w.count(`SELECT count(*) FROM runs WHERE task_id = $1 AND phase = 'review'`, wi)
-	var finding string
-	_ = w.owner.QueryRow(t.Context(), `SELECT id FROM review_findings WHERE task_id = $1 AND status = 'open'`, wi).Scan(&finding)
+	finding := w.openFinding(wi)
 	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"suggestion: gate 2: only the local greet mode reaches it, docs/dev.md:4"}`)
 	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
 	got := reviewsAt(w.dudeReviews(wi, n), h1)
