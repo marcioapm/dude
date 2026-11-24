@@ -58,7 +58,7 @@ test("the project's automatic task previews are off by default, and turned on an
   const client = new Recording("a");
   const row = await serversPage(client);
   expect(row.textContent).toContain("Automatic task previews");
-  expect(row.textContent).toContain("when dude opens or reopens the task’s pull request");
+  expect(row.textContent).toContain("when the task’s pull request opens or reopens");
   expect(byRole(row, "combobox", "Automatic task previews").textContent).toContain("Off");
   expect(hint(row)).toBeNull();
 
@@ -127,7 +127,7 @@ test("a task following its project says which way the project goes, and what is 
     const select = byRole(row, "combobox", "Automatic preview");
     expect(select.textContent).toBe(`Use project default (${project ? "On" : "Off"})`);
     expect(effect(row)).toBe(`Effective: ${project ? "On" : "Off"} · project default`);
-    expect(row.textContent).toContain("when it opens or reopens the pull request");
+    expect(row.textContent).toContain("when its pull request opens or reopens");
     expect(row.textContent).toContain("A preview someone asks for still starts.");
     await click(select);
     const options = await until(() => { const o = allByRole(document.body, "option"); return o.length ? o : undefined; }, "options");

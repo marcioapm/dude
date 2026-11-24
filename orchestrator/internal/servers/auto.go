@@ -10,15 +10,15 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
-// AutoPreviewActor is who prepares a task's preview when dude opens or
-// reopens the task's pull request (run.created's actor id).
+// AutoPreviewActor is who prepares a task's preview when the task's pull
+// request opens or reopens (run.created's actor id).
 const AutoPreviewActor = "auto-preview"
 
-// AutoPreview prepares task's preview when dude opens or reopens a pull
-// request it opened for the task, if automatic task previews are on for it
-// (its own choice, else its project's). As the system, the preview sleeps
-// until someone opens its URL (agentWakes) and is never announced
-// (announceReady); a live one is kept.
+// AutoPreview prepares task's preview when its pull request opens (dude
+// opens it, or takes over a person's) or reopens, if automatic task
+// previews are on for it (its own choice, else its project's). As the
+// system, the preview sleeps until someone opens its URL (agentWakes) and
+// is never announced (announceReady); a live one is kept.
 //
 // A project with nothing to start in previews (or no preview domain) gets
 // none: startPreview would make an eager one, whose Run starts at once.
