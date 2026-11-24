@@ -12,7 +12,7 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	f, token := roleSettingsWorld(t)
 	mustExec(t, f.owner, `INSERT INTO project_servers(project_id,organization_id,name,port,command,setup,workdir,env,autostart_in_previews)
  VALUES($1,$2,'web',3000,'bun run dev','bun install','app','[{"name":"PUBLIC_HOST","value":"RECIPE-ENV-SECRET"}]',true)`, f.project, f.org)
-	mustExec(t, f.owner, `UPDATE projects SET preview_image_id='img_web',preview_settings='{"image":"ghcr.io/x/preview:1","idleTimeoutMinutes":37,"firstWakeTimeoutMinutes":42,"wakeTimeoutMinutes":9,"egress":["example.com"],"machineSize":"msz_l"}' WHERE id=$1`, f.project)
+	mustExec(t, f.owner, `UPDATE projects SET preview_image_id='img_web',preview_settings='{"image":"ghcr.io/x/preview:1","idleTimeoutMinutes":37,"firstWakeTimeoutMinutes":42,"wakeTimeoutMinutes":9,"egress":["example.com"],"machineSize":"msz_l"}',auto_task_preview=true WHERE id=$1`, f.project)
 	route := f.settingsRoute(t, "/v1/projects/"+f.project+"/servers")
 	rules := map[string]coverageRule{}
 	for _, k := range []string{"name", "command", "setup", "workdir", "port", "autostartInPreviews"} {
@@ -22,7 +22,7 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	rules["servers.*.env.*.value"] = coverageRule{Excluded: "environment values may contain credentials"}
 	rules["servers.*.updatedAt"] = coverageRule{Excluded: "audit metadata"}
 	rules["servers.*.updatedBy"] = coverageRule{Excluded: "audit metadata"}
-	previewKeys := []string{"image", "imageId", "egress", "machineSize", "idleTimeoutMinutes", "firstWakeTimeoutMinutes", "wakeTimeoutMinutes"}
+	previewKeys := []string{"image", "imageId", "egress", "machineSize", "idleTimeoutMinutes", "firstWakeTimeoutMinutes", "wakeTimeoutMinutes", "autoTaskPreview"}
 	for _, k := range previewKeys {
 		path := "previews." + k
 		if k == "egress" {
@@ -52,6 +52,9 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	for _, k := range previewKeys {
 		actual := field(got, "previews", k, "value")
 		want := field(route, "previews", k)
+		if k == "autoTaskPreview" && actual != true {
+			t.Errorf("preview autoTaskPreview not the bool true: %#v", actual)
+		}
 		if s, ok := actual.(string); ok {
 			if !strings.HasPrefix(s, "⟦external ") {
 				t.Errorf("preview %s not external text: %q", k, s)
@@ -70,6 +73,12 @@ func TestSettingsServersMatchMemberRouteWithoutEnvironmentValues(t *testing.T) {
 	}
 	if field(got, "previews", "image", "value") == nil {
 		t.Error("preview image unset in fixture")
+	}
+	// Off is the column's default: dude's, not the project's.
+	mustExec(t, f.owner, `UPDATE projects SET auto_task_preview=false WHERE id=$1`, f.project)
+	off := field(f.settingsOf(t, token, `{"section":"servers"}`), "settings", 0, "servers", "previews", "autoTaskPreview")
+	if field(off, "value") != false || field(off, "source") != "dude" {
+		t.Errorf("autoTaskPreview off: %v", off)
 	}
 	schemaRules := map[string]coverageRule{}
 	for _, k := range previewKeys {
