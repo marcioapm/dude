@@ -230,6 +230,29 @@ func TestAReplyRecordedBeforeItsThreadWasKnownIsDeliveredOnceEdited(t *testing.T
 	}
 }
 
+// The author answers in the thread of a finding the conductor kept as a
+// suggestion: the conductor is told the finding is a suggestion, with its
+// gate and why, not blocking, as dude posted it.
+func TestAReplyOnAKeptSuggestionTellsTheConductorItIsNotBlocking(t *testing.T) {
+	w := newWorld(t)
+	w.withTools()
+	wi, n, h1 := w.findingThenVerdict(func() string { return "still" })
+	root := w.dudeLineComments(n)[0]
+	finding := w.openFinding(wi)
+	w.must(wi, "dismiss_finding", `{"id":"`+finding+`","reason":"suggestion: gate 2: only the local greet mode reaches it, docs/dev.md:4"}`)
+	w.agentsDone(wi, "approved at H1", func() bool { return len(reviewsAt(w.dudeReviews(wi, n), h1)) == 2 && w.waitingOnPR(wi) })
+	reply := w.gh.ReplyInThread(n, "alice", root.ID, "Should I fix it anyway?")
+	w.until("the reply in Chat", func() bool { w.sync(); return w.replyMessages(wi, reply) == 1 })
+	w.until("the conductor told", func() bool { return w.woke(wi, "Should I fix it anyway?") })
+	for _, want := range []string{"It replies in dude's thread on finding " + finding + " (medium): The greeting is rude.",
+		"Suggestion, not blocking: **The greeting is rude** (medium)",
+		"Kept as a suggestion (shipped path): only the local greet mode reaches it, docs/dev.md:4."} {
+		if !w.woke(wi, want) {
+			t.Errorf("the wake does not say %q", want)
+		}
+	}
+}
+
 // A writing task: a plain reply in a thread whose last word is the
 // conductor's reply_on_pull_request is fixer feedback, as before; only
 // the @mention reached the conductor.

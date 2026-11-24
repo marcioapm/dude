@@ -3,6 +3,7 @@ package delivery
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -119,6 +120,12 @@ func retryableLensFailure(reason string) bool {
 // minWrongEvidence is the fewest runes, trimmed, of "wrong:" evidence.
 const minWrongEvidence = 10
 
+// saysSomething says trimmed grounds ("wrong:" evidence, a suggestion's
+// why) are at least minWrongEvidence runes with a letter or digit.
+func saysSomething(s string) bool {
+	return len([]rune(s)) >= minWrongEvidence && strings.ContainsFunc(s, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+}
+
 // reviewOnlyGroundsTx reads a review-only task's dismissal reason (only
 // the reason: dismiss_finding's schema is the writing mode's) as its
 // grounds, recorded with the dismissal, or refuses it: "wrong: <evidence>",
@@ -130,7 +137,7 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 	rest = strings.TrimSpace(rest)
 	switch kind := strings.ToLower(strings.TrimSpace(word)); kind {
 	case "wrong":
-		if len([]rune(rest)) < minWrongEvidence || !strings.ContainsFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+		if !saysSomething(rest) {
 			return nil, refuseText(rReviewOnlyDismissWrongEvidence)
 		}
 		return map[string]any{"kind": kind, "evidence": clip(oneLine(rest), 1000)}, nil
@@ -148,6 +155,67 @@ func reviewOnlyGroundsTx(ctx context.Context, tx pgx.Tx, taskID, findingID, reas
 			return nil, refusef(rReviewOnlyDismissDuplicateOf, cmp.Or(of, "no finding"))
 		}
 		return map[string]any{"kind": kind, "duplicateOf": of}, nil
+	case kindSuggestion:
+		gate, why, ok := suggestionGrounds(rest)
+		if !ok {
+			return nil, refuseText(rReviewOnlyDismissSuggestion)
+		}
+		return map[string]any{"kind": kind, "gate": gate, "why": clip(oneLine(why), 1000)}, nil
 	}
 	return nil, refuseText(rReviewOnlyDismissGrounds)
+}
+
+// kindSuggestion is the word a review-only conductor's reason starts with
+// to keep a finding as a suggestion ("suggestion: gate <N>: <why>"), and
+// the kind its grounds are recorded as.
+const kindSuggestion = "suggestion"
+
+// suggestionGates are the gates of contracts/review-only's rubric a
+// finding may fail to be kept as a suggestion, by number, named as the
+// contract titles them (lower case): being introduced at medium or above
+// is what makes a finding a candidate at all.
+var suggestionGates = map[int]string{
+	2: "shipped path",
+	3: "proof",
+	4: "test quality",
+	5: "declared behaviour",
+	6: "proportionate",
+	7: "current",
+}
+
+// suggestionGrounds reads "gate <N>: <why>", the rest of a "suggestion:"
+// reason: N one of suggestionGates, why saying something.
+func suggestionGrounds(rest string) (gate int, why string, ok bool) {
+	word, rest, _ := strings.Cut(strings.TrimSpace(rest), " ")
+	num, why, found := strings.Cut(rest, ":")
+	num, why = strings.TrimSpace(num), strings.TrimSpace(why)
+	if !strings.EqualFold(word, "gate") || !found || len(num) != 1 || num[0] < '0' || num[0] > '9' {
+		return 0, "", false
+	}
+	gate = int(num[0] - '0')
+	if _, known := suggestionGates[gate]; !known || !saysSomething(why) {
+		return 0, "", false
+	}
+	return gate, why, true
+}
+
+// keptText is the sentence that gives a kept suggestion's gate and why,
+// in dude's thread reply and its inline comment.
+func keptText(gate, why string) string {
+	return fmt.Sprintf("Kept as a suggestion (%s): %s.", gate, why)
+}
+
+// keptSuggestion reads a finding's resolution note as a review-only
+// conductor's "suggestion:" dismissal (DismissedByConductor, then the
+// reason reviewOnlyGroundsTx accepted): the name of the gate it fails and
+// why. The note's prefix is the one mark of a kept suggestion: it holds
+// no verdict, and is never shown as withdrawn.
+func keptSuggestion(note string) (gate, why string, ok bool) {
+	reason, conductor := strings.CutPrefix(note, DismissedByConductor)
+	word, rest, found := strings.Cut(reason, ":")
+	if !conductor || !found || !strings.EqualFold(strings.TrimSpace(word), kindSuggestion) {
+		return "", "", false
+	}
+	n, why, ok := suggestionGrounds(rest)
+	return suggestionGates[n], strings.TrimRight(why, "."), ok
 }

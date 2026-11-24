@@ -46,7 +46,13 @@ func (w *world) keepsFreedoms(wi string) {
 		wi, delivery.PointReviewed); a != 1 {
 		w.t.Fatalf("%d decisions after a writing task's round offering next and ask_person, as before", a)
 	}
-	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, w.openFindings(wi, 1)[0]))
+	f := w.openFindings(wi, 1)[0]
+	w.must(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":"Valid finding, but not fixed here"}`, f))
+	// A suggestion's words are free text here, as any reason: a gate a
+	// review-only task refuses is taken, and read as no suggestion.
+	mustExec(w.t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, suggested_fix, status)
+		SELECT 'writing_kept', organization_id, task_id, run_id, category, severity, title, description, suggested_fix, 'open' FROM review_findings WHERE id = $1`, f)
+	w.must(wi, "dismiss_finding", `{"id":"writing_kept","reason":"suggestion: gate 1"}`)
 	if g := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2 AND payload ? 'grounds'`,
 		wi, delivery.EvFindingResolved); g != 0 {
 		w.t.Fatalf("a writing task's dismissal recorded grounds")
@@ -135,6 +141,13 @@ func TestAReviewOnlyConductorReviewsItDoesNotTriageAway(t *testing.T) {
 		"wrong: ----------------":           `Say what shows the finding is wrong after "wrong: "`,
 		"duplicate: fnd_nope":               "fnd_nope is not another open finding",
 		"duplicate: " + f:                   "is not another open finding",
+		// A suggestion names a gate of the rubric, 2 to 7, and says why.
+		"suggestion: only DEV_MODE reaches it":            "N is the gate of the contract's rubric it fails",
+		"suggestion: gate 1: it is introduced and medium": "N is the gate of the contract's rubric it fails",
+		"suggestion: gate 8: no such gate in the rubric":  "N is the gate of the contract's rubric it fails",
+		"suggestion: gate two: only DEV_MODE reaches it":  "N is the gate of the contract's rubric it fails",
+		"suggestion: gate 2:":                             "N is the gate of the contract's rubric it fails",
+		"suggestion: gate 2:   ":                          "N is the gate of the contract's rubric it fails",
 	} {
 		w.refused(wi, "dismiss_finding", fmt.Sprintf(`{"id":%q,"reason":%q}`, f, reason), want)
 	}
@@ -308,5 +321,62 @@ func TestAReviewOnlyConductorRerunsUnrelatedRedCI(t *testing.T) {
 	}
 	if c := w.writers(wi); c != 0 {
 		t.Fatalf("%d writers", c)
+	}
+}
+
+// A medium kept as a suggestion next to another open introduced medium:
+// the verdict still requests changes, naming only the open one, and lists
+// the kept one as a suggestion with its gate and why. The grounds are
+// recorded with the dismissal.
+func TestAReviewOnlySuggestionNextToAnOpenMediumStillRequestsChanges(t *testing.T) {
+	w := conducting(t)
+	w.gh.SetChecks("success")
+	w.cleanLenses()
+	w.requireReviewers(`{"requiredReviewers":["correctness"]}`)
+	n := w.gh.OpenAsPerson("alice", "feature/greet", "main", "Greet")
+	w.gh.CommitFiles("feature/greet", "alice's greeting", map[string]string{"greet.md": "hello\n"})
+	wi := w.adopted("pr", n, "feature/greet", "main", delivery.ModeReviewOnly)
+	if status, out := w.call("/internal/tasks/"+wi+"/talk", map[string]any{}); status != 201 {
+		t.Fatalf("talk: %d %v", status, out)
+	}
+	w.until("its first decision", func() bool { return w.decisionAt(wi) != "" })
+	w.must(wi, "start_phase", `{"phase":"review","categories":["correctness"]}`)
+	w.untilDecision(wi, delivery.PointReviewed)
+	for _, c := range []struct{ id, title string }{{"kept", "Local mode leaks the token"}, {"open", "Empty input loses the write"}} {
+		mustExec(t, w.owner, `INSERT INTO review_findings (id, organization_id, task_id, run_id, category, severity, title, description, suggested_fix, status, introduced, file, line)
+			SELECT $2, organization_id, task_id, id, category, 'medium', $3, $3, 'Correct it', 'open', true, 'greet.md', 1
+			FROM runs WHERE task_id=$1 AND phase='review' AND category='correctness' AND status='completed' ORDER BY created_at DESC LIMIT 1`, wi, c.id, c.title)
+	}
+	w.must(wi, "dismiss_finding", `{"id":"kept","reason":"suggestion: gate 2: only DEV_MODE=1 reaches it, a local opt-in"}`)
+	if g := w.dismissedWith(wi, "kind", "suggestion") + w.dismissedWith(wi, "gate", "2") +
+		w.dismissedWith(wi, "why", "only DEV_MODE=1 reaches it, a local opt-in"); g != 3 {
+		t.Fatalf("%d/3 grounds of the suggestion recorded", g)
+	}
+	w.must(wi, "decide", `{"action":"next"}`)
+	w.agentsDone(wi, "dude's review", func() bool { return len(w.dudeReviews(wi, n)) == 1 && w.waitingOnPR(wi) })
+	r := w.dudeReviews(wi, n)[0]
+	head, sugg, ok := strings.Cut(r.Body, "**Suggestions (not blocking)**")
+	if r.State != "CHANGES_REQUESTED" || !ok || !strings.Contains(head, "open (medium) Empty input loses the write") || strings.Contains(head, "kept (medium)") ||
+		!strings.Contains(sugg, "Local mode leaks the token (medium) `greet.md:1`: kept as a suggestion (shipped path): only DEV_MODE=1 reaches it, a local opt-in") {
+		t.Fatalf("the verdict: %s %q", r.State, r.Body)
+	}
+	// First raised at this head, it is still commented on inline, marked
+	// as a suggestion with its gate and why; the comment says so itself,
+	// so dude neither replies in its thread nor resolves it.
+	var kept int64
+	for _, c := range w.dudeLineComments(n) {
+		if strings.Contains(c.Body, "Local mode leaks the token") {
+			if !strings.HasPrefix(c.Body, "Suggestion, not blocking: **Local mode leaks the token** (medium)") ||
+				!strings.Contains(c.Body, "Kept as a suggestion (shipped path): only DEV_MODE=1 reaches it, a local opt-in.") {
+				t.Fatalf("the suggestion's inline comment: %q", c.Body)
+			}
+			kept = c.ID
+		}
+	}
+	if kept == 0 {
+		t.Fatalf("no inline comment for the suggestion: %+v", w.dudeLineComments(n))
+	}
+	if rs := repliesTo(w.gh.Pull(n), kept); len(rs) != 0 || w.gh.ResolvedThreads[w.gh.ThreadID(kept)] {
+		t.Fatalf("the suggestion's own thread was answered or resolved: %+v", rs)
 	}
 }

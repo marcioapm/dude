@@ -291,6 +291,7 @@ rReviewOnlyPRAction                     refusals/delivery/review-only/pr-action
 rReviewOnlyDismissGrounds               refusals/delivery/review-only/dismiss-grounds
 rReviewOnlyDismissWrongEvidence         refusals/delivery/review-only/dismiss-wrong-evidence
 rReviewOnlyDismissDuplicateOf           refusals/delivery/review-only/dismiss-duplicate-of
+rReviewOnlyDismissSuggestion            refusals/delivery/review-only/dismiss-suggestion
 rReviewOnlyNoOwnComment                 refusals/delivery/review-only/no-own-comment
 rAskAuthorReviewOnly                    refusals/delivery/ask-author/review-only
 rAskAuthorQuestionRequired              refusals/delivery/ask-author/question-required
