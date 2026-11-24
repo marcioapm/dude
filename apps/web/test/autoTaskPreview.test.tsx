@@ -104,7 +104,10 @@ class TaskRecording extends FixtureClient {
   }
 }
 
-async function taskRow(client: FixtureClient, task: Pick<TaskDetail, "id" | "autoTaskPreview" | "projectAutoTaskPreview">) {
+type RowTask = Pick<TaskDetail, "id" | "autoTaskPreview" | "projectAutoTaskPreview"> & { status?: TaskDetail["status"] };
+
+async function taskRow(client: FixtureClient, given: RowTask) {
+  const task = { status: "running" as const, ...given };
   const mounted = await mount(<TooltipProvider><ToastProvider>
     <AutoPreviewControl client={client} task={task} onChanged={() => {}} />
   </ToastProvider></TooltipProvider>);
@@ -112,7 +115,8 @@ async function taskRow(client: FixtureClient, task: Pick<TaskDetail, "id" | "aut
   return mounted.container.querySelector<HTMLElement>("[data-testid=task-auto-preview]")!;
 }
 
-const effect = (row: HTMLElement) => row.querySelector("[data-testid=task-auto-preview-effect]")!.textContent!.trim();
+// The in-effect line, the end of the choice's hint.
+const effect = (row: HTMLElement) => /In effect: .*$/.exec(row.textContent ?? "")?.[0] ?? "";
 
 test("a task following its project says which way the project goes, and what is in effect", async () => {
   for (const project of [false, true]) {
@@ -149,6 +153,18 @@ test("a task's own On or Off wins over its project's, and each choice is saved a
   await until(() => client.changes.length === 2 || undefined, "saved");
   expect(effect(row)).toBe("In effect: Off · project default");
   expect(client.changes).toEqual([{ autoTaskPreview: false }, { autoTaskPreview: null }]);
+});
+
+test("on a task that is done, failed or aborted the choice is disabled, saying why", async () => {
+  for (const [status, why] of [["done", "The task is done."], ["failed", "The task is over."], ["aborted", "The task is over."]] as const) {
+    const row = await taskRow(new TaskRecording("a"), { id: "wi_1", status, autoTaskPreview: true, projectAutoTaskPreview: false });
+    const select = byRole<HTMLButtonElement>(row, "combobox", `Automatic preview: On. ${why}`);
+    expect(select.disabled).toBe(true);
+    expect(row.textContent).toContain(why);
+    await unmount?.();
+    unmount = undefined;
+    document.body.innerHTML = "";
+  }
 });
 
 test("in effect: the task's own choice, else the project's", () => {
