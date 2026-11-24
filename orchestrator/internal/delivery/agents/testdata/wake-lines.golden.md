@@ -156,6 +156,14 @@ GLD-8 merged: GLD-7 can start now, nothing open in front of it. Tell the person;
 
 GLD-8 merged: GLD-7 can start now. Its owner set it to start when unblocked, so it starts on its own: say so if it helps.
 
+## owner-github
+
+The pull request can't open until Christophe connects GitHub in their dude settings (dude opens PRs as the task's owner). The branch dude/gld-8-1 is pushed; nothing is redone when they connect. Tell them so if they ask what's next.
+
+## owner-github-reconnect
+
+The pull request can't open until Christophe reconnects GitHub in their dude settings (dude opens PRs as the task's owner). The branch dude/gld-8-1 is pushed; nothing is redone when they connect. Tell them so if they ask what's next.
+
 ## run-asks
 
 Your implement Run run_impl asks the person a question (qst_3): read it in its chat.

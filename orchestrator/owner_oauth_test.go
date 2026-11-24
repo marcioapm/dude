@@ -500,6 +500,10 @@ func TestAnOwnerWithoutGitHubIsAskedOnceThenThePullRequestOpens(t *testing.T) {
 	if got := w.credentialAsks(task); len(got) != 1 {
 		t.Fatalf("a second sweep asked again: %q", got)
 	}
+	// No conductor decides it: nobody to tell, and nothing fails for it.
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1`, task); n != 0 {
+		t.Fatalf("%d conductor wakes for a delivery no conductor decides", n)
+	}
 	if len(w.gh.Pulls()) != 0 || w.attempts(task) != 0 {
 		t.Fatalf("pulls %d attempt %d", len(w.gh.Pulls()), w.attempts(task))
 	}
@@ -516,3 +520,43 @@ func TestAnOwnerWithoutGitHubIsAskedOnceThenThePullRequestOpens(t *testing.T) {
 		t.Fatalf("credential asks after opening %q", got)
 	}
 }
+
+// A conducted delivery whose pull request waits on its owner's GitHub
+// tells its conductor so, once, in words it can pass on: it must not
+// answer "what's next?" with "nothing is needed from you".
+func TestAConductorIsToldThePullRequestWaitsOnItsOwnersGitHub(t *testing.T) {
+	w := conducting(t)
+	w.asApp()
+	ana := w.ownerPerson("Ana Lima")
+	mustExec(t, w.owner, `UPDATE forge_credentials SET oauth_client_id = 'client', oauth_client_secret = 'secret' WHERE organization_id = $1`, w.org)
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.reachGate(task)
+	w.must(task, "decide", `{"action":"ask_person"}`)
+	if status, out := w.chatAs(task, ana, "Open"); status != 200 {
+		t.Fatalf("Ana answers Open: %d %v", status, out)
+	}
+	w.must(task, "decide", `{"action":"open_pull_request"}`)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) })
+	if got := w.credentialAsks(task); len(got) != 1 || got[0] != ana+" false" {
+		t.Fatalf("credential asks %q", got)
+	}
+	var line string
+	if err := w.owner.QueryRow(context.Background(), `SELECT line FROM conductor_wakes WHERE task_id = $1 AND kind = $2`,
+		task, delivery.WakeOwnerGitHub).Scan(&line); err != nil {
+		t.Fatalf("the conductor was not told: %v", err)
+	}
+	if !strings.Contains(line, "until Ana connects GitHub") || !strings.Contains(line, delivery.BranchFor(task, 1)) ||
+		!strings.Contains(line, "nothing is redone") {
+		t.Fatalf("the conductor's line: %q", line)
+	}
+	w.authorizeAgain(task, ana)
+	w.until("the step swept again", func() bool {
+		return w.waitingOnAuthorization(task) && w.count(`SELECT count(*) FROM workflow_signals s JOIN workflow_runs r ON r.id = s.workflow_run_id
+			WHERE r.task_id = $1 AND s.name = $2 AND s.consumed_at IS NOT NULL`, task, delivery.SignalGitHubAuthorized) == 1
+	})
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeOwnerGitHub); n != 1 {
+		t.Fatalf("the conductor was told %d times", n)
+	}
+}
+

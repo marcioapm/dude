@@ -106,6 +106,19 @@ type CredentialWait struct {
 // ReasonOwnerGitHub is a credential wait on the task owner's GitHub.
 const ReasonOwnerGitHub = "owner_github"
 
+// WakeOwnerGitHub is the conductor's reason when its delivery's pull
+// request waits on the owner's GitHub.
+const WakeOwnerGitHub = "owner_github"
+
+// ownerGitHubLine tells a conductor the pull request waits on owner (a
+// first name) connecting GitHub; reconnect, connecting again.
+func ownerGitHubLine(owner, branch string, reconnect bool) string {
+	return render(ownerGitHubTmpl, struct {
+		Owner, Branch string
+		Reconnect     bool
+	}{owner, branch, reconnect})
+}
+
 // ToPersonTx is the one way anything on a task reaches a person: it
 // inserts an open question addressed to a person, moves the task to
 // awaiting_input, and emits question.asked
@@ -181,8 +194,29 @@ func askCredentialTx(ctx context.Context, tx pgx.Tx, org string, st *State, c *C
 		AND payload->>'kind' = 'credential' AND payload->>'key' = $3)`, st.TaskID, EvQuestionAsked, c.Key).Scan(&asked); err != nil || asked {
 		return err
 	}
-	return emitTx(ctx, tx, org, st, EvQuestionAsked, map[string]any{"kind": "credential", "reason": c.Reason,
-		"personId": c.PersonID, "branch": c.Branch, "reconnect": c.Reconnect, "key": c.Key})
+	if err := emitTx(ctx, tx, org, st, EvQuestionAsked, map[string]any{"kind": "credential", "reason": c.Reason,
+		"personId": c.PersonID, "branch": c.Branch, "reconnect": c.Reconnect, "key": c.Key}); err != nil {
+		return err
+	}
+	return tellOwnerGitHubTx(ctx, tx, org, st, c)
+}
+
+// tellOwnerGitHubTx tells a conducted delivery's live conductor what its
+// pull request waits on, so that it does not tell the owner nothing is
+// needed of them. A delivery with no live conductor gets none: a wake
+// would start one.
+func tellOwnerGitHubTx(ctx context.Context, tx pgx.Tx, org string, st *State, c *CredentialWait) error {
+	if !st.conducted() || c.Reason != ReasonOwnerGitHub {
+		return nil
+	}
+	var live bool
+	var name string
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = $1 AND `+LiveConductor+`),
+		COALESCE((SELECT name FROM people WHERE id = $2), '')`, st.TaskID, c.PersonID).Scan(&live, &name); err != nil || !live {
+		return err
+	}
+	_, err := RecordWakeTx(ctx, tx, org, st.TaskID, WakeOwnerGitHub, "owner_github:"+c.Key, ownerGitHubLine(firstName(name), c.Branch, c.Reconnect))
+	return err
 }
 
 // askReviewQuestionTx asks the person a reviewer's question the conductor
