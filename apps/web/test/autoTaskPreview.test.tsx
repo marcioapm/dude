@@ -21,7 +21,8 @@ import { TaskScreen } from "../src/screens/TaskScreen.tsx";
 import { AutoPreviewControl, autoPreviewInEffect } from "../src/screens/AutoPreviewControl.tsx";
 
 let unmount: (() => Promise<void>) | undefined;
-afterEach(async () => { await unmount?.(); unmount = undefined; document.body.innerHTML = ""; });
+const remount = async () => { await unmount?.(); unmount = undefined; document.body.innerHTML = ""; };
+afterEach(remount);
 
 class Recording extends FixtureClient {
   saved: PreviewSettings[] = [];
@@ -157,15 +158,18 @@ test("a task's own On or Off wins over its project's, and each choice is saved a
   expect(client.changes).toEqual([{ autoTaskPreview: false }, { autoTaskPreview: null }]);
 });
 
-test("on a task that is done, failed or aborted the choice is disabled, saying why", async () => {
-  for (const [status, why] of [["done", "The task is done."], ["failed", "The task is over."], ["aborted", "The task is over."]] as const) {
-    const row = await taskRow(new TaskRecording("a"), { id: "wi_1", status, autoTaskPreview: true, projectAutoTaskPreview: false });
-    const select = byRole<HTMLButtonElement>(row, "combobox", `Automatic preview: On. ${why}`);
-    expect(select.disabled).toBe(true);
-    expect(row.textContent).toContain(why);
-    await unmount?.();
-    unmount = undefined;
-    document.body.innerHTML = "";
+test("on a task that is done the choice is disabled, saying why; a failed or aborted one can come back, so it still takes it", async () => {
+  const done = await taskRow(new TaskRecording("a"), { id: "wi_1", status: "done", autoTaskPreview: true, projectAutoTaskPreview: false });
+  expect(byRole<HTMLButtonElement>(done, "combobox", "Automatic preview: On. The task is done.").disabled).toBe(true);
+  expect(done.textContent).toContain("The task is done.");
+  await remount();
+  for (const status of ["failed", "aborted"] as const) {
+    const client = new TaskRecording("a");
+    const row = await taskRow(client, { id: "wi_1", status, autoTaskPreview: true, projectAutoTaskPreview: false });
+    await pick(row, "Automatic preview", "Off");
+    await until(() => client.changes.length === 1 || undefined, "saved");
+    expect(client.changes).toEqual([{ autoTaskPreview: false }]);
+    await remount();
   }
 });
 

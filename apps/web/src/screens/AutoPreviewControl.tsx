@@ -5,8 +5,8 @@
  * with what is in effect in its hint. Only what dude does when it opens or
  * reopens the task's pull request: a preview someone asks for starts
  * whatever this says. Anyone on the organisation changes it, as they edit
- * the task; once the task is done, failed or aborted it is disabled, saying
- * so, as the rail's other choices are.
+ * the task; once the task is done it is disabled, saying so, as
+ * BeforePullRequestControl is (a failed or aborted task can come back).
  */
 
 import { useEffect, useState } from "react";
@@ -20,9 +20,6 @@ type Choice = "project" | "on" | "off";
 
 const toChoice = (v: boolean | null | undefined): Choice => (v === true ? "on" : v === false ? "off" : "project");
 const onOff = (v: boolean) => (v ? "On" : "Off");
-
-/** Why a task that ended without being done no longer takes the choice. */
-export const TASK_OVER_TEXT = "The task is over.";
 
 /** What the task's choice comes to: its own, else its project's. */
 export function autoPreviewInEffect(own: boolean | null | undefined, project: boolean): boolean {
@@ -48,9 +45,7 @@ export function AutoPreviewControl({ client, task, onChanged }: {
   const project = task.projectAutoTaskPreview ?? false;
   const value = shown ?? toChoice(task.autoTaskPreview);
   const own = value === "project" ? null : value === "on";
-  const state: BeforePullRequestFactState = task.status === "done" ? { kind: "locked", reason: TASK_DONE_TEXT }
-    : task.status === "failed" || task.status === "aborted" ? { kind: "locked", reason: TASK_OVER_TEXT }
-    : { kind: "editable" };
+  const state: BeforePullRequestFactState = task.status === "done" ? { kind: "locked", reason: TASK_DONE_TEXT } : { kind: "editable" };
 
   const change = async (to: Choice) => {
     if (to === value) return;
