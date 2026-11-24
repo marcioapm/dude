@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { newId } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
+import { withOrg, type OrgScope } from "../../db/client.ts";
 import { config } from "../../config.ts";
 import { badRequest, json, noContent } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
@@ -54,6 +54,18 @@ async function consume(organizationId: string, personId: string, state: string) 
       WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
     return { organizationId, personId, transaction: credential ? { ...row, ...credential } : null };
   });
+}
+
+/**
+ * github.authorized for a delivery's workflow run, as workflow.SignalTx
+ * stores it: the signal is kept whether or not the run waits yet; only the
+ * wake depends on it waiting.
+ */
+export async function signalAuthorized(sql: OrgScope["sql"], organizationId: string, workflowRunId: string, personId: string): Promise<void> {
+  await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+    VALUES (${newId("workflowSignal")}, ${organizationId}, ${workflowRunId}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
+  await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${workflowRunId}
+    AND status = 'waiting' AND awaiting_signals ? 'github.authorized' AND (wait_until IS NULL OR wait_until <= now())`;
 }
 
 export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetch = fetch) {
@@ -152,12 +164,7 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
           WHERE p.owner_person_id = ${personId} AND (
             (r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized')
             OR (r.status = 'running' AND r.step IN ('openPullRequest', 'awaitPRFix')))`;
-        for (const { id } of recipients) {
-          await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
-            VALUES (${newId("workflowSignal")}, ${organizationId}, ${id}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
-          await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${id}
-            AND status = 'waiting' AND awaiting_signals ? 'github.authorized' AND (wait_until IS NULL OR wait_until <= now())`;
-        }
+        for (const { id } of recipients) await signalAuthorized(sql, organizationId, id, personId);
         return "connected";
       });
       return landing(stored, slug);

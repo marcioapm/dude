@@ -26,6 +26,7 @@ import { attentionItems, waitingSplit, type NavProject } from "../../../../../pa
 import { endAutoStart } from "./relations.ts";
 import { kickOwnerSweep, lockOwnedSessions, PASS_BATCH, passOnSessions } from "./sessions.ts";
 import { automationsOwnerLeft } from "./automations.ts";
+import { signalAuthorized } from "./githubOAuth.ts";
 
 /** The SELECT expression for a task's owner (a `PersonRef`) or null, for the `tasks` rows under `alias`. */
 export function ownerJson(alias = "tasks"): string {
@@ -91,8 +92,39 @@ export async function setTaskPeople(scope: OrgScope, ctx: RequestContext, taskId
     await recordAs(scope, ctx, EventTypes.TaskOwnerChanged, { from: was[0] ?? null, to: owner }, { projectId, taskId });
     // The new owner did not ask for it to start when unblocked.
     await endAutoStart(scope, ctx, taskId, projectId, "owner_changed");
+    if (owner) await openAsNewOwner(scope, taskId, owner);
   }
   await recordAs(scope, ctx, EventTypes.TaskPeopleChanged, { people: next }, { projectId, taskId });
+}
+
+/**
+ * Whether dude can open a pull request as the person (`p`): a live GitHub
+ * authorization at the App's current OAuth version, not marked for
+ * reconnecting, its refresh token unexpired. What forge.OwnerToken accepts.
+ */
+export const GITHUB_CONNECTED = `EXISTS (SELECT 1 FROM github_user_authorizations a JOIN forge_credentials c ON c.id = a.credential_id
+  WHERE a.person_id = p.id AND a.credential_version = c.oauth_version AND c.auth = 'github_app'
+    AND NOT a.reconnect_required AND a.refresh_expires_at > now())`;
+
+/**
+ * A delivery whose pull request waits on its owner's GitHub (parked on
+ * github.authorized) opens it as the task's new owner when they have
+ * connected: its publication is theirs from now, and the step is woken to
+ * try again. A new owner who has not connected changes nothing: the pull
+ * request still waits on the one it was frozen to.
+ */
+async function openAsNewOwner(scope: OrgScope, taskId: string, owner: string): Promise<void> {
+  const waiting = (await scope.sql`
+    SELECT r.id FROM workflow_runs r JOIN pr_publications pub ON pub.task_id = r.task_id AND pub.branch = r.state->>'branch'
+    JOIN people p ON p.id = ${owner}
+    WHERE r.task_id = ${taskId} AND r.workflow_type = 'task.delivery' AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'
+      AND pub.owner_person_id IS DISTINCT FROM ${owner} AND ${scope.sql.unsafe(GITHUB_CONNECTED)}
+    FOR UPDATE OF r, pub`) as Array<{ id: string }>;
+  for (const { id } of waiting) {
+    await scope.sql`UPDATE pr_publications pub SET owner_person_id = ${owner} FROM workflow_runs r
+      WHERE r.id = ${id} AND pub.task_id = r.task_id AND pub.branch = r.state->>'branch'`;
+    await signalAuthorized(scope.sql, scope.organizationId, id, owner);
+  }
 }
 
 const PERSON_DETAIL = `person_ref(p)::jsonb || jsonb_build_object('email', p.email, 'role', p.role,

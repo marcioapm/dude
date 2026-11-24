@@ -560,3 +560,47 @@ func TestAConductorIsToldThePullRequestWaitsOnItsOwnersGitHub(t *testing.T) {
 	}
 }
 
+// takeOver makes person the task's owner through the control plane's real
+// PATCH /v1/tasks/:id over this test's database (testdata/take-over.ts).
+func (w *world) takeOver(task, person string) {
+	w.t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	c := w.owner.Config()
+	cmd := exec.Command("bun", "run", "orchestrator/testdata/take-over.ts", w.org, person, task)
+	cmd.Dir = filepath.Join(filepath.Dir(file), "..")
+	cmd.Env = append(cmd.Environ(), fmt.Sprintf("DATABASE_URL=postgres://dude_app:dude_app@%s:%d/%s", c.Host, c.Port, c.Database))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil || string(out) != "200" {
+		w.t.Fatalf("take over: %v\nstdout: %s\nstderr: %s", err, out, stderr.Bytes())
+	}
+}
+
+// The owner switching, while the pull request waits on the old owner's
+// GitHub, to someone who has connected opens it as them, at once. A switch
+// to someone who has not connected changes nothing.
+func TestTakingOverAWaitingPullRequestOpensItAsTheNewOwner(t *testing.T) {
+	w := newWorld(t)
+	w.asApp()
+	ana, bo, cy := w.ownerPerson("Ana"), w.ownerPerson("Bo"), w.ownerPerson("Cy")
+	task := w.task()
+	w.taskOwners(task, ana)
+	w.connectOwner(bo, "bo-token", 2)
+	w.deliver(task)
+	w.until("the owner authorization wait", func() bool { return w.waitingOnAuthorization(task) && w.taskStatus(task) == "awaiting_input" })
+	w.takeOver(task, cy)
+	w.pump()
+	if !w.waitingOnAuthorization(task) || len(w.gh.Pulls()) != 0 ||
+		w.count(`SELECT count(*) FROM pr_publications WHERE task_id = $1 AND owner_person_id = $2`, task, ana) != 1 {
+		t.Fatal("a switch to someone not connected moved the publication")
+	}
+	w.takeOver(task, bo)
+	w.until("the pull request", func() bool { return len(w.gh.Pulls()) == 1 && w.taskStatus(task) == "review" })
+	if got := w.gh.OpenAuth; len(got) != 1 || got[0] != "Bearer bo-token" {
+		t.Fatalf("creation auth %v, want Bo's", got)
+	}
+	if w.attempts(task) != 0 {
+		t.Fatalf("the switch spent attempt %d", w.attempts(task))
+	}
+}
