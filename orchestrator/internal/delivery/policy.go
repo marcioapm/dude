@@ -303,7 +303,8 @@ type ReviewRound struct {
 	// What changed since the attempt's previous completed review round;
 	// not Measured on a first round.
 	Change RoundChange
-	// The categories of the open findings a fix attempted.
+	// The categories of the open findings a fix attempted (review only:
+	// of every open finding and kept suggestion).
 	Attempted []string
 }
 

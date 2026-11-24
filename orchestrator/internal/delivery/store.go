@@ -778,7 +778,7 @@ func (s *Store) AttemptedFindings(ctx context.Context, org string, st *State) (m
 	// conductor withdrew as wrong or a duplicate is not shown.
 	which, args := `status = 'open' AND fix_attempts > 0`, []any{st.TaskID, st.Attempt}
 	if st.Source.ReviewOnly() {
-		which = `(status = 'open' OR status = 'accepted' AND starts_with(COALESCE(resolution_note, ''), $3))`
+		which = `(status = 'open' OR (status = 'accepted' AND starts_with(COALESCE(resolution_note, ''), $3)))`
 		args = append(args, DismissedByConductor)
 	}
 	err := s.DB.InOrg(ctx, org, func(tx pgx.Tx) error {
