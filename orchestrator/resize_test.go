@@ -877,6 +877,44 @@ func TestNoMoveIsParkedWhileLuxsPoolsCannotBeRead(t *testing.T) {
 	}
 }
 
+// lux's pools read, but none marked default and none named default: lux
+// has nowhere to put a size that names no pool. The agent is told that,
+// not that the pools could not be read; Reset answers 409 no_default_pool;
+// nothing is parked.
+func TestNoMoveIsParkedWhenLuxNamesNoDefaultPool(t *testing.T) {
+	w := newWorld(t)
+	w.lux.Pools = []lux.Pool{{ID: "pool_amd", Name: "amd64"}, {ID: "pool_arm", Name: "ondemand-arm64"}}
+	// The Run is in amd64; Bigger names no pool.
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id='pool_amd' WHERE organization_id=$1 AND name='Standard'`, w.org)
+	task, runID, live := w.liveImplementer()
+	mustExec(t, w.owner, `INSERT INTO machine_sizes (id, organization_id, name, cpus, memory_mib, disk_gib) VALUES ('msz_big', $1, 'Bigger', 4, 16384, 40)`, w.org)
+	unchanged := func(what string) {
+		t.Helper()
+		if w.luxCalls(live, "stop") != 0 || w.count(`SELECT count(*) FROM runs WHERE id=$1 AND status='running' AND control='none' AND dude_pause IS NULL`, runID) != 1 ||
+			w.count(`SELECT count(*) FROM machine_moves`) != 0 {
+			t.Fatalf("%s parked the Run: lux calls %v", what, w.lux.CallsOf(live))
+		}
+	}
+	status, body := w.requestMachine(runID, `{"size":"Bigger","reason":"oom"}`)
+	var out struct{ Error string }
+	_ = json.Unmarshal([]byte(body), &out)
+	if status != 422 || out.Error != "lux has no default pool to move you in, so dude cannot move this Run. Carry on on Standard, and say in your work what did not fit." {
+		t.Fatalf("request: %d %s", status, body)
+	}
+	unchanged("the request")
+
+	raise := `{"sizeId":"msz_big","moveId":"mmv_read","askedBy":"run_x","reason":"oom","at":"2026-10-13T00:00:00Z"}`
+	mustExec(t, w.owner, `UPDATE tasks SET agent_machines=jsonb_build_object('implementer', $2::jsonb) WHERE id=$1`, task, raise)
+	mustExec(t, w.owner, `UPDATE runs SET machine=machine||'{"sizeId":"msz_big","name":"Bigger","cpus":4,"memoryMiB":16384,"diskGiB":40,"from":"task"}' WHERE id=$1`, runID)
+	// Reset moves back to Standard, which now names no pool either.
+	mustExec(t, w.owner, `UPDATE machine_sizes SET pool_id=NULL WHERE organization_id=$1 AND name='Standard'`, w.org)
+	code, res := w.callAs(w.person("Resetter"), "/internal/agent-machines/reset", map[string]any{"taskId": task, "role": "implementer"})
+	if e, _ := res["error"].(map[string]any); code != 409 || e["code"] != "no_default_pool" {
+		t.Fatalf("reset: %d %v", code, res)
+	}
+	unchanged("the Reset")
+}
+
 // A refusal is worded from the pool list the call already read: a refused
 // request reads lux's pools once, for its choices, which also name its
 // payload's pools (its size names a pool, so planning reads none), and a

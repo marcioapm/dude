@@ -110,6 +110,11 @@ const (
 // whether lux would take it, are unknown; nothing is moved.
 var ErrPoolsUnread = errors.New("lux's pools could not be read")
 
+// ErrNoDefaultPool: lux's pool list was read and names no pool for a Run
+// that names none (lux.DefaultPool), so a size without a pool has nowhere
+// to go; nothing is moved.
+var ErrNoDefaultPool = errors.New("lux names no pool for a Run that names none")
+
 // ErrMoveUnavailable: the Run was paused, stopped or given another control
 // since it was read, or another move of it is unsettled.
 var ErrMoveUnavailable = errors.New("the Run is no longer available for a machine move")

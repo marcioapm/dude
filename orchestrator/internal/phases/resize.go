@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -47,6 +48,9 @@ type ResizePlan struct {
 	// lux's pool list could not be read, so whether Target is in the Run's
 	// pool is not known: nothing is sent and nothing recorded.
 	unknown bool
+	// With unknown: the list was read and lux names no pool for a Run
+	// that names none (delivery.ErrNoDefaultPool).
+	noDefault bool
 	// lux's refusal of Send, after which the resume went without it.
 	refused *lux.Error
 	// Records a refusal durably before the fallback resume is asked for,
@@ -152,6 +156,11 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 		return p
 	}
 	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
+	if errors.Is(err, delivery.ErrNoDefaultPool) {
+		slog.Warn("lux names no default pool; the Run resumes on its size", "luxRun", before.ID)
+		p.unknown, p.noDefault = true, true
+		return p
+	}
 	if err != nil {
 		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
 		p.unknown = true
@@ -190,7 +199,7 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 	}
 	p, ok := lux.DefaultPool(pools)
 	if !ok {
-		return "", fmt.Errorf("lux reports no default pool")
+		return "", delivery.ErrNoDefaultPool
 	}
 	if p.ID == current {
 		return "", nil
@@ -201,9 +210,13 @@ func poolOf(ctx context.Context, c lux.Client, recorded, target *delivery.Machin
 // ValidateResize checks the exact sized resume without stopping the Run.
 // Older lux refuses validateOnly with 400: the real resume keeps its safe
 // fallback, so lack of dry-run support never fails the agent's Run. A plan
-// lux's pools could not be read for is delivery.ErrPoolsUnread: there is
-// nothing to check, and nothing may be parked.
+// lux's pools could not be read for is delivery.ErrPoolsUnread, one whose
+// read pools name no default delivery.ErrNoDefaultPool: there is nothing to
+// check, and nothing may be parked.
 func ValidateResize(ctx context.Context, c lux.Client, runID string, plan *ResizePlan) error {
+	if plan != nil && plan.noDefault {
+		return delivery.ErrNoDefaultPool
+	}
 	if plan != nil && plan.unknown {
 		return delivery.ErrPoolsUnread
 	}
@@ -431,7 +444,11 @@ func (s *Syncer) movePlan(ctx context.Context, r phaseRun, plan *ResizePlan) err
 	if plan.unknown {
 		// The move's size cannot be planned without lux's pools, and an
 		// unsized resume would never settle it: the resume is retried.
-		return fmt.Errorf("machine move %s: lux's pools could not be read", move.ID)
+		why := delivery.ErrPoolsUnread
+		if plan.noDefault {
+			why = delivery.ErrNoDefaultPool
+		}
+		return fmt.Errorf("machine move %s: %w", move.ID, why)
 	}
 	if plan.moveTo == "" && plan.Target != nil {
 		plan.moveTo = plan.Target.Name
