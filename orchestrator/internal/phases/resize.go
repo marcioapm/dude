@@ -155,14 +155,12 @@ func PlanResize(ctx context.Context, c lux.Client, recorded, target *delivery.Ma
 		return p
 	}
 	pool, err := poolOf(ctx, c, recorded, target, before.PoolID)
-	if errors.Is(err, delivery.ErrNoDefaultPool) {
-		slog.Warn("lux names no default pool; the Run resumes on its size", "luxRun", before.ID)
-		p.reason = delivery.ErrNoDefaultPool
-		return p
-	}
 	if err != nil {
-		slog.Warn("reading lux's pools failed; the Run resumes on its size", "luxRun", before.ID, "error", err)
+		slog.Warn("lux's pools give no pool to move to; the Run resumes on its size", "luxRun", before.ID, "error", err)
 		p.reason = delivery.ErrPoolsUnread
+		if errors.Is(err, delivery.ErrNoDefaultPool) {
+			p.reason = delivery.ErrNoDefaultPool
+		}
 		return p
 	}
 	p.Pool = pool
