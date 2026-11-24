@@ -296,6 +296,40 @@ func TestAutoPreviewOnReopenEnsuresOnePreview(t *testing.T) {
 	w.dormant(w.livePreviewID(task))
 }
 
+// 6b. The pull request step finding on GitHub a pull request that is
+// recorded already (its insert conflicts) prepares nothing: recorded
+// closed, reopened on GitHub before any sync, the branch moved, and the
+// step run again. reposToOpen sees a closed one behind the new head, so
+// openPullRequest runs; GitHub hands back the same number, and the
+// record's ON CONFLICT keeps the row — the attempt recorded nothing, and
+// AutoPreview is not called. (A plain replay never gets this far:
+// reposToOpen counts the open one as covering the branch.)
+func TestAutoPreviewNotForAPullRequestRecordedAlready(t *testing.T) {
+	w := autoWorld(t, true)
+	task := w.task()
+	id, number := w.openTaskPR(task)
+	if all, live := w.taskPreviews(task); all != 1 || live != 1 {
+		t.Fatalf("%d previews (%d live) on open, want one", all, live)
+	}
+	if _, err := w.previews.StopPreview(context.Background(), w.org, task, "person", ledger.ActorHuman, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.gh.Close(number)
+	w.syncPRByID(id)
+	w.gh.Reopen(number) // on GitHub only: not synced
+	w.gh.CommitOnTop(delivery.BranchFor(task, 1), "more work")
+	w.replayOpen(task)
+	if n := w.count(`SELECT count(*) FROM pull_requests WHERE task_id = $1`, task); n != 1 {
+		t.Fatalf("%d pull requests recorded, want the one (the insert did not conflict)", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = $2`, task, delivery.EvPullRequestOpened); n != 1 {
+		t.Fatalf("%d pull_request.opened events, want the first alone", n)
+	}
+	if all, live := w.taskPreviews(task); all != 1 || live != 0 {
+		t.Fatalf("%d previews (%d live) after the step met a recorded pull request, want the ended one alone", all, live)
+	}
+}
+
 // 7. A pull request dude took over from a person (adopted) is not one dude
 // opened: its reopening prepares nothing. Nor does a branch preview of
 // the project, a brainstorm's, make a task preview.

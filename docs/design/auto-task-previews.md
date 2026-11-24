@@ -23,8 +23,12 @@ task's preview. Each task may say otherwise.
 
 - **Opened**: `delivery.Store.openPullRequest`, after the transaction that
   inserted the `pull_requests` row and appended `pull_request.opened`
-  commits, and only when that attempt inserted it (a replay, whose insert
-  conflicts, prepares nothing).
+  commits, and only when that attempt inserted it. A plain replay of the
+  step opens nothing (`reposToOpen` counts the recorded open pull request as
+  covering the branch). The guard covers the step reaching GitHub for a pull
+  request already recorded — e.g. recorded closed, reopened on GitHub before
+  a sync, and the branch moved: GitHub hands back the same number, the insert
+  conflicts, and nothing is prepared (the reopen's sync is what prepares it).
 - **Reopened**: `prs.Syncer.sync`, after the compare-and-set transaction
   that recorded the row going from `closed` to open or draft. Not on any
   other sync: a push (`synchronize`), checks, reviews, an open pull request

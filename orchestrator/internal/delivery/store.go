@@ -1527,9 +1527,13 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 		return RecordPROpenedNoticeTx(ctx, tx, st.TaskID)
 	})
 	// Its task's preview, prepared asleep if the task wants one: after the
-	// record committed, and only by the attempt that recorded it, so a
-	// replay prepares nothing. Its failure is logged by it and leaves the
-	// pull request recorded.
+	// record committed, and only by the attempt that inserted it. A plain
+	// replay never gets here (reposToOpen counts the open pull request as
+	// covering the branch); recorded guards the step reaching GitHub for one
+	// recorded already — recorded closed, reopened on GitHub before a sync,
+	// the branch moved — whose insert conflicts: that prepares nothing (the
+	// reopen's sync does). Its failure is logged by it and leaves the pull
+	// request recorded.
 	if err == nil && recorded && s.AutoPreview != nil {
 		_ = s.AutoPreview(ctx, org, st.TaskID)
 	}
