@@ -2122,13 +2122,15 @@ func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepCon
 			seen[i] = sig.ID
 		}
 		var owner, authorized string
+		// The name is a literal, not a parameter, so that the partial index
+		// workflow_signals_github_authorized_idx serves generic plans too.
 		if err := tx.QueryRow(ctx, `SELECT o.owner, COALESCE((SELECT s.id FROM workflow_signals s
-				WHERE s.workflow_run_id = $3 AND s.name = $4 AND s.payload->>'personId' = o.owner
-					AND (s.consumed_at IS NOT NULL OR s.id = ANY($5))
+				WHERE s.workflow_run_id = $3 AND s.name = 'github.authorized' AND s.payload->>'personId' = o.owner
+					AND (s.consumed_at IS NOT NULL OR s.id = ANY($4))
 				ORDER BY s.received_at DESC, s.id DESC LIMIT 1), '')
 			FROM (SELECT COALESCE((SELECT owner_person_id FROM pr_publications
 				WHERE task_id = $1 AND branch = $2), '') AS owner) o`,
-			st.TaskID, st.Branch, sc.WorkflowRunID, SignalGitHubAuthorized, seen).Scan(&owner, &authorized); err != nil {
+			st.TaskID, st.Branch, sc.WorkflowRunID, seen).Scan(&owner, &authorized); err != nil {
 			return err
 		}
 		wait := &CredentialWait{Reason: ReasonOwnerGitHub, PersonID: owner, Branch: st.Branch, Reconnect: reconnect,
