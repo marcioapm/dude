@@ -264,6 +264,36 @@ func TestAPersonStartedPreviewSleepsUntilOpenedAndSaysNothing(t *testing.T) {
 	}
 }
 
+// A branch preview a person starts sleeps until opened too, and says
+// nothing when ready.
+func TestAPersonStartedBranchPreviewSleepsUntilOpenedAndSaysNothing(t *testing.T) {
+	w := newWorld(t)
+	w.wakeable()
+	w.recipe("web", 3000, "npm run dev", "", nil, true)
+	w.gh.Branch("feature/look", "main", "a look")
+	w.brainstormer() // a session's agent, which did not start it
+	runID := w.startBranch("feature/look")
+	for range 10 {
+		w.pump()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND wake_wanted_at IS NULL
+		AND lux_run_id IS NULL AND preview_ready_at IS NULL`, runID); n != 1 || len(w.luxRuns()) != 0 {
+		t.Fatalf("a person's unopened branch preview woke (%d lux runs)", len(w.luxRuns()))
+	}
+	if n := w.allReadyMessages(); n != 0 {
+		t.Fatalf("%d ready messages before it was opened", n)
+	}
+	w.open(w.serverID(runID, "web"))
+	w.until("ready", func() bool {
+		return w.count(`SELECT count(*) FROM runs WHERE id = $1 AND preview_ready_at IS NOT NULL`, runID) == 1
+	})
+	w.pump()
+	if n := w.allReadyMessages(); n != 0 {
+		t.Fatalf("%d ready messages for a person's branch preview", n)
+	}
+}
+
 // Two followers (two orchestrators) apply the same ready at once: one
 // message.
 func TestTwoFollowersOfOneReadySayItOnce(t *testing.T) {
