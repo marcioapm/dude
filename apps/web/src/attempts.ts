@@ -159,7 +159,7 @@ export function attemptMark(task: TaskDetail, attempt: number, current: number):
   // must not label the header Needs you: questions are the server's truth.
   if (attempt === current && status === "awaiting_input" && task.questions !== undefined
     && !task.questions.some((q) => q.status === "open" && q.addressee === "person")
-    && !task.escalation && !heldAtGate(task)) {
+    && !task.escalation && !task.credentialWait && !heldAtGate(task)) {
     return { status: "paused", label: "Waiting on Chat" };
   }
   // Deliver's hold before the pull request, and a fix of the feedback its owner sent from there.

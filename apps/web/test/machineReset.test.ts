@@ -40,6 +40,7 @@ for (const [status, code, message] of [
   [404, "not_found", "nothing is raised"],
   [422, "unknown_pool", "Standard's pool has no host it fits"],
   [503, "pools_unavailable", "lux's pools could not be read; try again shortly"],
+  [409, "no_default_pool", "lux has no default pool to move this Run in"],
 ] as const) {
   test(`a ${status} ${code} refusal reaches the caller in the server's words`, async () => {
     answering(status, { error: { code, message } }, []);

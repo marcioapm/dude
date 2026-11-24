@@ -100,6 +100,7 @@ const (
 	rNoSizeNamedYouMayMove                 = "no size named %s; you may move to: %s"
 	rMachineValidationUnavailable          = "machine validation is unavailable"
 	rLuxPoolsCouldNotBeRead                = "lux's pools could not be read; ask again shortly"
+	rLuxHasNoDefaultPool                   = "lux has no default pool to move you in, so dude cannot move this Run. Carry on on %s, and say in your work what did not fit."
 	rThisRunNoLongerAvailableFor           = "this Run is no longer available for a machine move"
 	rQueryRequired                         = "a query is required"
 	rNoTaskOrEpicInThisProject             = "no task %q or epic %q in this project (list_tasks shows them)"

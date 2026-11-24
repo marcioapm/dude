@@ -397,6 +397,13 @@ export interface PersonDetail extends PersonRef {
   email: string | null;
   role: PersonRole;
   lastSeenAt: string | null;
+  /**
+   * dude can open a pull request as them: a live GitHub authorization at the
+   * App's current OAuth version, not to reconnect, its refresh unexpired.
+   * Null where pull requests do not open as their owner (no GitHub App);
+   * absent from an older control plane.
+   */
+  githubConnected?: boolean | null;
 }
 
 /** A person, by id and name; any `PersonRef` is one. */

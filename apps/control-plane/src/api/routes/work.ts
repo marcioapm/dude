@@ -199,6 +199,35 @@ export function escalationJson(alias = "tasks"): string {
   ORDER BY e.cursor DESC LIMIT 1)) AS escalation`;
 }
 
+/**
+ * What a task's pull request waits on a person's credential for: the
+ * latest question.asked of kind credential (owner_github) while its latest
+ * delivery still waits on github.authorized for it. It clears as the step
+ * goes on: the person connected, or the task passed to someone who had.
+ * `person` is who it waits on, `askedAt` when they were told. The latest
+ * ask for that person on the delivery: Reconnect after a Connect that
+ * GitHub then refused.
+ *
+ * The delivery is read first; only one that waits on github.authorized
+ * reads its asks, through events_task_credential_asks_idx (whose predicate
+ * the event probes repeat literally).
+ */
+export function credentialWaitJson(alias = "tasks"): string {
+  return `(SELECT json_build_object('reason', e.payload->>'reason', 'person', (SELECT person_ref(p) FROM people p WHERE p.id = e.payload->>'personId'),
+      'branch', e.payload->>'branch', 'reconnect', COALESCE((e.payload->>'reconnect')::boolean, false),
+      'askedAt', (SELECT min(f.occurred_at) FROM events f WHERE f.event_type = 'question.asked'
+        AND f.payload->>'kind' = 'credential' AND f.task_id = e.task_id AND f.payload->>'key' = e.payload->>'key'))
+    FROM (SELECT latest.created_at, latest.state->>'branch' AS branch, latest.status, latest.awaiting_signals
+        FROM workflow_runs latest WHERE latest.task_id = ${alias}.id AND latest.workflow_type = 'task.delivery'
+        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1) delivery
+    JOIN pr_publications pub ON pub.task_id = ${alias}.id AND pub.branch = delivery.branch
+    CROSS JOIN LATERAL (SELECT ask.task_id, ask.payload FROM events ask
+      WHERE ask.event_type = 'question.asked' AND ask.payload->>'kind' = 'credential' AND ask.task_id = ${alias}.id
+        AND ask.payload->>'personId' = pub.owner_person_id AND ask.occurred_at >= delivery.created_at
+      ORDER BY ask.cursor DESC LIMIT 1) e
+    WHERE delivery.status = 'waiting' AND delivery.awaiting_signals ? 'github.authorized') AS "credentialWait"`;
+}
+
 // ---------------------------------------------------------------------------
 // Tasks
 // ---------------------------------------------------------------------------
@@ -555,7 +584,7 @@ async function getTask(ctx: RequestContext): Promise<Response> {
     const id = await taskIdOf(scope, ref);
     if (!id) return null;
     const rows = (await scope.sql`
-      SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}
+      SELECT ${scope.sql.unsafe(TASK_SELECT)}, ${scope.sql.unsafe(escalationJson())}, ${scope.sql.unsafe(credentialWaitJson())}
       FROM tasks WHERE id = ${id}`) as Array<
       Record<string, unknown>
     >;

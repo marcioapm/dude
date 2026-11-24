@@ -78,8 +78,8 @@ type Store struct {
 	// is recorded before its first reviewer starts. nil skips it.
 	SyncPullRequest func(ctx context.Context, org, prID string) error
 	// AutoPreview is servers.Service.AutoPreview: called once a pull
-	// request dude opened is first recorded, after that commits; its error
-	// is dropped. nil skips it.
+	// request dude opened, or an open or draft one it took over, is first
+	// recorded, after that commits; its error is dropped. nil skips it.
 	AutoPreview func(ctx context.Context, org, taskID string) error
 	// Bound on the GitHub calls of one verdict comment; zero means
 	// verdictCommentTimeout.
@@ -1459,7 +1459,7 @@ func (s *Store) openPullRequest(ctx context.Context, org string, st *State, gh *
 				}); invalidateErr != nil {
 					return "", invalidateErr
 				}
-				return "", forge.OwnerAuthorizationError{}
+				return "", forge.OwnerAuthorizationError{Reconnect: true}
 			}
 			fresh = err == nil
 		}

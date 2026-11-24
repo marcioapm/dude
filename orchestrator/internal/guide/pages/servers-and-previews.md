@@ -35,7 +35,7 @@ A preview sleeps when nobody uses it, and wakes when someone opens its URL. Its 
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| Automatic task previews | Prepare a task's preview when dude opens or reopens the task's pull request | Off |
+| Automatic task previews | Prepare a task's preview when the task's pull request opens or reopens | Off |
 | Machine | The size a preview runs on | the default size |
 | Image | What a preview starts in | the project's runtime image |
 | Egress allowlist | Hosts a preview may reach, beyond the repository; `*` allows anywhere | — |
@@ -46,7 +46,7 @@ A preview sleeps when nobody uses it, and wakes when someone opens its URL. Its 
 
 ## Automatic task previews
 
-With **Automatic task previews** on, when dude opens a pull request for a task — or someone reopens one dude opened — dude prepares the task's preview. It is prepared asleep: nothing runs, and no message says it is ready, until someone opens its URL. If the task already has a live preview (its conductor started one, say), that one is kept: a task never gets a second. Nothing happens on a push to the pull request, on a pull request dude took over from someone, or for a branch preview.
+With **Automatic task previews** on, when a task's pull request opens — dude opens it, or takes over one someone opened — or reopens, dude prepares the task's preview. It is prepared asleep: nothing runs, and no message says it is ready, until someone opens its URL. If the task already has a live preview (its conductor started one, say), that one is kept: a task never gets a second. Nothing happens on a push to the pull request, for a pull request already merged or closed when dude took it over, or for a branch preview.
 
 It needs a server that starts in previews. With none, nothing is prepared and nothing complains; the setting shows a hint pointing to **Definitions** instead.
 

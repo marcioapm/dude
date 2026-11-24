@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,12 +136,42 @@ func TestOwnerRefreshFailureKindsArePersisted(t *testing.T) {
 		t.Fatalf("expired access returned on transient failure: %q %v", token, err)
 	}
 	status = 200
-	if _, err := OwnerToken(ctx, database, "org_fail", "per_fail"); err == nil || err.Error() == "" || strings.Contains(err.Error(), "bad_refresh_token") {
+	_, err = OwnerToken(ctx, database, "org_fail", "per_fail")
+	if err == nil || err.Error() == "" || strings.Contains(err.Error(), "bad_refresh_token") {
 		t.Fatalf("invalid grant error %v", err)
+	}
+	if e := (OwnerAuthorizationError{}); !errors.As(err, &e) || !e.Reconnect {
+		t.Fatalf("invalid grant is not a reconnect: %#v", err)
 	}
 	_ = owner.QueryRow(ctx, `SELECT reconnect_required FROM github_user_authorizations`).Scan(&required)
 	if !required {
 		t.Fatal("invalid grant did not require reconnect")
+	}
+}
+
+// An authorization that no longer serves asks the person to reconnect: one
+// marked reconnect_required, or its refresh token expired. None at all
+// asks them to connect.
+func TestOwnerAuthorizationErrorSaysReconnectOnlyForOneThatNoLongerServes(t *testing.T) {
+	database, owner := dbtest.Open(t)
+	ctx := context.Background()
+	_, err := owner.Exec(ctx, `INSERT INTO organizations (id,name,slug) VALUES ('org_rc','Reconnect','reconnect');
+		INSERT INTO people (id,organization_id,name,email) VALUES ('per_required','org_rc','Required','required@example.com'),
+			('per_lapsed','org_rc','Lapsed','lapsed@example.com'),('per_never','org_rc','Never','never@example.com');
+		INSERT INTO forge_credentials (id,organization_id,forge,auth,secret,app_id,oauth_client_id,oauth_client_secret)
+		VALUES ('fc_rc','org_rc','github','github_app','pem','1','client','secret');
+		INSERT INTO github_user_authorizations (organization_id,person_id,credential_id,credential_version,github_user_id,
+			github_login,access_token,refresh_token,expires_at,refresh_expires_at,reconnect_required)
+		VALUES ('org_rc','per_required','fc_rc',1,1,'required','a','r',now()+interval '1 hour',now()+interval '1 day',true),
+			('org_rc','per_lapsed','fc_rc',1,2,'lapsed','a','r',now()+interval '1 hour',now()-interval '1 minute',false)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for person, want := range map[string]bool{"per_required": true, "per_lapsed": true, "per_never": false} {
+		_, err := OwnerToken(ctx, database, "org_rc", person)
+		if e := (OwnerAuthorizationError{}); !errors.As(err, &e) || e.Reconnect != want {
+			t.Errorf("%s: %#v, want an OwnerAuthorizationError with Reconnect %v", person, err, want)
+		}
 	}
 }
 

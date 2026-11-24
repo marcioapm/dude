@@ -24,6 +24,8 @@ var toPersonInternals = map[string]bool{
 	"delivery/to_person.go:personWaitTx":       true,
 	// A conductor-held reviewer question given to the person.
 	"delivery/to_person.go:askReviewQuestionTx": true,
+	// A credential wait said to its person (Connect GitHub).
+	"delivery/to_person.go:askCredentialTx": true,
 	// Guarded flips used only to hand held asks through ToPersonTx.
 	"delivery/conductor_held.go:reviewQuestionToPersonTx":    true,
 	"delivery/conductor_held.go:repositoryRequestToPersonTx": true,

@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { newId } from "@dude/domain";
-import { withOrg } from "../../db/client.ts";
+import { withOrg, type OrgScope } from "../../db/client.ts";
 import { config } from "../../config.ts";
 import { badRequest, json, noContent } from "../http.ts";
 import type { RequestContext, Router } from "../router.ts";
+import { openAsNewOwner } from "./people.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export const callbackPath = "/v1/me/github/callback";
@@ -54,6 +55,18 @@ async function consume(organizationId: string, personId: string, state: string) 
       WHERE id = ${row.credential_id} AND oauth_version = ${row.credential_version} AND auth = 'github_app'`;
     return { organizationId, personId, transaction: credential ? { ...row, ...credential } : null };
   });
+}
+
+/**
+ * github.authorized for a delivery's workflow run, as workflow.SignalTx
+ * stores it: the signal is kept whether or not the run waits yet; only the
+ * wake depends on it waiting.
+ */
+export async function signalAuthorized(sql: OrgScope["sql"], organizationId: string, workflowRunId: string, personId: string): Promise<void> {
+  await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
+    VALUES (${newId("workflowSignal")}, ${organizationId}, ${workflowRunId}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
+  await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${workflowRunId}
+    AND status = 'waiting' AND awaiting_signals ? 'github.authorized' AND (wait_until IS NULL OR wait_until <= now())`;
 }
 
 export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetch = fetch) {
@@ -152,12 +165,17 @@ export function registerGithubOAuthRoutes(router: Router, fetchImpl: typeof fetc
           WHERE p.owner_person_id = ${personId} AND (
             (r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized')
             OR (r.status = 'running' AND r.step IN ('openPullRequest', 'awaitPRFix')))`;
-        for (const { id } of recipients) {
-          await sql`INSERT INTO workflow_signals (id, organization_id, workflow_run_id, name, payload, idempotency_key)
-            VALUES (${newId("workflowSignal")}, ${organizationId}, ${id}, 'github.authorized', ${{ personId }}::jsonb, NULL)`;
-          await sql`UPDATE workflow_runs SET status = 'running', wake_at = NULL WHERE id = ${id}
-            AND status = 'waiting' AND awaiting_signals ? 'github.authorized' AND (wait_until IS NULL OR wait_until <= now())`;
-        }
+        for (const { id } of recipients) await signalAuthorized(sql, organizationId, id, personId);
+        // A task they own (ownerJson's rule) and took over while not
+        // connected: its pull request still waits on the one it was frozen
+        // to, and opens as them now.
+        const owned = await sql`SELECT DISTINCT r.task_id FROM workflow_runs r
+          JOIN pr_publications p ON p.task_id = r.task_id AND p.branch = r.state->>'branch'
+          WHERE r.workflow_type = 'task.delivery' AND r.status = 'waiting' AND r.awaiting_signals ? 'github.authorized'
+            AND p.owner_person_id IS DISTINCT FROM ${personId}
+            AND (SELECT tp.person_id FROM task_people tp JOIN people o ON o.id = tp.person_id
+              WHERE tp.task_id = r.task_id AND o.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) = ${personId}`;
+        for (const { task_id } of owned) await openAsNewOwner({ organizationId, sql }, task_id, personId);
         return "connected";
       });
       return landing(stored, slug);

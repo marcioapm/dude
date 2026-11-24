@@ -734,6 +734,10 @@ previews are not available here: this dude starts none for agents
 
 the preview was not started: %s
 
+## refusals/tools/machines/lux-has-no-default-pool
+
+lux has no default pool to move you in, so dude cannot move this Run. Carry on on %s, and say in your work what did not fit.
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees

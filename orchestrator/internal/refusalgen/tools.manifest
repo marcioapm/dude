@@ -96,6 +96,7 @@ rNoSizeNamed                           refusals/tools/machines/no-size-named
 rNoSizeNamedYouMayMove                 refusals/tools/machines/no-size-named-you-may-move
 rMachineValidationUnavailable          refusals/tools/machines/machine-validation-unavailable
 rLuxPoolsCouldNotBeRead                refusals/tools/machines/lux-pools-could-not-be-read
+rLuxHasNoDefaultPool                   refusals/tools/machines/lux-has-no-default-pool
 rThisRunNoLongerAvailableFor           refusals/tools/machines/this-run-no-longer-available-for
 rQueryRequired                         refusals/tools/memory/query-required
 rNoTaskOrEpicInThisProject             refusals/tools/memory/no-task-or-epic-in-this-project

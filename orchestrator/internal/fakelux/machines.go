@@ -134,17 +134,15 @@ func (s *Server) ResumeResourcesOf(id string) []json.RawMessage {
 }
 
 // poolOf is the id of the pool run is bound to, as lux's Run answers it:
-// its spec's placement.poolId, else the tenant's default pool. Called with
-// s.mu held.
+// its spec's placement.poolId, else the pool lux resolves for a Run that
+// names none (lux.DefaultPool). Called with s.mu held.
 func (s *Server) poolOf(run *Run) string {
 	var spec lux.Spec
 	if json.Unmarshal(run.Spec, &spec) == nil && spec.Placement != nil && spec.Placement.PoolID != "" {
 		return spec.Placement.PoolID
 	}
-	for _, p := range s.pools() {
-		if p.IsDefault {
-			return p.ID
-		}
+	if p, ok := lux.DefaultPool(s.pools()); ok {
+		return p.ID
 	}
 	return ""
 }

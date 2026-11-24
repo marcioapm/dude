@@ -20,6 +20,7 @@ import { ShellSection } from "./sections/Shell.tsx";
 import { SettingsGallerySection } from "./sections/Settings.tsx";
 import { LiveSection } from "./sections/Live.tsx";
 import { FeedbackSection } from "./sections/Feedback.tsx";
+import { OwnerCredentialsSection } from "./sections/OwnerCredentials.tsx";
 import { CalmerSection } from "./sections/Calmer.tsx";
 import { ServersSection } from "./sections/Servers.tsx";
 import { BrainstormSection } from "./sections/Brainstorm.tsx";
@@ -279,6 +280,15 @@ const NAV: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, strin
     ],
   ],
   [
+    "Owner credentials",
+    [
+      ["oc-chip", "Header chip"],
+      ["oc-card-owner", "CredentialCard · owner"],
+      ["oc-card-others", "CredentialCard · others"],
+      ["oc-warning", "CredentialWarning"],
+    ],
+  ],
+  [
     "Brainstorm",
     [
       ["bs-title", "SessionTitle"],
@@ -445,6 +455,7 @@ function Shell() {
           <ImagesGallerySection mode={panes} />
           <LiveSection mode={panes} />
           <FeedbackSection mode={panes} />
+          <OwnerCredentialsSection mode={panes} />
           <ServersSection mode={panes} />
           <BrainstormSection mode={panes} />
           <PageRailSection mode={panes} />

@@ -45,6 +45,12 @@ func TestMachineChoicesFilterAsListMachineSizesDoes(t *testing.T) {
 	if got := sizes.Choices(sizes.ByID["std"], "Acme", pools, nested); got.Names() != "Large, XL" {
 		t.Fatalf("nested: %q", got.Names())
 	}
+	// No pool marked default: the one named default is, as lux resolves
+	// it, so its hosts still leave Huge out.
+	unmarked := []lux.Pool{{ID: "pool_gen", Name: "default", HostSize: &lux.HostSize{CPUs: 16, Memory: 64 << 30}}, pools[1], pools[2]}
+	if got := sizes.Choices(sizes.ByID["std"], "Acme", unmarked, run); got.List() != "Large (4 · 16), XL (8 · 32, highmem pool)" {
+		t.Fatalf("no pool marked default: %q", got.List())
+	}
 	// lux's pools unread: nothing is filtered, and no pool is named.
 	if got := sizes.Choices(sizes.ByID["std"], "Acme", nil, run); got.List() != "Large (4 · 16), Arm (8 · 24), XL (8 · 32), Huge (64 · 512)" {
 		t.Fatalf("no pools: %q", got.List())

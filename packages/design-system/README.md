@@ -568,6 +568,37 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   since you last looked", and each item it resolved with its commit. With a
   conductor deciding, the same question is its gate question in Chat.
 
+#### Owner credentials
+
+dude opens a task's pull request as the task's owner (a GitHub App
+organisation). When the owner has not connected GitHub, or their
+connection stopped working, the pull request waits on them, and that wait
+follows these rules (`CredentialCard`, `CredentialWarning`; gallery
+"Owner credentials", both themes, both densities):
+
+- **A credential wait is a person item.** It is the owner's like an
+  answer is: the header chip (`StatusMark` attention, label "Needs you ·
+  Connect GitHub"), Waiting, push. Its card is a QuestionCard-family turn
+  in the task's notices, where an escalation's panel sits: the attention
+  wash and bar, the GitHub glyph in the avatar gutter and a label tag in
+  its header, so it never means by hue alone. "Reconnect" replaces
+  "Connect" when their connection stopped working.
+- **Owner vs. others.** The owner reads "Connect GitHub to open the pull
+  request", the pushed branch, a primary **Connect GitHub** that comes back
+  to the task, and a quiet "Why as me?" that opens one sentence. Everyone
+  else reads "Waiting for <Name> to connect GitHub", when they were told,
+  and the chip "Needs <first name> · Connect GitHub". **Take over and open
+  it as me** is offered only to a reader who has connected (it opens the
+  pull request as them at once); nobody is offered a way that would wait
+  again.
+- **It never blocks a person who has connected.** The warning before work
+  starts (`CredentialWarning`, an attention Callout under the owner) is
+  shown only for an owner known not to have connected; it never refuses
+  anything. The owner gets Connect GitHub in it; anyone else reads, in the
+  Callout's own ink, "Pick an owner who has connected GitHub, or ask
+  <first name> to connect." An organisation that opens pull requests
+  another way shows none of this.
+
 ### A task's Chat (the conductor)
 
 - A task's **Chat** is its conversation with its conductor, the agent

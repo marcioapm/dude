@@ -360,6 +360,16 @@ func link(a ask, path string) string {
 // for every other ask, whose recipient is its task's or session's. A failure
 // naming nobody reaches nobody (an empty, non-nil list).
 func recipients(a ask) []string {
+	if a.Type == delivery.EvQuestionAsked && a.Session == "" {
+		// A credential wait is its person's, the owner frozen for the pull
+		// request, whoever owns the task by the time it is sent.
+		var p struct{ Kind, PersonID string }
+		_ = json.Unmarshal(a.Payload, &p)
+		if p.Kind == "credential" && p.PersonID != "" {
+			return []string{p.PersonID}
+		}
+		return nil
+	}
 	if a.Type != EvAutomationFailed {
 		return nil
 	}
@@ -415,7 +425,14 @@ func messageFor(a ask) (Message, bool) {
 	}
 	switch a.Type {
 	case delivery.EvQuestionAsked:
-		if str("kind") == "escalation" {
+		if str("kind") == "credential" {
+			msg.Title = strings.TrimSpace(a.Task + " needs you to connect GitHub")
+			msg.Body = "dude opens its pull request as you. The branch is pushed; once you connect, the pull request opens on its own."
+			if b, _ := p["reconnect"].(bool); b {
+				msg.Title = strings.TrimSpace(a.Task + " needs you to reconnect GitHub")
+				msg.Body = "Your GitHub connection no longer works. Reconnect, and the pull request opens on its own."
+			}
+		} else if str("kind") == "escalation" {
 			msg.Title = strings.TrimSpace(a.Task + " needs a decision")
 			msg.Body = strings.ReplaceAll(str("reason"), "_", " ")
 		} else if n, headers := askHeaders(p); n > 1 {

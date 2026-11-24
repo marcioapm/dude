@@ -128,7 +128,7 @@ export function ServersSettingsPage({ client, project, canEdit, orgName, sizes, 
         {previewSave.problem ? <Callout tone="danger">{previewSave.problem}</Callout> : null}
         <SettingRow label="Automatic task previews" htmlFor="auto-task-preview" data-testid="auto-task-preview-row"
           help={<>
-            Prepare a task’s preview when dude opens or reopens the task’s pull request. It starts only when someone opens it. A task can say otherwise.
+            Prepare a task’s preview when the task’s pull request opens or reopens. It starts only when someone opens it. A task can say otherwise.
             {previews.autoTaskPreview && !recipes.some((r) => r.autostartInPreviews) ? (
               <span className="autoPreviewHint" data-testid="auto-task-preview-hint">
                 {recipes.length === 0 ? "Add a server that starts in previews; until then no preview is prepared. " : "Choose a server to start in previews; until then no preview is prepared. "}

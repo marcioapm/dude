@@ -768,3 +768,32 @@ func TestAQuestionRoutedToTheConductorIsNotPushed(t *testing.T) {
 		t.Fatalf("the owner's browser got %+v; want only the person's question", b.got)
 	}
 }
+
+// A pull request waiting on its owner's GitHub (question.asked of kind
+// credential) reaches the person it names, the owner it opens as, and no
+// one else on the task, with a link to the task.
+func TestACredentialWaitReachesThePersonItNames(t *testing.T) {
+	w, ids := newPushWorld(t, "owner", "colleague")
+	org := w.org
+	w.exec(`INSERT INTO projects (id, organization_id, name, slug, key_prefix) VALUES ($1, $2, 'P', $1, 'CRD')`, "prj_"+org, org)
+	w.exec(`INSERT INTO tasks (id, organization_id, project_id, number, title) VALUES ($1, $2, $3, 4, 'Credential')`, "wi_"+org, org, "prj_"+org)
+	// The colleague owns the task now; the frozen owner is still asked.
+	w.exec(`INSERT INTO task_people (task_id, organization_id, person_id, position) VALUES ($1, $2, $3, 0), ($1, $2, $4, 1)`,
+		"wi_"+org, org, ids["colleague"], ids["owner"])
+	payload, _ := json.Marshal(map[string]any{"kind": "credential", "reason": "owner_github", "personId": ids["owner"],
+		"branch": "dude/crd-4-1", "reconnect": false, "key": "k"})
+	w.exec(`INSERT INTO events (id, organization_id, event_type, project_id, task_id, actor_type, actor_id, source, payload)
+		VALUES ($1, $2, 'question.asked', $3, $4, 'system', 'workflow', 'orchestrator', $5)`,
+		"evt_cred_"+org, org, "prj_"+org, "wi_"+org, string(payload))
+	w.sweep(w.notifier(), 3)
+	b := w.browsers[ids["owner"]]
+	b.mu.Lock()
+	got := slices.Clone(b.got)
+	b.mu.Unlock()
+	if len(got) != 1 || got[0].Title != "CRD-4 needs you to connect GitHub" || got[0].URL != "#/o/"+org+"/task/wi_"+org {
+		t.Fatalf("the owner's browser got %+v", got)
+	}
+	if n := w.recipients[ids["colleague"]]; n != 0 {
+		t.Fatalf("the colleague was pushed %d times", n)
+	}
+}

@@ -169,6 +169,9 @@ func requestMachine(ctx context.Context, tx pgx.Tx, c Caller, in requestMachineI
 		return out, err
 	}
 	if err := c.env.validateMachine(ctx, live, current, &target, before); err != nil {
+		if errors.Is(err, delivery.ErrNoDefaultPool) {
+			return out, refuse(rLuxHasNoDefaultPool, current.Name)
+		}
 		if errors.Is(err, delivery.ErrPoolsUnread) {
 			return out, refuseText(rLuxPoolsCouldNotBeRead)
 		}

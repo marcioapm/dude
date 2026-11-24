@@ -350,6 +350,8 @@ export interface TaskDetail extends Task {
   /** Each delivery's attempt, who decided it, and the task branch it named (null before it named one). */
   deciders?: Array<{ attempt: number; decider: Decider; branch?: string | null }>;
   escalation: Escalation | null;
+  /** Its pull request waits on a person connecting GitHub; absent or null for none. */
+  credentialWait?: CredentialWait | null;
   /** The machines its agents raised, by role, names resolved by the control plane; empty when none. */
   agentMachines: AgentMachine[];
   /**
@@ -358,6 +360,19 @@ export interface TaskDetail extends Task {
    * as it failed, which Try again asks again. Absent from an older control plane.
    */
   questions?: TaskQuestion[];
+}
+
+/**
+ * A pull request that waits on a person's GitHub: dude opens it as the
+ * task's owner (frozen when it first tried), who has not connected
+ * (`reconnect`: whose connection no longer works). The branch is pushed.
+ */
+export interface CredentialWait {
+  reason: "owner_github";
+  person: PersonRef | null;
+  branch: string;
+  reconnect: boolean;
+  askedAt: string;
 }
 
 /** What a message in a task's Chat reached: its conductor, made by it or not. */
@@ -380,6 +395,9 @@ export const CONDUCTOR_HELD_WAITING: Record<ConductorHeld, string> = {
   repository_request: "With the conductor: a repository request",
 };
 
+/** What a task whose pull request waits on its owner's GitHub waits for, on the board and in the tree. */
+export const credentialWaitingFor = (reconnect: boolean) => `${reconnect ? "Reconnect" : "Connect"} GitHub to open the pull request`;
+
 /** What a task held before its pull request waits for, on the board and in the tree. */
 export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request yet";
 
@@ -390,9 +408,11 @@ export const READY_FOR_REVIEW_WAITING = "Ready for your review: no pull request 
  * and as its driver.
  */
 export function withWaitingFor(projects: NavProject[]): NavProject[] {
-  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean; conductorHeld?: ConductorHeld }): NavTask => {
-    const { decider, conductorLive, conductorHeld, ...rest } = t;
+  const task = (t: NavTask & { escalation?: Escalation | null; decider?: Decider; conductorLive?: boolean; conductorHeld?: ConductorHeld;
+    credentialWait?: Pick<CredentialWait, "person" | "reconnect"> | null }): NavTask => {
+    const { decider, conductorLive, conductorHeld, credentialWait, ...rest } = t;
     const driven = decider ? { ...rest, driver: driverMode(decider, conductorLive === true) } : rest;
+    if (credentialWait) return { ...driven, heldForReview: false, waitingFor: credentialWaitingFor(credentialWait.reconnect) };
     if (t.escalation) return { ...driven, heldForReview: false, waitingFor: `${t.escalation.holder === "conductor" ? "With the conductor: " : ""}${escalationWords(t.escalation).short}` };
     if (conductorHeld) return { ...driven, waitingFor: CONDUCTOR_HELD_WAITING[conductorHeld] };
     return t.heldForReview ? { ...driven, waitingFor: READY_FOR_REVIEW_WAITING } : driven;
