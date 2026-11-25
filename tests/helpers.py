@@ -389,6 +389,17 @@ def toast(page, text: str):
     return page.locator("[data-toast]").filter(has_text=text)
 
 
+def two_frames(page, timeout: float = 10_000) -> None:
+    """Wait until the page has painted two more frames, or fail after timeout ms.
+
+    An evaluate awaiting requestAnimationFrame has no timeout of its own: a
+    renderer that stops painting would hold the test until the job is killed.
+    """
+    page.evaluate("() => { window.__twoFrames = false;"
+                  " requestAnimationFrame(() => requestAnimationFrame(() => { window.__twoFrames = true; })); }")
+    page.wait_for_function("() => window.__twoFrames === true", polling=50, timeout=timeout)
+
+
 def wait_until(predicate, timeout: float = 30.0, interval: float = 0.25, message: str = ""):
     """Poll until `predicate` returns a truthy value, or fail the test.
 

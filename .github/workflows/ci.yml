@@ -285,6 +285,8 @@ jobs:
         working-directory: tests
         env:
           DUDE_TEST_LOG_DIR: ${{ runner.temp }}/e2e-logs
+          # A stalled or crashing test process dumps its Python stacks to the log.
+          PYTHONFAULTHANDLER: "1"
         run: uv run python run_tests.py --shard ${{ matrix.shard }}/12 --durations=30 --junitxml=${{ runner.temp }}/e2e-junit.xml --receipt=${{ runner.temp }}/receipt.json
 
       - name: Upload E2E receipt and JUnit (including failures)
@@ -298,7 +300,8 @@ jobs:
           if-no-files-found: error
 
       - name: Upload the e2e logs
-        if: failure()
+        # cancelled() too: a shard killed at its timeout is the one whose logs explain it.
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-logs-${{ matrix.shard }}
