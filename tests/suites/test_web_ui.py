@@ -20,7 +20,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from fake_github import FakeGitHub
-from helpers import relay_writer_question, forward_repository_request, finish_question_relay, ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, wait_for_escalation, wait_until
+from helpers import relay_writer_question, forward_repository_request, finish_question_relay, ApiClient, ask_person_about_escalation, create_api_key, open_my_settings, open_org_settings, open_overview_section, sign_in, toast, two_frames, wait_for_escalation, wait_until
 
 pytestmark = pytest.mark.ui
 
@@ -883,7 +883,7 @@ def test_criteria_that_open_over_the_editors_limit_block_saving_until_they_fit(
     page.on("request", record_patch)
     criteria.press("ControlOrMeta+Enter")
     # The save handler sends synchronously; two frames drain its request event, with no fixed wait.
-    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    two_frames(page)
     assert attempts == []
     expect(criteria).to_be_visible()
     page.remove_listener("request", record_patch)

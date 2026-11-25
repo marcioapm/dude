@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
-from helpers import ApiClient, create_api_key, create_organization, forward_repository_request, query, relay_writer_question, sign_in, wait_until, webhook_secret
+from helpers import ApiClient, create_api_key, create_organization, forward_repository_request, query, relay_writer_question, sign_in, two_frames, wait_until, webhook_secret
 from env import TestEnvironment as Environment
 from fake_github import FakeGitHub
 from suites.test_delivery import (_stopped_epoch, _timed_resume, _resume_row_in_order,
@@ -242,7 +242,7 @@ def test_open_question_is_visible_and_new_content_preserves_upward_reading(
     response = client.post(f"/v1/tasks/{task['id']}/chat", {"text": text, "aside": True})
     assert response.status_code in (200, 201), response.text
     expect(page.get_by_test_id("human-turn").filter(has_text=text)).to_have_count(1, timeout=30_000)
-    page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    two_frames(page)
     assert client.get(f"/v1/questions?runId={run}").json()["questions"][0]["status"] == "open"
     assert viewport.evaluate("el => el.scrollTop") == pytest.approx(reading, abs=2)
 

@@ -14,7 +14,7 @@ import requests
 from playwright.sync_api import Page
 
 from env import TestEnvironment
-from helpers import ApiClient, browser_channel, create_api_key, create_organization, execute, wait_until, webhook_secret
+from helpers import ApiClient, browser_channel, create_api_key, create_organization, execute, two_frames, wait_until, webhook_secret
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -254,5 +254,5 @@ def gallery_page(page: Page, gallery_url: str, console_errors: list[str]) -> Pag
     """
     page.goto(gallery_url, wait_until="networkidle")
     # Settled: the first render's effects have run and two frames have painted.
-    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+    two_frames(page)
     return page

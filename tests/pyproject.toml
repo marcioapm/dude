@@ -22,6 +22,11 @@ dependencies = [
 testpaths = ["suites"]
 # No test should hang the suite; a stuck Run is a failure, not a pause.
 timeout = 300
+# thread, not signal: SIGALRM lands inside Playwright's sync dispatcher, kills its loop,
+# and the fixture's teardown then waits on it until the CI job is killed with no result.
+# thread dumps every stack and exits the test process at the timeout, so the rest of
+# that session (a CI shard, or a whole local run) does not run and is reported incomplete.
+timeout_method = "thread"
 addopts = "-ra --strict-markers"
 markers = [
     "docker: requires Docker and the runner daemon",
