@@ -285,7 +285,8 @@ jobs:
         working-directory: tests
         env:
           DUDE_TEST_LOG_DIR: ${{ runner.temp }}/e2e-logs
-          # A stalled or crashing test process dumps its Python stacks to the log.
+          # A crashing test process dumps its Python stacks to the log (a stall is
+          # dumped by pytest-timeout, see tests/pyproject.toml).
           PYTHONFAULTHANDLER: "1"
         run: uv run python run_tests.py --shard ${{ matrix.shard }}/12 --durations=30 --junitxml=${{ runner.temp }}/e2e-junit.xml --receipt=${{ runner.temp }}/receipt.json
 
