@@ -2103,23 +2103,39 @@ func (w *steps) openPullRequest(ctx context.Context, sc workflow.StepContext) (w
 
 // awaitOwnerAuthorization parks a publication until its frozen owner
 // connects GitHub; the branch stays pushed and no retry budget is spent.
-// The owner is told once per delivery, owner and state (connect, or
-// reconnect): a sweep of the step while they still have not connected
-// tells nobody again, and a Connect that GitHub then refuses asks them to
-// reconnect.
+// The owner is told once per delivery, owner, state (connect, or
+// reconnect) and authorization: a sweep of the step while they still have
+// not connected tells nobody again, a Connect that GitHub then refuses asks
+// them to reconnect, and each further Connect that GitHub refuses asks them
+// again. Their authorization is the latest github.authorized for them that
+// this run has seen: consumed by an earlier step, or delivered to this one.
+// Each Connect, and a take-over by them, records one. A Connect that lands
+// while the step is in flight is not yet seen, so its refusal is never
+// credited to it; it can cause at most one extra ask, never a missed one.
 func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepContext, st *State, cause error) (workflow.Result, error) {
 	var reconnect bool
 	if e := (forge.OwnerAuthorizationError{}); errors.As(cause, &e) {
 		reconnect = e.Reconnect
 	}
 	if err := w.s.DB.InOrg(ctx, sc.OrganizationID, func(tx pgx.Tx) error {
-		var owner string
-		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT owner_person_id FROM pr_publications
-			WHERE task_id = $1 AND branch = $2), '')`, st.TaskID, st.Branch).Scan(&owner); err != nil {
+		seen := make([]string, len(sc.Signals))
+		for i, sig := range sc.Signals {
+			seen[i] = sig.ID
+		}
+		var owner, authorized string
+		// The name is a literal, not a parameter, so that the partial index
+		// workflow_signals_github_authorized_idx serves generic plans too.
+		if err := tx.QueryRow(ctx, `SELECT o.owner, COALESCE((SELECT s.id FROM workflow_signals s
+				WHERE s.workflow_run_id = $3 AND s.name = 'github.authorized' AND s.payload->>'personId' = o.owner
+					AND (s.consumed_at IS NOT NULL OR s.id = ANY($4))
+				ORDER BY s.received_at DESC, s.id DESC LIMIT 1), '')
+			FROM (SELECT COALESCE((SELECT owner_person_id FROM pr_publications
+				WHERE task_id = $1 AND branch = $2), '') AS owner) o`,
+			st.TaskID, st.Branch, sc.WorkflowRunID, seen).Scan(&owner, &authorized); err != nil {
 			return err
 		}
 		wait := &CredentialWait{Reason: ReasonOwnerGitHub, PersonID: owner, Branch: st.Branch, Reconnect: reconnect,
-			Key: credentialKey(sc.WorkflowRunID, owner, reconnect)}
+			Key: credentialKey(sc.WorkflowRunID, owner, reconnect, authorized)}
 		_, err := ToPersonTx(ctx, tx, ToPerson{Ref: RunRef{Org: sc.OrganizationID}, State: st, Reason: cause.Error(), Why: WhyCredential,
 			Credential: wait})
 		return err
@@ -2130,14 +2146,19 @@ func (w *steps) awaitOwnerAuthorization(ctx context.Context, sc workflow.StepCon
 }
 
 // credentialKey is a credential wait's once-only key: the delivery's
-// workflow run (each attempt has its own), the person, and whether they
-// are asked to connect or to reconnect.
-func credentialKey(workflowRunID, person string, reconnect bool) string {
+// workflow run (each attempt has its own), the person, whether they are
+// asked to connect or to reconnect, and the authorization it follows: the
+// id of the latest github.authorized for the person that the run has
+// seen, or "none" before any.
+func credentialKey(workflowRunID, person string, reconnect bool, authorized string) string {
 	state := "connect"
 	if reconnect {
 		state = "reconnect"
 	}
-	return workflowRunID + ":" + person + ":" + state
+	if authorized == "" {
+		authorized = "none"
+	}
+	return workflowRunID + ":" + person + ":" + state + ":" + authorized
 }
 
 // awaitPullRequest wakes a fixer only when there is something to fix: the
