@@ -15,6 +15,7 @@ import (
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 )
 
 // JoinedVia is session.joined's via for someone added to a group session
@@ -562,10 +563,20 @@ func channelProjectsReply(where string, added, removed, now []string) string {
 	return change + ". " + state + ". dude takes it as a hint; what a message says still decides."
 }
 
+// routingRetries is how many times a delivery's routing call that failed
+// transiently (llm.Transient) is asked again, by retrying the delivery,
+// before the failure is kept: fewer than MaxAttempts, as someone is
+// waiting. It counts the delivery's attempts, so an earlier attempt that
+// failed elsewhere leaves fewer.
+const routingRetries = 2
+
 // decision is the routing judgement for the delivery: the one kept on it,
 // or asked now and kept before anything acts on it. A model that gave no
-// usable answer is kept as failed; only the delivery's own deadline
-// leaves nothing kept, for a retry to ask again.
+// usable answer is kept as failed. Nothing is kept, for a retry to ask
+// again, when the delivery's own deadline passed, or when the call failed
+// transiently and the delivery has routing retries left: nothing before
+// the decision posts or records anything a retry repeats (the 👀 is
+// claimed once per delivery; the rest are reads).
 func (s *Service) decision(ctx context.Context, d claimed, org string, p Provider, who asker, m Mention, conv ConversationInfo,
 	members []string, h heard, w World) (storedDecision, error) {
 	var kept storedDecision
@@ -583,6 +594,9 @@ func (s *Service) decision(ctx context.Context, d claimed, org string, p Provide
 	res, err := s.ask(ctx, org, p, who, m, conv, h, w)
 	if ctx.Err() != nil {
 		return kept, ctx.Err()
+	}
+	if transient, after := llm.Transient(err); transient && d.Attempts < routingRetries && d.Attempts+1 < MaxAttempts {
+		return kept, Transient(err, after)
 	}
 	kept = storedDecision{CallID: res.CallID, Rounds: rounds, Conv: &conv, Members: members, Thread: &h.Thread}
 	if len(h.Channel.Messages) > 0 {
