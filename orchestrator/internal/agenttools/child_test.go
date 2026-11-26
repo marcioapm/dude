@@ -36,6 +36,13 @@ func TestStartChildToolProfilesAndReplay(t *testing.T) {
 			t.Fatalf("%s: %d %v", profile, status, out)
 		}
 	}
+	// A conductor's profile stays required: left out, it is refused as before.
+	for _, body := range []string{`{"key":"profile-less"}`, `{"profile":"","key":"profile-empty"}`} {
+		if status, out := f.post(t, token, "start_agent", body); status != 422 ||
+			!strings.Contains(fmt.Sprint(out["error"]), "an existing phase profile is required") {
+			t.Fatalf("conductor without a profile %s: %d %v", body, status, out)
+		}
+	}
 	var count int
 	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM runs WHERE source_kind='task_conductor'`).Scan(&count); err != nil || count != 6 {
 		t.Fatalf("children %d: %v", count, err)

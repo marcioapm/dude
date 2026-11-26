@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 )
 
 type route struct {
@@ -107,6 +109,22 @@ func TestStructuredFailsClosedAndStillRecords(t *testing.T) {
 	}
 	if strings.Contains(stored, key) || strings.Contains(stored, "acme-header-value") || strings.Contains(err.Error(), key) {
 		t.Fatalf("stored %q, returned %v: the key or header value is not redacted", stored, err)
+	}
+	// Redacted, the 502 is still the proxy's transient failure; the
+	// unparseable answer and judgements off are not.
+	if transient, _ := llm.Transient(err); !transient {
+		t.Fatalf("a redacted 502 is not transient: %v", err)
+	}
+	unparseable := setup(t, answering(`{"other":1}`), true)
+	if _, err := unparseable.svc.Structured(context.Background(), unparseable.org, routing); err == nil {
+		t.Fatal("no error")
+	} else if transient, _ := llm.Transient(err); transient {
+		t.Fatalf("an unparseable answer is transient: %v", err)
+	}
+	if _, err := off.svc.Structured(context.Background(), off.org, routing); !errors.Is(err, ErrOff) {
+		t.Fatal(err)
+	} else if transient, _ := llm.Transient(err); transient {
+		t.Fatalf("judgements off is transient: %v", err)
 	}
 }
 

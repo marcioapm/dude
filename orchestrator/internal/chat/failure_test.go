@@ -213,3 +213,86 @@ func TestChatAFailedRequestKeepsItsCauseForRequests(t *testing.T) {
 		}
 	})
 }
+
+// A routing call the proxy failed transiently (a 5xx, a 429, no answer) is
+// not kept: the delivery is tried again and the model asked again, at most
+// twice more, before it falls back to a brainstorm as any failed call does.
+// Nothing before the decision is posted twice; each call is recorded.
+func TestChatRoutingRetriesATransientModelFailure(t *testing.T) {
+	routingCalls := func(w *world) string {
+		return w.one(`SELECT count(*)::text FROM model_calls WHERE organization_id = $1 AND asker = 'chat.route'`, w.org)
+	}
+	t.Run("a 502, then an answer: routed", func(t *testing.T) {
+		w := setup(t)
+		w.model.refuseNext(http.StatusBadGateway, `{"error":{"message":"upstream down"}}`)
+		w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
+		ts, ev := w.receive("Eli", "C1", "", "file: stream it")
+		w.once()
+		if e := w.event(ev); e.Processed || e.Decision || e.Attempts != 1 || !strings.Contains(e.LastError, "the LLM proxy answered 502") {
+			t.Fatalf("after the 502: %+v", e)
+		}
+		if got := w.requests(); len(got) != 0 || len(w.fake.BotMessages()) != 0 {
+			t.Fatalf("acted on a transient failure: %+v %+v", got, w.fake.BotMessages())
+		}
+		w.due()
+		w.once()
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "task" || got[0].Failure != "" || got[0].ResultKind != "task" {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 2 || routingCalls(w) != "2" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
+		}
+		if n := len(w.fake.BotMessages()); n != 1 {
+			t.Fatalf("%d replies", n)
+		}
+		if n := w.fake.Calls("reactions.add"); strings.Count(strings.Join(w.fake.Reactions("C1", ts), ","), "eyes") > 1 || n == 0 {
+			t.Fatalf("reactions %v (%d adds)", w.fake.Reactions("C1", ts), n)
+		}
+	})
+	t.Run("three 502s: a brainstorm, once", func(t *testing.T) {
+		w := setup(t)
+		// An empty queue answers 502.
+		ts, ev := w.receive("Eli", "C1", "", "why are exports slow?")
+		w.once()
+		for range chat.MaxAttempts {
+			w.due()
+			w.once()
+		}
+		if e := w.event(ev); !e.Processed || !e.Decision || e.Attempts != 2 {
+			t.Fatalf("event %+v", e)
+		}
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "failed" || got[0].ResultKind != "session" || got[0].MadeRoute != "brainstorm" ||
+			!strings.HasPrefix(got[0].Failure, "the routing call failed: the LLM proxy answered 502") {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 3 || routingCalls(w) != "3" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
+		}
+		if n := w.one(`SELECT count(*)::text FROM sessions WHERE organization_id = $1`, w.org); n != "1" {
+			t.Fatalf("%s sessions", n)
+		}
+		if n := len(w.fake.BotMessages()); n != 1 {
+			t.Fatalf("%d replies", n)
+		}
+		if r := w.fake.Reactions("C1", ts); strings.Count(strings.Join(r, ","), "eyes") > 1 {
+			t.Fatalf("reactions %v", r)
+		}
+	})
+	t.Run("a 400: a brainstorm at once, asked once", func(t *testing.T) {
+		w := setup(t)
+		w.model.refuseNext(http.StatusBadRequest, `{"error":{"message":"invalid model"}}`)
+		_, ev := w.receive("Eli", "C1", "", "why are exports slow?")
+		w.once()
+		if e := w.event(ev); !e.Processed || !e.Decision || e.Attempts != 0 {
+			t.Fatalf("event %+v", e)
+		}
+		if got := w.requests(); len(got) != 1 || got[0].Route != "failed" || got[0].MadeRoute != "brainstorm" {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 1 || routingCalls(w) != "1" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
+		}
+	})
+}

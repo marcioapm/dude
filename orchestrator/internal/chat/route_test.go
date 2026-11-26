@@ -688,6 +688,13 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 			}
 			before := len(w.requests())
 			w.mention("Márcia", "C1", "", fmt.Sprintf("case %d", i))
+			if c.answer == "" {
+				// No answer is transient: asked twice more before the fallback.
+				for range 2 {
+					w.due()
+					w.sweep()
+				}
+			}
 			got := w.requests()[before:]
 			if len(got) != 1 || got[0].Route != c.route || got[0].AskedRoute != c.asked {
 				t.Fatalf("requests %+v", got)

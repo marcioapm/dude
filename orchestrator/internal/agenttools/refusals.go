@@ -161,6 +161,8 @@ const (
 	rRunIdRunFrom1OrItsLink                = "runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>)"
 	rRunLinkIsAnotherRepository            = "%s is a run of another repository than %s: leave repo out, or name the link's"
 	rBranchAtMost255Characters             = "branch: at most 255 characters"
+	rBranchRunsWorkflow                    = "workflow is a workflow's file name ending .yml or .yaml (like nightly.yml, no folders), at most %d characters, or its numeric id"
+	rBranchRunsEvent                       = "event is a GitHub Actions event name in lowercase letters and _ (like schedule, push, pull_request, workflow_dispatch), at most %d characters"
 	rPostAutomationsOnly                   = "post_to_chat is only available to automations"
 	rPostNameAChannel                      = "name a channel: #engineering, engineering, or its id (C0123ABCD)"
 	rPostTextLength                        = "text is 1 to %d characters of Slack mrkdwn; this one is %d: shorten it, or split it over more than one post"

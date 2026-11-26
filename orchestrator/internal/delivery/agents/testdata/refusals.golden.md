@@ -738,6 +738,14 @@ the preview was not started: %s
 
 lux has no default pool to move you in, so dude cannot move this Run. Carry on on %s, and say in your work what did not fit.
 
+## refusals/tools/github/branch-runs-event
+
+event is a GitHub Actions event name in lowercase letters and _ (like schedule, push, pull_request, workflow_dispatch), at most %d characters
+
+## refusals/tools/github/branch-runs-workflow
+
+workflow is a workflow's file name ending .yml or .yaml (like nightly.yml, no folders), at most %d characters, or its numeric id
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
@@ -1392,7 +1400,7 @@ the brainstorm parent is no longer live
 
 ## refusals/delivery/child/session-profile
 
-this profile is not available to a brainstorm session child
+a session starts only an investigator: leave profile out or pass investigator
 
 ## refusals/delivery/child/session-restart-unsupported
 

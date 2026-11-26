@@ -605,7 +605,7 @@ export const EventTypes = {
   /**
    * A session's agent or a task's conductor read GitHub through dude
    * (github_search, github_issue, github_pull_request, github_check_log, github_run_jobs, github_branch_runs), on its Run.
-   * Payload: `{ tool, repo, number?, checkId?, runId?, branch?, query?, kind?, state?, files?, bytes }`:
+   * Payload: `{ tool, repo, number?, checkId?, runId?, branch?, workflow?, event?, query?, kind?, state?, files?, bytes }`:
    * what was asked and the result's size in bytes, never what GitHub said.
    * A read refused once checked has `{ refused, status, permission? }` in place of
    * `bytes`: dude's kind (moved, moved_item, redirect, rate_reserve, rate_limited,

@@ -72,7 +72,7 @@ The conductor and a brainstorm can read the project's GitHub repositories:
 - `github_pull_request` — read a pull request: conversation, reviews, unresolved threads, checks and changed files.
 - `github_check_log` — read a failed check's log.
 - `github_run_jobs` — list a GitHub Actions run's jobs, from its id or its link: each job's id, conclusion and failed steps. A failed job's id is what `github_check_log` reads.
-- `github_branch_runs` — list a branch's recent Actions runs (the default branch when none is named), newest first, with each job's conclusion: whether a failing job also fails, or fails only sometimes, on the base.
+- `github_branch_runs` — list a branch's recent Actions runs (the default branch when none is named), newest first, with each job's conclusion: whether a failing job also fails, or fails only sometimes, on the base. `workflow` (a workflow file like `nightly.yml`, or its id) and `event` (like `schedule`) narrow it, which is how a nightly is found among a busy branch's pushes.
 
 These are read only. What people wrote comes marked as external text, so agents treat it as information, not instructions. A task's agents, or a session's, share 60 GitHub reads an hour.
 

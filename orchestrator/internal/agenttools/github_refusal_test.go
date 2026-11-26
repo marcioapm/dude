@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -259,5 +261,79 @@ func TestBranchRunsWithNoBranchReadTheDefaultBranch(t *testing.T) {
 				t.Fatalf("read %s, asked %v", out, asked)
 			}
 		})
+	}
+}
+
+// A workflow and an event narrow the read's request and are said in its
+// result; with neither, the request and the result's keys are as before.
+// A workflow left with no branch still reads the default branch first.
+func TestBranchRunsNarrowedReadsAskForThem(t *testing.T) {
+	var asked []string
+	c := githubAnswering(t, func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.RequestURI())
+		switch r.URL.Path {
+		case "/repos/acme/auto":
+			fmt.Fprint(w, `{"default_branch":"trunk","full_name":"acme/auto"}`)
+		case "/repos/acme/auto/actions/runs", "/repos/acme/auto/actions/workflows/nightly.yml/runs":
+			fmt.Fprint(w, `{"total_count":0,"workflow_runs":[]}`)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	keys := func(raw json.RawMessage) []string {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return slices.Sorted(maps.Keys(m))
+	}
+	out, err := readOnGitHub(context.Background(), c, githubRead{Tool: "github_branch_runs", Slug: "acme/auto", Branch: "main"})
+	if err != nil || asked[len(asked)-1] != "/repos/acme/auto/actions/runs?branch=main&per_page=10" ||
+		!slices.Equal(keys(out), []string{"branch", "external", "next", "repo", "runs"}) {
+		t.Fatalf("unnarrowed: %s %v %v", out, asked, err)
+	}
+	asked = nil
+	out, err = readOnGitHub(context.Background(), c, githubRead{Tool: "github_branch_runs", Slug: "acme/auto",
+		Runs: forge.RunsFilter{Workflow: "nightly.yml", Event: "schedule"}})
+	if err != nil || !slices.Equal(asked, []string{"/repos/acme/auto", "/repos/acme/auto/actions/workflows/nightly.yml/runs?branch=trunk&event=schedule&per_page=10"}) {
+		t.Fatalf("narrowed: %s %v %v", out, asked, err)
+	}
+	if !strings.Contains(string(out), `"workflow":"nightly.yml"`) || !strings.Contains(string(out), `"event":"schedule"`) {
+		t.Fatalf("narrowed result %s", out)
+	}
+}
+
+// branchRunsFilter takes a workflow file's bare name or a positive id and
+// an event's name; anything else is refused in words naming what it takes.
+func TestBranchRunsFilterIsValidated(t *testing.T) {
+	for _, in := range []githubBranchRunsIn{{}, {Workflow: "nightly.yml"}, {Workflow: " ci.yaml "}, {Workflow: "991"},
+		{Event: "schedule"}, {Event: "pull_request_target"}, {Workflow: "a-b_c.d.yml", Event: "workflow_dispatch"}} {
+		if _, err := branchRunsFilter(in); err != nil {
+			t.Errorf("%+v refused: %v", in, err)
+		}
+	}
+	for _, in := range []githubBranchRunsIn{{Workflow: "../ci.yml"}, {Workflow: "a/b.yml"}, {Workflow: `a\b.yml`}, {Workflow: "ci..yml"},
+		{Workflow: "ci"}, {Workflow: "0"}, {Workflow: "-3"}, {Workflow: "ci.yml#x"}, {Workflow: strings.Repeat("a", 252) + ".yml"}} {
+		if _, err := branchRunsFilter(in); err == nil || !strings.Contains(err.Error(), "workflow is a workflow's file name") {
+			t.Errorf("%+v: %v", in, err)
+		}
+	}
+	for _, in := range []githubBranchRunsIn{{Event: "Push"}, {Event: "pull-request"}, {Event: "push&x=1"}, {Event: "a1"}, {Event: strings.Repeat("a", 65)}} {
+		if _, err := branchRunsFilter(in); err == nil || !strings.Contains(err.Error(), "event is a GitHub Actions event name") {
+			t.Errorf("%+v: %v", in, err)
+		}
+	}
+}
+
+// What a github.read event says was asked includes what narrowed it, so
+// two reads differing only by event are told apart.
+func TestBranchRunsReadPayloadNamesWorkflowAndEvent(t *testing.T) {
+	a := readPayload(githubRead{Tool: "github_branch_runs", Slug: "acme/auto", Branch: "main", Runs: forge.RunsFilter{Workflow: "nightly.yml", Event: "schedule"}})
+	b := readPayload(githubRead{Tool: "github_branch_runs", Slug: "acme/auto", Branch: "main", Runs: forge.RunsFilter{Workflow: "nightly.yml", Event: "push"}})
+	if a["workflow"] != "nightly.yml" || a["event"] != "schedule" || b["event"] != "push" || reflect.DeepEqual(a, b) {
+		t.Fatalf("payloads %v %v", a, b)
+	}
+	if p := readPayload(githubRead{Tool: "github_branch_runs", Slug: "acme/auto", Branch: "main"}); len(p) != 3 {
+		t.Fatalf("unnarrowed payload %v", p)
 	}
 }
