@@ -517,25 +517,30 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 	if len(cards) != 40 {
 		t.Fatalf("%d cards", len(cards))
 	}
-	// What each item says, for Ana (who can chat): filed by Márcio; hers to
-	// file; Márcio's edit not hers to file, and why.
+	// What each item says, for Ana (who can chat): on an earlier card,
+	// filed by Márcio, or replaced by the later proposal; on the latest,
+	// hers to file, and Márcio's edit not hers to file, and why.
 	first := cards[0].(map[string]any)["status"].([]any)
-	want := []string{`"filed":true`, `"filed":true`, `"filed":true`, `"filed":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`,
-		`"canFile":false`, `"canFile":true`, `"canFile":true`}
+	want := []string{`"filed":true`, `"filed":true`, `"filed":true`, `"filed":true`, `"blockedBy":"replaced"`, `"blockedBy":"replaced"`,
+		`"blockedBy":"replaced"`, `"blockedBy":"replaced"`, `"blockedBy":"replaced"`, `"blockedBy":"replaced"`}
 	for i, w := range want {
 		if got := fmtJSON(first[i]); !strings.Contains(got, w) {
-			t.Errorf("item %d: %s, want %s", i, got, w)
+			t.Errorf("first card's item %d: %s, want %s", i, got, w)
 		}
 	}
 	if got := fmtJSON(first[0]); !strings.Contains(got, `"filedBy":"Márcio Martins"`) || !strings.Contains(got, `"key":`) {
 		t.Errorf("a filed item says who and what: %s", got)
 	}
-	if got := fmtJSON(first[7]); !strings.Contains(got, "Márcio") {
-		t.Errorf("Márcio's edit says who may file it: %s", got)
-	}
 	lastCard := cards[39].(map[string]any)["status"].([]any)
-	if got := fmtJSON(lastCard[0]); !strings.Contains(got, `"canFile":true`) {
-		t.Errorf("an unfiled card's epic: %s", got)
+	want = []string{`"canFile":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`, `"canFile":true`,
+		`"canFile":false`, `"canFile":true`, `"canFile":true`}
+	for i, w := range want {
+		if got := fmtJSON(lastCard[i]); !strings.Contains(got, w) {
+			t.Errorf("latest card's item %d: %s, want %s", i, got, w)
+		}
+	}
+	if got := fmtJSON(lastCard[7]); !strings.Contains(got, "Márcio") {
+		t.Errorf("Márcio's edit says who may file it: %s", got)
 	}
 
 	// Filing reads and locks what it decides on once, for all the items
