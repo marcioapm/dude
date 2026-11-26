@@ -862,6 +862,14 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   being open is the component's own state. The Chat's `session.filed`
   notice ("Ana filed BILL-1, …") stays where it happened: the line is the
   proposal, the notice the moment it was filed.
+- **Proposing again replaces the card.** Only the session's latest
+  proposal is filed from: an earlier card's unfiled items are `replaced`
+  (the API's `blockedBy: "replaced"`, "Replaced by a later proposal", and
+  filing one is refused `proposal_replaced`). Nothing is left to act on,
+  so they fold the card as filed items do — not blocked for everyone,
+  which would keep a dead card open — and the line says "replaced by a
+  later proposal", or "1 filed · 1 replaced by a later proposal" beside
+  what was filed from it, which stays filed.
 - **An item nobody can file keeps the card open.** One blocked for
   everyone (`blockedFor: "everyone"`, or unset: its task has started, its
   project is no longer linked) is a problem someone may need to act on,

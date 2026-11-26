@@ -208,7 +208,7 @@ export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from 
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
-export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
+export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary, yoursToFile } from "./Brainstorm.tsx";
 export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
 export { OrgFace } from "./OrgFace.tsx";
 export type { OrgFaceProps, Organisation } from "./OrgFace.tsx";

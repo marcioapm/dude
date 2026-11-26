@@ -161,6 +161,11 @@ export interface ProposalCardItem {
    * rather than fold a problem away.
    */
   readonly blockedFor?: "you" | "everyone" | undefined;
+  /**
+   * On a card a later proposal replaced, unfiled: nobody files it now, and
+   * nothing is left to act on, so it folds the card as a filed item does.
+   */
+  readonly replaced?: boolean | undefined;
   /** Why not, said on the item ("Only Márcio can file this: it's his task"). */
   readonly why?: string | undefined;
   /** Filed already: by whom, as what ("Ana filed BL-61"). */
@@ -214,28 +219,42 @@ const FOLDED_NAMES = 4;
 
 /** Unfiled, and someone else's to file: not the person looking's, yet not blocked for everyone. */
 function othersToFile(item: ProposalCardItem, readOnly?: boolean): boolean {
-  if (item.filed) return false;
+  if (item.filed || item.replaced) return false;
   return item.canFile ? Boolean(readOnly) : item.blockedFor === "you";
 }
 
 /**
  * Nothing on the card is left for the person looking to file: each item is
- * filed, or someone else's to file. An item nobody can file keeps it open.
+ * filed, replaced by a later proposal, or someone else's to file. An item
+ * nobody can file for another reason keeps it open.
  */
 export function nothingLeftToFile(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): boolean {
-  return items.length > 0 && items.every((item) => item.filed || othersToFile(item, readOnly));
+  return items.length > 0 && items.every((item) => item.filed || item.replaced || othersToFile(item, readOnly));
+}
+
+/** The items the person looking can file now: what the card waits on them for. */
+export function yoursToFile(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): ProposalCardItem[] {
+  return readOnly ? [] : items.filter((item) => item.canFile && !item.filed && !item.replaced);
 }
 
 /**
  * The folded card's words after "Proposed work · 2 epics, 3 tasks": all
  * filed, what they became (an epic, which has no key, by its title) and who
- * filed them; otherwise how many are filed and how many wait for others.
+ * filed them; otherwise how many are filed, how many wait for others, and
+ * how many a later proposal replaced ("replaced by a later proposal" when
+ * it replaced them all).
  */
 export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): string[] {
   const filed = items.flatMap((item) => (item.filed ? [{ item, filed: item.filed }] : []));
   if (filed.length < items.length) {
-    const others = `${items.filter((item) => othersToFile(item, readOnly)).length} for others to file`;
-    return filed.length > 0 ? [`${filed.length} filed`, others] : [others];
+    const others = items.filter((item) => othersToFile(item, readOnly)).length;
+    const replaced = items.filter((item) => !item.filed && item.replaced).length;
+    if (replaced === items.length) return ["replaced by a later proposal"];
+    return [
+      ...(filed.length > 0 ? [`${filed.length} filed`] : []),
+      ...(others > 0 || replaced === 0 ? [`${others} for others to file`] : []),
+      ...(replaced > 0 ? [`${replaced} replaced by a later proposal`] : []),
+    ];
   }
   const names = filed.map(({ item, filed: f }) =>
     (item.kind === "epic" || !f.key) && typeof item.title === "string" ? item.title : f.key || "an item");

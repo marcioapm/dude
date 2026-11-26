@@ -232,6 +232,9 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
             <Card items={ALL_FILED} />
             <Label>folded: nothing left for Ana, one for Márcio</Label>
             <Card items={LEFT_FOR_OTHERS} />
+            <Label>folded: replaced by a later proposal, one item filed from it before</Label>
+            <Card items={[{ ...READABLE[0]!, filed: filedBy("Ana Ribeiro", "AN-123") },
+              { ...READABLE[1]!, canFile: false, replaced: true, why: "Replaced by a later proposal" }]} />
             <Label>blocked for everyone: stays open, saying why</Label>
             <Card items={BLOCKED_FOR_EVERYONE} />
             <Label>opened from folded</Label>

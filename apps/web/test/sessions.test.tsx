@@ -2371,3 +2371,19 @@ describe("proposed work on the session page", () => {
     expect([...criteria.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Clone with the defaults.", "The nightly gets past setup."]);
   });
 });
+
+describe("a card a later proposal replaced", () => {
+  test("folds to its line, saying so; the latest card stays open to file", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [
+        { id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "Meter runs", goal: "g" }, { kind: "task", project: "BL", title: "Dedupe", goal: "g" }],
+          status: [{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }, { canFile: false, blockedBy: "replaced", why: "Replaced by a later proposal" }] },
+        { id: "prp_2", runId: RUN, createdAt: at(40), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }], status: [{ canFile: true }] },
+      ],
+    })));
+    const earlier = await until(() => page.querySelector("[data-proposal=prp_1] [data-testid=proposal-fold]"), "the earlier card's line");
+    expect(earlier.textContent).toBe("Proposed work · 2 tasks · 1 filed · 1 replaced by a later proposal");
+    expect(page.querySelector("[data-proposal=prp_2] [data-testid=file-proposal]")).toBeTruthy();
+    expect(page.querySelectorAll("[data-testid=file-proposal]").length).toBe(1);
+  });
+});

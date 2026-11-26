@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ProposalCard, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
+import { ProposalCard, foldedWords, nothingLeftToFile, yoursToFile, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -109,5 +109,22 @@ describe("ProposalCard task items", () => {
       expect(button(el, "Show all")).toBeUndefined();
       expect(el.textContent!.split(LONG_GOAL).length - 1).toBe(2);
     });
+  });
+});
+
+describe("ProposalCard replaced by a later proposal", () => {
+  const replaced = (title: string): ProposalCardItem =>
+    ({ kind: "task", title, project, canFile: false, replaced: true, why: "Replaced by a later proposal" });
+
+  test("its unfiled items fold it to its line, which says so; filed ones stay filed", async () => {
+    const el = await mount(<Card items={[replaced("a"), replaced("b")]} />);
+    expect(el.querySelector('[data-testid="proposal-fold"]')!.textContent).toBe("Proposed work · 2 tasks · replaced by a later proposal");
+    expect(el.querySelectorAll('[data-testid="file-proposal"]').length).toBe(0);
+    expect(nothingLeftToFile([replaced("a")])).toBe(true);
+    expect(yoursToFile([replaced("a")])).toEqual([]);
+    const done: ProposalCardItem = { kind: "task", title: "c", project, canFile: true, filed: { by: "Ana", key: "AN-123" } };
+    expect(foldedWords([done, replaced("a")])).toEqual(["1 filed", "1 replaced by a later proposal"]);
+    expect(foldedWords([done, replaced("a"), { kind: "edit", title: "e", canFile: false, blockedFor: "you" }]))
+      .toEqual(["1 filed", "1 for others to file", "1 replaced by a later proposal"]);
   });
 });

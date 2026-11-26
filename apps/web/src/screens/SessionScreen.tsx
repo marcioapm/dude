@@ -748,7 +748,7 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
   const blockedFor: ProposalCardItem["blockedFor"] = theirs ? "you" : "everyone";
   const common = {
     canFile: Boolean(status.canFile),
-    ...(status.canFile ? {} : { blockedFor }),
+    ...(status.blockedBy === "replaced" ? { replaced: true } : status.canFile ? {} : { blockedFor }),
     ...(status.why ? { why: status.why } : {}),
     ...(status.filed ? { filed: { by: status.filedBy ?? "Someone", key: status.key ?? "" } } : {}),
   };

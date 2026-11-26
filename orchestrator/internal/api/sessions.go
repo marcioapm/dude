@@ -551,13 +551,21 @@ type proposalCard struct {
 	raw         json.RawMessage
 }
 
+// replacedWhy is what an earlier card's unfiled item says: proposing again
+// replaces the card, so only the session's latest proposal is filed from.
+const replacedWhy = "Replaced by a later proposal"
+
+// latestProposalSQL (SQL, $1 the session): the session's latest proposal's
+// id, in the order proposalsFor reads the cards.
+const latestProposalSQL = `SELECT id FROM session_proposals WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`
+
 // proposalsFor reads the session's cards for one member. Every card it ever
 // had is read in a fixed number of queries, whatever their number: their
 // filings in one, and what deciding who may file each item needs
 // (fileFacts) in a few more.
 func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string) ([]proposalCard, error) {
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(run_id, ''), created_at, items FROM session_proposals
-		WHERE session_id = $1 ORDER BY created_at`, sessionID)
+		WHERE session_id = $1 ORDER BY created_at, id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -589,8 +597,12 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	}); err != nil {
 		return nil, err
 	}
+	// Only the latest card's unfiled items are anyone's to file (replacedWhy).
 	var open []delivery.ProposalItem
-	for _, c := range cards {
+	for i, c := range cards {
+		if i < len(cards)-1 {
+			continue
+		}
 		for n, it := range c.Items {
 			if _, done := filed[fmt.Sprintf("%s/%d", c.ID, n)]; !done {
 				open = append(open, it)
@@ -626,6 +638,8 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 			st := map[string]any{}
 			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
 				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
+			} else if i < len(cards)-1 {
+				st["canFile"], st["why"], st["blockedBy"] = false, replacedWhy, "replaced"
 			} else {
 				no := facts.cannotFileIn(c.Items, n, isFiled, person, role)
 				st["canFile"] = no.why == ""
@@ -991,6 +1005,15 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				return fail(http.StatusNotFound, "not_found", "proposal %s not found", body.ProposalID)
 			}
 			return err
+		}
+		// In the filing's transaction: a card proposed after this read is
+		// later than the filing, which stays filed as any filed item does.
+		var latest string
+		if err := tx.QueryRow(r.Context(), latestProposalSQL, id).Scan(&latest); err != nil {
+			return err
+		}
+		if latest != body.ProposalID {
+			return fail(http.StatusConflict, "proposal_replaced", "proposal %s was replaced by a later proposal: file from the latest card", body.ProposalID)
 		}
 		var items []delivery.ProposalItem
 		_ = json.Unmarshal(raw, &items)
