@@ -144,7 +144,8 @@ func TestBranchRunsNarrowedByWorkflowAndEvent(t *testing.T) {
 		asked = append(asked, r.URL.RequestURI())
 		switch r.URL.Path {
 		case "/repos/acme/api/actions/runs", "/repos/acme/api/actions/workflows/nightly_warehouse_snowflake.yml/runs",
-			"/repos/acme/api/actions/workflows/42/runs", "/repos/acme/api/actions/workflows/a b.yml/runs":
+			"/repos/acme/api/actions/workflows/42/runs", "/repos/acme/api/actions/workflows/a b.yml/runs",
+			"/repos/acme/api/actions/workflows/a/b.yml/runs":
 			fmt.Fprint(w, `{"total_count":1,"workflow_runs":[
 				{"id":7,"name":"Nightly","head_sha":"a","event":"schedule","status":"completed","conclusion":"failure","created_at":"2026-11-26T03:00:00Z"}]}`)
 		case "/repos/acme/api/actions/runs/7/jobs":
@@ -164,6 +165,8 @@ func TestBranchRunsNarrowedByWorkflowAndEvent(t *testing.T) {
 		{RunsFilter{Workflow: "42"}, "/repos/acme/api/actions/workflows/42/runs?branch=main&per_page=3"},
 		{RunsFilter{Event: "workflow_dispatch"}, "/repos/acme/api/actions/runs?branch=main&event=workflow_dispatch&per_page=3"},
 		{RunsFilter{Workflow: "a b.yml", Event: "a&b=c"}, "/repos/acme/api/actions/workflows/a%20b.yml/runs?branch=main&event=a%26b%3Dc&per_page=3"},
+		// A slash stays inside the workflow's path segment.
+		{RunsFilter{Workflow: "a/b.yml"}, "/repos/acme/api/actions/workflows/a%2Fb.yml/runs?branch=main&per_page=3"},
 		{RunsFilter{}, "/repos/acme/api/actions/runs?branch=main&per_page=3"},
 	} {
 		asked = nil

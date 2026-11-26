@@ -299,3 +299,39 @@ func TestAnAnswerTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
 		t.Errorf("directive with no chat origin %q", d)
 	}
 }
+
+// A live agent that is Ending (its container gone for good, unasked) is
+// told nothing: nothing more is queued for one.
+func TestNothingIsToldToAnEndingAgent(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
+	run := s.started(id)
+	queued := func(state string) int {
+		tx, err := s.owner.Begin(t0())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(t0()) }()
+		if _, err := tx.Exec(t0(), `SELECT set_config('app.organization_id', $1, true)`, s.org); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(t0(), `UPDATE runs SET lux_state = $2, lux_stop_reason = NULL, control = 'none' WHERE id = $1`, run, state); err != nil {
+			t.Fatal(err)
+		}
+		if err := delivery.TellBrainstorm(t0(), tx, s.org, id, "A line from dude"); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := tx.QueryRow(t0(), `SELECT count(*) FROM directives WHERE run_id = $1 AND text = 'A line from dude'`, run).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := queued("running"); n != 1 {
+		t.Fatalf("a running agent was told %d times", n)
+	}
+	if n := queued("terminated"); n != 0 {
+		t.Errorf("an ending agent was told %d times", n)
+	}
+}

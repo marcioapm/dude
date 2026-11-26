@@ -235,8 +235,13 @@ func TestChatRoutingRetriesATransientModelFailure(t *testing.T) {
 		if got := w.requests(); len(got) != 0 || len(w.fake.BotMessages()) != 0 {
 			t.Fatalf("acted on a transient failure: %+v %+v", got, w.fake.BotMessages())
 		}
+		adds, marks := w.fake.Calls("reactions.add"), w.fake.Reactions("C1", ts)
 		w.due()
 		w.once()
+		// The retry adds only the outcome's mark (✅ in place of the 👀), never the 👀 again.
+		if n, now := w.fake.Calls("reactions.add"), w.fake.Reactions("C1", ts); n != adds+1 || strings.Join(now, ",") != "white_check_mark" {
+			t.Fatalf("the retry added %d reactions (%v, %v before it)", n-adds, now, marks)
+		}
 		got := w.requests()
 		if len(got) != 1 || got[0].Route != "task" || got[0].Failure != "" || got[0].ResultKind != "task" {
 			t.Fatalf("requests %+v", got)
@@ -256,9 +261,13 @@ func TestChatRoutingRetriesATransientModelFailure(t *testing.T) {
 		// An empty queue answers 502.
 		ts, ev := w.receive("Eli", "C1", "", "why are exports slow?")
 		w.once()
+		adds := w.fake.Calls("reactions.add")
 		for range chat.MaxAttempts {
 			w.due()
 			w.once()
+		}
+		if n := w.fake.Calls("reactions.add"); n != adds {
+			t.Fatalf("the retries added reactions: %d adds, %d before them", n, adds)
 		}
 		if e := w.event(ev); !e.Processed || !e.Decision || e.Attempts != 2 {
 			t.Fatalf("event %+v", e)

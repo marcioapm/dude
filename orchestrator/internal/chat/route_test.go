@@ -701,7 +701,7 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 			before := len(w.requests())
 			w.mention("Márcia", "C1", "", fmt.Sprintf("case %d", i))
 			if c.answer == "" {
-				// No answer is transient: asked twice more before the fallback.
+				// The proxy's 502 for an empty queue is transient: asked twice more before the fallback.
 				for range 2 {
 					w.due()
 					w.sweep()

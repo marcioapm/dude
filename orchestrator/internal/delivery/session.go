@@ -632,11 +632,12 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 }
 
 // TellBrainstorm queues a line from dude for the session's live agent,
-// resuming it if it is parked; nothing when none is live.
+// resuming it if it is parked; nothing when none is live, or when it is
+// Ending (nothing more is queued for one).
 func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string) error {
 	var runID string
-	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` FOR NO KEY UPDATE`,
-		sessionID).Scan(&runID)
+	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` AND `+Ending+` IS NOT TRUE
+		FOR NO KEY UPDATE`, sessionID).Scan(&runID)
 	if db.IsNotFound(err) {
 		return nil
 	}

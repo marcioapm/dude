@@ -18,7 +18,8 @@ import (
 // one with a status other than 2xx. Its text is the error's as before.
 type CallError struct {
 	msg string
-	// The proxy's HTTP status; 0 when it gave none.
+	// The proxy's HTTP status; 0 when it gave none, or when its body could
+	// not be read, whatever its status (a 2xx included).
 	Status int
 	// The proxy's Retry-After, when it gave one in seconds.
 	RetryAfter time.Duration
