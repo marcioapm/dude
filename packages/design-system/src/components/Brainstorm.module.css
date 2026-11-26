@@ -8,7 +8,7 @@
   font-size: var(--ds-text-sm);
 }
 
-/* The proposal card: a raised surface inside the agent's turn. */
+/* The proposal card: a raised surface inside the agent's turn, as wide as the turn's text. */
 .card {
   display: flex;
   flex-direction: column;
@@ -17,7 +17,6 @@
   padding: var(--ds-space-12) var(--ds-space-16);
   background: var(--ds-color-raised);
   border-radius: var(--ds-radius-float);
-  max-width: 860px;
 }
 .cardHead {
   display: flex;
@@ -189,10 +188,10 @@
   color: var(--ds-color-text-secondary);
   white-space: nowrap;
 }
+/* File sits right after the words that say what it files (or why it cannot), not at the card's far edge. */
 .cardFoot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--ds-space-12);
 }
 
