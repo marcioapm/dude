@@ -48,11 +48,11 @@ func TestSessionChildAdmissionAndParentFence(t *testing.T) {
 	if replacement, err := s.RestartChild(ctx, org, "", id, "restart"); !IsRefusal(err) || replacement != "" {
 		t.Fatalf("session restart: replacement=%q err=%v", replacement, err)
 	}
-	for _, profile := range []string{"implementer", "fixer", "simplifier", "reviewer", "qa_browser"} {
+	for _, profile := range []string{"implementer", "fixer", "simplifier", "reviewer", "qa_browser", "explore", ""} {
 		bad := in
-		bad.Profile, bad.Key, bad.Tier = profile, profile, ""
-		if _, err := s.StartChild(ctx, bad); !IsRefusal(err) {
-			t.Fatalf("profile %s: %v", profile, err)
+		bad.Profile, bad.Key, bad.Tier = profile, "bad-"+profile, ""
+		if _, err := s.StartChild(ctx, bad); !IsRefusal(err) || err.Error() != rChildSessionProfile {
+			t.Fatalf("profile %q: %v", profile, err)
 		}
 	}
 	if err := s.EndChildParent(ctx, org, "", "run_brainstorm"); !IsRefusal(err) {

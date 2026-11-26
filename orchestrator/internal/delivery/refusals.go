@@ -179,7 +179,7 @@ const (
 	rTierNamesNoModelYetCannot              = "the tier %q names no model yet: a %s cannot run on it"
 	rChildProfileRequired                   = "an existing phase profile is required"
 	rChildParentKeyRequired                 = "a parent and idempotency key are required"
-	rChildSessionProfile                    = "this profile is not available to a brainstorm session child"
+	rChildSessionProfile                    = "a session starts only an investigator: leave profile out or pass investigator"
 	rChildSessionParentEnded                = "the brainstorm parent is no longer live"
 	rChildCapabilitiesMismatch              = "capabilities must match the named profile"
 	rChildNoteTooLong                       = "note exceeds 4000 characters"

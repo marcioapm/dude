@@ -1392,7 +1392,7 @@ the brainstorm parent is no longer live
 
 ## refusals/delivery/child/session-profile
 
-this profile is not available to a brainstorm session child
+a session starts only an investigator: leave profile out or pass investigator
 
 ## refusals/delivery/child/session-restart-unsupported
 

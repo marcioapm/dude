@@ -223,13 +223,22 @@ func TestBrainstormStartsOnlyInvestigatorChildren(t *testing.T) {
 	if status := f.postAs(t, token, "start_agent", `{"profile":"investigator","key":"same"}`, &again); status != 200 || again.RunID != started.RunID {
 		t.Fatalf("idempotent start: %d %+v", status, again)
 	}
-	for _, profile := range []string{"reviewer", "qa_browser", "implementer", "fixer", "simplifier", "conductor", "brainstorm", "unknown"} {
-		if status, out := f.post(t, token, "start_agent", fmt.Sprintf(`{"profile":%q,"key":%q}`, profile, profile)); status != 422 {
+	const onlyInvestigator = "a session starts only an investigator: leave profile out or pass investigator"
+	for _, profile := range []string{"explore", "reviewer", "qa_browser", "implementer", "fixer", "simplifier", "conductor", "brainstorm", "unknown"} {
+		if status, out := f.post(t, token, "start_agent", fmt.Sprintf(`{"profile":%q,"key":%q}`, profile, profile)); status != 422 ||
+			!strings.Contains(fmt.Sprint(out["error"]), onlyInvestigator) {
 			t.Fatalf("%s: %d %v", profile, status, out)
 		}
 	}
-	if status, _ := f.post(t, token, "start_agent", `{"key":"profile-less"}`); status != 422 {
-		t.Fatalf("profile-less child: %d", status)
+	// Left out, the profile is the session's one: an investigator.
+	var defaulted struct{ RunID, Profile, Phase string }
+	if status := f.postAs(t, token, "start_agent", `{"key":"profile-less"}`, &defaulted); status != 200 ||
+		defaulted.RunID == "" || defaulted.RunID == started.RunID || defaulted.Profile != "investigator" {
+		t.Fatalf("profile-less child: %d %+v", status, defaulted)
+	}
+	var defaultedProfile string
+	if err := f.owner.QueryRow(context.Background(), `SELECT child_profile FROM runs WHERE id=$1`, defaulted.RunID).Scan(&defaultedProfile); err != nil || defaultedProfile != "investigator" {
+		t.Fatalf("profile-less child's profile %q: %v", defaultedProfile, err)
 	}
 	if status, _ := f.post(t, token, "start_agent", `{"profile":"investigator","sessionId":"ssn_child_tools","key":"forged"}`); status != 422 {
 		t.Fatalf("forged parent arguments: %d", status)

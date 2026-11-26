@@ -87,18 +87,37 @@ type startAgentOut struct {
 	Phase   string `json:"phase"`
 }
 
+// sessionStartAgentIn is a session agent's start_agent: its profile may be
+// left out (the session's one profile, delivery.SessionChildProfile).
+type sessionStartAgentIn struct {
+	Profile string `json:"profile,omitempty"`
+	Prompt  string `json:"prompt,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Tier    string `json:"tier,omitempty"`
+	Key     string `json:"key,omitempty"`
+}
+
+func sessionStartAgent(ctx context.Context, tx pgx.Tx, c Caller, in sessionStartAgentIn) (startAgentOut, error) {
+	return startAgent(ctx, tx, c, startAgentIn(in))
+}
+
 func startAgent(ctx context.Context, tx pgx.Tx, c Caller, in startAgentIn) (startAgentOut, error) {
+	parentKind := delivery.ChildParentTaskConductor
+	if c.Role == delivery.RoleBrainstorm {
+		// A session starts only its one profile: left out, it is that one;
+		// any other is refused by StartChildTx in words naming it.
+		parentKind = delivery.ChildParentSession
+		if in.Profile == "" {
+			in.Profile = delivery.SessionChildProfile
+		}
+	}
 	phase := delivery.PhaseForPromptRole(in.Profile)
-	if phase == "" || in.Profile == "conductor" || in.Profile == "brainstorm" {
+	if parentKind == delivery.ChildParentTaskConductor && (phase == "" || in.Profile == "conductor" || in.Profile == "brainstorm") {
 		return startAgentOut{}, refuseText(rChildProfileRequired)
 	}
 	key := in.Key
 	if key == "" {
 		key = "tool:" + c.CallID
-	}
-	parentKind := delivery.ChildParentTaskConductor
-	if c.Role == delivery.RoleBrainstorm {
-		parentKind = delivery.ChildParentSession
 	}
 	id, err := delivery.StartChildTx(ctx, tx, delivery.StartChildInput{
 		Parent: delivery.ChildParent{Kind: parentKind, Run: c.run()}, Profile: in.Profile,
