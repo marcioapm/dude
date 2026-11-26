@@ -23,9 +23,7 @@ const TURNS = [
 
 /** `file` → selectors whose fixed cap is on an element inside a turn, and why. */
 const ALLOWED: Record<string, Record<string, string>> = {
-  QuestionCard: { ".form": "the bounded answer controls inside the full-width question turn" },
   StartProgress: { ".steps": "the stepper's columns, not the turn's text", ".bar": "the progress bar under the stepper, as wide as it" },
-  Brainstorm: { ".card": "the open proposal: a raised form inside the agent's turn, with its File footer" },
 };
 
 /** Removes `@container` and `@media` blocks: what they cap is the narrow layout. */
@@ -61,13 +59,5 @@ describe("a chat turn spans its column", () => {
   test("the guard sees a cap", () => {
     expect(declarations(outsideQueries(".main { max-width: 720px; } @container (max-width: 420px) { .a { max-width: 10px } }"), /^max-width$/))
       .toEqual([[".main", "max-width", "720px"]]);
-  });
-});
-
-describe("a question's answer controls keep a readable track", () => {
-  test("QuestionCard .form is bounded by the message measure", () => {
-    const css = outsideQueries(readFileSync(`${ROOT}/${DIR}/QuestionCard.module.css`, "utf8"));
-    expect(declarations(css, /^max-width$/).filter(([sel]) => sel === ".form").map(([, , value]) => value))
-      .toEqual(["var(--ds-measure-message)"]);
   });
 });
