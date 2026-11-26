@@ -215,6 +215,9 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 			refusal, linked = fmt.Sprintf(delivery.MChatLinkLinkedAlready, c.Key), false
 			return errLinkRefused
 		}
+		if err := delivery.LockLiveBrainstorm(ctx, tx, offer.Session); err != nil {
+			return err
+		}
 		before, err := delivery.LinkSetOf(ctx, tx, offer.Session)
 		if err != nil {
 			return err

@@ -49,7 +49,7 @@ func TestASwappedOutAgentsFailedCloneWaitsForAnUnlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The unlink as linkSession runs it: the live agent's lock, then the write.
-	if _, err := delivery.LinkSetOf(ctx, unlink, "ssn_swap"); err != nil {
+	if err := delivery.LockLiveBrainstorm(ctx, unlink, "ssn_swap"); err != nil {
 		t.Fatal(err)
 	}
 

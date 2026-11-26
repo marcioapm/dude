@@ -99,15 +99,18 @@ type LinkSet struct {
 	Repos map[string]string
 }
 
-// LinkSetOf reads the session's linked set, first locking its live
-// brainstorm Run as TellBrainstorm does. A link writer calls it before its
-// write: the syncer locks that Run before it deletes a session_repositories
-// row (a failed clone), so a writer that touched those rows first and then
-// locked the Run would deadlock with it.
+// LockLiveBrainstorm locks the session's live brainstorm Run, as
+// TellBrainstorm does. A link writer takes it before its write: the syncer
+// takes it before it deletes a session_repositories row (a failed clone),
+// so a writer that touched those rows first and then locked the Run would
+// deadlock with it.
+func LockLiveBrainstorm(ctx context.Context, tx pgx.Tx, sessionID string) error {
+	_, err := tx.Exec(ctx, `SELECT 1 FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` FOR NO KEY UPDATE`, sessionID)
+	return err
+}
+
+// LinkSetOf reads the session's linked set.
 func LinkSetOf(ctx context.Context, tx pgx.Tx, sessionID string) (LinkSet, error) {
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` FOR NO KEY UPDATE`, sessionID); err != nil {
-		return LinkSet{}, err
-	}
 	rows, err := tx.Query(ctx, `SELECT project_id FROM session_projects WHERE session_id = $1 ORDER BY project_id`, sessionID)
 	if err != nil {
 		return LinkSet{}, err

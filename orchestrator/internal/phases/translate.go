@@ -1239,8 +1239,7 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	// (ReplaceBrainstorm), and taking the live one only in TellBrainstorm,
 	// after the delete, would deadlock with that writer.
 	if t.run.brainstorm() {
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` FOR NO KEY UPDATE`,
-			t.run.SessionID); err != nil {
+		if err := delivery.LockLiveBrainstorm(ctx, tx, t.run.SessionID); err != nil {
 			return err
 		}
 	}

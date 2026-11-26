@@ -297,6 +297,9 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 // the session links now, recorded as linkSession records a link
 // (session.linked with the session's whole set).
 func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
+	if err := delivery.LockLiveBrainstorm(ctx, tx, sessionID); err != nil {
+		return err
+	}
 	before, err := delivery.LinkSetOf(ctx, tx, sessionID)
 	if err != nil {
 		return err
@@ -332,6 +335,9 @@ func (s *Server) linkSession(w http.ResponseWriter, r *http.Request, org string)
 	id := r.PathValue("id")
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		if err := lockedOwner(r.Context(), tx, id, p.Person, "link projects"); err != nil {
+			return err
+		}
+		if err := delivery.LockLiveBrainstorm(r.Context(), tx, id); err != nil {
 			return err
 		}
 		before, err := delivery.LinkSetOf(r.Context(), tx, id)
