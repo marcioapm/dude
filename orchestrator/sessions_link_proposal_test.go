@@ -64,6 +64,11 @@ func TestTheOwnerConfirmsALinkTheAgentProposed(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1 AND repository_id IN ($2, $3)`, id, s.webRepo, s.repoID); n != 2 {
 		t.Errorf("%d repositories linked, want BL's and WC's", n)
 	}
+	// The running agent is told of WC once; its checkout is the resume's to tell.
+	if notes := s.linkNotes(run); len(notes) != 1 || !strings.HasPrefix(notes[0], "A member linked WC (web-console)") ||
+		strings.Contains(notes[0], "WC/web") || strings.Contains(notes[0], "/workspace/") {
+		t.Errorf("link notes %q", notes)
+	}
 	if n := s.count(`SELECT count(*) FROM events WHERE session_id = $1 AND event_type = 'session.linked' AND actor_id = $2
 		AND jsonb_array_length(payload->'projects') = 2`, id, s.marcio); n != 1 {
 		t.Errorf("no session.linked by Márcio with the whole set")
