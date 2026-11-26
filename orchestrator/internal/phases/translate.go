@@ -1234,6 +1234,16 @@ func (t *translator) settleClone(ctx context.Context, tx pgx.Tx, s *Syncer, repo
 	// A session's: unlinked, or the next resume would try it again for good.
 	// Its project stays linked: its tasks, epics and pull requests are read
 	// without a checkout, and the rail shows it with nothing checked out.
+	// The session's live agent first, as a member's link write locks it
+	// before touching these rows: this Run may be an old one swapped out
+	// (ReplaceBrainstorm), and taking the live one only in TellBrainstorm,
+	// after the delete, would deadlock with that writer.
+	if t.run.brainstorm() {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` FOR NO KEY UPDATE`,
+			t.run.SessionID); err != nil {
+			return err
+		}
+	}
 	var key, name, linkedURL string
 	err = tx.QueryRow(ctx, `DELETE FROM session_repositories sr USING runs r, repositories repo, projects p
 		WHERE r.id = $1 AND sr.session_id = r.session_id AND repo.id = sr.repository_id AND p.id = repo.project_id
