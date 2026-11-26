@@ -205,7 +205,8 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 }
 
 func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
-	if in.Profile != SessionChildProfile || in.Capabilities.PublishCode {
+	// startChildTx refused any other profile.
+	if in.Capabilities.PublishCode {
 		return "", refuseText(rChildSessionProfile)
 	}
 	ref := in.Parent.Run
