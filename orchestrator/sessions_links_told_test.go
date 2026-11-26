@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
 // linkNotes are the texts dude queued on the Run telling it of a link.
@@ -128,6 +132,24 @@ func TestALinkNoteNeverNamesAProjectHiddenFromTheChat(t *testing.T) {
 	mustExec(t, s.owner, `INSERT INTO chat_hidden_projects (organization_id, provider, project_id) VALUES ($1, 'slack', $2)`, s.org, s.webProject)
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
 	run := s.started(id)
+	// WC stays linked, as it was before it was hidden, but loses its
+	// repository: nothing of it is told, so nothing at all.
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+		{"projectId": s.project, "repositoryIds": []string{}},
+		{"projectId": s.webProject, "repositoryIds": []string{}}}})
+	if notes := s.linkNotes(run); len(notes) != 0 {
+		t.Fatalf("a hidden project's repository removed was told: %q", notes)
+	}
+	// No writer adds a hidden project (SetSessionLinks refuses it), so the
+	// note is asked of directly with WC as added since before.
+	if err := s.app.InOrg(t0(), s.org, func(tx pgx.Tx) error {
+		return delivery.TellLinksChanged(t0(), tx, s.org, id, delivery.LinkSet{Projects: []string{s.project}, Repos: map[string]string{}})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if notes := s.linkNotes(run); len(notes) != 0 {
+		t.Fatalf("a hidden project added was told: %q", notes)
+	}
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []any{}})
 	notes := s.linkNotes(run)
 	if len(notes) != 1 || !strings.HasPrefix(notes[0], "A member unlinked BL (P)") {
