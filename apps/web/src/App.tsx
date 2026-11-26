@@ -460,7 +460,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
   // The board fills the pane edge to edge; everything else sits in it with a margin.
   let flush = false;
   let main;
-  const openSession = (id: string) => go({ view: "brainstorm", id });
+  const openSession = (id: string, proposal?: string) => go(proposal ? { view: "brainstorm", id, proposal } : { view: "brainstorm", id });
   // Reads the sessions list again as it opens one: a session just made is not in it yet.
   const openListedSession = (id: string) => {
     void loadSessions();
@@ -516,7 +516,7 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
     main = <OpenSessionsScreen client={client} org={account?.current.name ?? "the organisation"} onOpen={openSession} />;
   } else if (place?.view === "brainstorm") {
     flush = true;
-    main = <SessionScreen key={place.id} client={client} sessionId={place.id} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
+    main = <SessionScreen key={place.id} client={client} sessionId={place.id} proposal={place.proposal} projects={projects ?? []} onBack={() => go({ view: "sessions" })}
       onChanged={() => void loadSessions()} onArchived={(id, archived) => {
         // Archived, it leaves your list and sidebar at once, and you go to the list; the read after confirms it.
         if (archived) {

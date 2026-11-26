@@ -29,7 +29,8 @@ export type Place =
   // Brainstorm sessions: the list, and one (`#/sessions/<id>`; `#/session/<id>`
   // is an agent's session inside a task's Run).
   | { view: "sessions" }
-  | { view: "brainstorm"; id: string }
+  // `?proposal=<id>` opens it at that card (the link propose gives, the inbox's Review and file).
+  | { view: "brainstorm"; id: string; proposal?: string }
   // The sessions open to the whole organisation (`#/sessions/open`; session ids are `ssn_…`).
   | { view: "openSessions" }
   // dude's guide (`#/help/<page>/<section>`): the list, a page, a section of it.
@@ -97,7 +98,11 @@ export function parsePlace(full: string): Place | null {
   if (kind === "sessions" && id === "open") return { view: "openSessions" };
   if (kind === "connect" && id) return { view: "connect", provider: decodeURIComponent(id), state: new URLSearchParams(query).get("state") ?? "" };
   if (kind === "preview-connect" && !id) return { view: "previewConnect" };
-  if (kind === "sessions") return id ? { view: "brainstorm", id: decodeURIComponent(id) } : { view: "sessions" };
+  if (kind === "sessions") {
+    if (!id) return { view: "sessions" };
+    const proposal = new URLSearchParams(query).get("proposal");
+    return proposal ? { view: "brainstorm", id: decodeURIComponent(id), proposal } : { view: "brainstorm", id: decodeURIComponent(id) };
+  }
   if (kind === "help") {
     if (!id) return { view: "help" };
     return view ? { view: "help", page: decodeURIComponent(id), section: decodeURIComponent(view) } : { view: "help", page: decodeURIComponent(id) };
@@ -142,7 +147,7 @@ function bareHash(place: Place | null): string {
     case "sessions":
       return "#/sessions";
     case "brainstorm":
-      return `#/sessions/${encodeURIComponent(place.id)}`;
+      return `#/sessions/${encodeURIComponent(place.id)}${place.proposal ? `?proposal=${encodeURIComponent(place.proposal)}` : ""}`;
     case "openSessions":
       return "#/sessions/open";
     case "connect":

@@ -54,7 +54,7 @@ func TestProposeReturnsOnlyItsConfiguredSessionURL(t *testing.T) {
 				if _, present := out["sessionUrl"]; present {
 					t.Fatalf("unusable public URL returned a link: %v", out)
 				}
-			} else if want := tc.want + "/#/o/link-org/sessions/ssn_link%2Fpart%3F%23%25"; out["sessionUrl"] != want {
+			} else if want := tc.want + "/#/o/link-org/sessions/ssn_link%2Fpart%3F%23%25?proposal=" + fmt.Sprint(out["proposalId"]); out["sessionUrl"] != want {
 				t.Fatalf("sessionUrl = %v, want %s", out["sessionUrl"], want)
 			}
 			var proposalSession, proposalRun string

@@ -173,7 +173,7 @@ func TestGoldenToolResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proposal.SessionURL = "https://dude.example/#/o/acme/sessions/ssn_example"
+	proposal.SessionURL = "https://dude.example/#/o/acme/sessions/ssn_example?proposal=prp_example"
 	withURL, err := json.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)

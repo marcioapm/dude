@@ -1878,6 +1878,11 @@ describe("a session's URL", () => {
     expect(formatPlace({ view: "sessions" })).toBe("#/sessions");
     expect(parsePlace("#/session/ses_1")).toEqual({ view: "tree", ref: { kind: "session", id: "ses_1" } });
   });
+
+  test("a session at one of its cards: ?proposal= reads back, as the propose tool's link writes it", () => {
+    expect(parsePlace("#/o/acme/sessions/ssn_1?proposal=prp_9")).toEqual({ view: "brainstorm", id: "ssn_1", proposal: "prp_9" });
+    expect(formatPlace({ view: "brainstorm", id: "ssn_1", proposal: "prp_9" })).toBe("#/sessions/ssn_1?proposal=prp_9");
+  });
 });
 
 describe("a session's agent starting", () => {
@@ -2485,5 +2490,80 @@ describe("proposals in Waiting on you", () => {
     await settle();
     expect(page.querySelector("[data-testid=session-proposal]")).toBeNull();
     expect(page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)).toBeNull();
+  });
+});
+
+describe("a session opened at its card", () => {
+  /** Lays the transcript out: the card 1200px down a 5000px log; records where it scrolls. */
+  async function laidOut(run: (tops: number[]) => Promise<void>) {
+    const tops: number[] = [];
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      return { top: this.matches("[data-proposal=prp_1]") ? 1200 : 0, bottom: 0 } as DOMRect;
+    };
+    HTMLElement.prototype.scrollTo = function (this: HTMLElement, o?: ScrollToOptions | number) {
+      if (typeof o === "object" && this.getAttribute("role") === "log") tops.push(o.top ?? 0);
+    } as typeof HTMLElement.prototype.scrollTo;
+    Object.defineProperty(Element.prototype, "scrollHeight", { configurable: true, get: () => 5000 });
+    // A browser lays the log out once it mounts, and the transcript follows (or holds) as it does.
+    const observer = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe() {
+        queueMicrotask(() => this.callback([], this as unknown as ResizeObserver));
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      await run(tops);
+    } finally {
+      globalThis.ResizeObserver = observer;
+      HTMLElement.prototype.getBoundingClientRect = rect;
+      HTMLElement.prototype.scrollTo = scrollTo;
+      if (height) Object.defineProperty(Element.prototype, "scrollHeight", height);
+      else delete (Element.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  }
+  const card = (status: ProposalItemStatus) => ({ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task" as const, project: "BL", title: "A", goal: "g" }], status: [status] });
+  const later = { id: "prp_2", runId: RUN, createdAt: at(50), items: [{ kind: "task" as const, project: "BL", title: "B", goal: "g" }], status: [{ filed: true, filedBy: "Ana Nunes", key: "BL-70" }] };
+
+  async function open(d: SessionDetail, proposal?: string) {
+    const client = new SessionClient(d);
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <SessionScreen client={client} sessionId={SESSION} proposal={proposal} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-proposal=prp_1]"), "the card");
+    await settle();
+    return container;
+  }
+
+  test("?proposal= scrolls to the card and holds it, though nothing on it is yours to file", async () => {
+    await laidOut(async (tops) => {
+      await open(detail("read", { proposals: [card({ canFile: false, blockedBy: "reader", why: "readers can't file" }), later] }), "prp_1");
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 1188)).toBe(true);
+    });
+  });
+
+  test("without it, the card waiting on you is held in view on opening; with nothing waiting, the log follows its end", async () => {
+    await laidOut(async (tops) => {
+      await open(detail("owner", { proposals: [card({ canFile: true })] }));
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 1188)).toBe(true);
+    });
+    for (const unmount of mounted.splice(0)) await unmount();
+    await laidOut(async (tops) => {
+      await open(detail("read", { proposals: [card({ canFile: false, blockedBy: "reader", why: "readers can't file" }), later] }));
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 5000)).toBe(true);
+    });
   });
 });

@@ -477,8 +477,11 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   replaced card) there is no band and the card folds as before. The
   session header says "Needs you · file 2 tasks" while it waits; a waiting
   question takes the header's word (it blocks the agent), and the card
-  keeps its band. The app holds the waiting card in view on opening, as
-  the waiting question is, when no question waits.
+  keeps its band. The app holds the waiting card in view on opening
+  (`ChatTranscript keepInView`, as the waiting question is) when no
+  question waits; a link to a card (`?proposal=<id>`, what `propose`
+  returns as `sessionUrl` and what Review and file opens) holds that card,
+  waiting or not.
   It counts in Waiting on you as a question does: a `WaitingRow mine`
   with the brainstorm's face, "Brainstorm proposed 2 tasks for you to
   file", the session's title, and **Review and file**, which opens the

@@ -73,9 +73,11 @@ export function withOpen(detail: SessionDetail, personId: string, open: boolean)
   return { ...detail, session: { ...detail.session, people: people.map((m) => (m.person.id === personId ? { ...m, open } : m)) } };
 }
 
-export function SessionScreen({ client, sessionId, projects, onBack, onChanged, onArchived }: {
+export function SessionScreen({ client, sessionId, proposal: asked, projects, onBack, onChanged, onArchived }: {
   client: ApiClient;
   sessionId: string;
+  /** Opened at this proposal's card (`?proposal=`): it is scrolled to and held in view. */
+  proposal?: string | undefined;
   projects: readonly NavProject[];
   onBack: () => void;
   /** Its people or title changed for you (handed over, left): the sidebar's list re-reads. */
@@ -341,6 +343,8 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
   const waiting = reader ? null : waitingCard(detail.proposals ?? []);
+  // The card asked for (a link, Review and file) is held in view, else the one waiting on you; a question waiting on you comes first.
+  const held = asked && detail.proposals?.some((p) => p.id === asked) ? asked : waiting?.id ?? null;
   const shared = session.people.filter((m) => m.accepted).length > 1;
   const access = session.access ?? "private";
   const everyone = access === "organisation";
@@ -404,7 +408,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           <div className="runChat">
             <ChatTranscript
               fill
-              keepInView={yours ? questionTurnSelector(yours.id) : undefined}
+              keepInView={yours ? questionTurnSelector(yours.id) : held ? proposalSelector(held) : undefined}
               live={live}
               revision={events.length + (detail.proposals?.length ?? 0)}
               turns={conversation.turns.length}
@@ -675,6 +679,9 @@ function tierName(tier: unknown): string | null {
   const name = tier && typeof tier === "object" ? (tier as { name?: unknown }).name : null;
   return typeof name === "string" ? name : null;
 }
+
+/** A proposal's card in the transcript, as ChatTranscript keepInView names it. */
+export const proposalSelector = (id: string) => `[data-proposal="${CSS.escape(id)}"]`;
 
 /**
  * The card waiting on the person looking, if any: the latest with items
