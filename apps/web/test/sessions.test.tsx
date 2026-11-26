@@ -2387,3 +2387,59 @@ describe("a card a later proposal replaced", () => {
     expect(page.querySelectorAll("[data-testid=file-proposal]").length).toBe(1);
   });
 });
+
+describe("proposed work waiting on you", () => {
+  const task = (title: string) => ({ kind: "task" as const, project: "BL", title, goal: "g" });
+  const edit = { kind: "edit" as const, task: "BL-58", after: { goal: "new" } };
+  const card = (items: ProposalItemStatus[], kinds: Array<"task" | "edit"> = items.map(() => "task")) => ({
+    id: "prp_1", runId: RUN, createdAt: at(30), items: kinds.map((k, i) => (k === "edit" ? edit : task(`T${i}`))), status: items,
+  });
+  const band = (page: HTMLElement) => page.querySelector("[data-testid=proposal-waiting]");
+  const mark = (page: HTMLElement) => page.querySelector("[data-testid=proposal-waiting-mark]")?.textContent ?? null;
+  const header = (page: HTMLElement) => page.querySelector("[data-testid=header-needs-you]")?.textContent ?? null;
+
+  test("two tasks to file: the band around the card says so, and the header says Needs you", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }])] })));
+    await until(() => band(page), "the band");
+    expect(band(page)!.querySelector("[data-testid=proposal-card]")).toBeTruthy();
+    expect(mark(page)).toBe("Waiting for you to file 2 tasks");
+    expect(header(page)).toBe("Needs you · file 2 tasks");
+  });
+
+  test("one task left, one filed: 1 task; a task and an edit: 1 task, 1 edit", async () => {
+    const one = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [card([{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }, { canFile: true }])] })));
+    await until(() => band(one), "the band");
+    expect(mark(one)).toBe("Waiting for you to file 1 task");
+    expect(header(one)).toBe("Needs you · file 1 task");
+    for (const unmount of mounted.splice(0)) await unmount();
+    const mixed = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }], ["task", "edit"])] })));
+    await until(() => band(mixed), "the band");
+    expect(mark(mixed)).toBe("Waiting for you to file 1 task, 1 edit");
+    expect(header(mixed)).toBe("Needs you · file 1 task, 1 edit");
+  });
+
+  test("no band and no header chip when all is filed, when what is left is someone else's, or for a reader", async () => {
+    const cases: SessionDetail[] = [
+      detail("owner", { proposals: [card([{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }])] }),
+      detail("chat", { proposals: [card([{ filed: true, filedBy: "Ana Nunes", key: "BL-61" },
+        { canFile: false, blockedBy: "owner", owner: ref(ANA), why: "Only Ana can file this: it's their task" }], ["task", "edit"])] }),
+      detail("read", { proposals: [card([{ canFile: false, blockedBy: "reader", why: "readers can't file" }])] }),
+    ];
+    for (const d of cases) {
+      const page = await sessionPage(new SessionClient(d));
+      await until(() => page.querySelector("[data-testid=proposal-fold]"), "the folded line");
+      expect(band(page)).toBeNull();
+      expect(header(page)).toBeNull();
+      for (const unmount of mounted.splice(0)) await unmount();
+    }
+  });
+
+  test("a question waiting on you wins the header; the card keeps its band", async () => {
+    const asked = { id: "q_1", prompt: "Grow the window?", options: ["Yes", "No"], askedAt: at(40), to: null, yours: true };
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }])], question: asked })));
+    await until(() => band(page), "the band");
+    expect(header(page)).toBe("Needs you · answer the question");
+    expect(mark(page)).toBe("Waiting for you to file 1 task");
+  });
+});

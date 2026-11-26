@@ -8,6 +8,29 @@
   font-size: var(--ds-text-sm);
 }
 
+/*
+ * A card with items the person looking can file: QuestionCard's waiting
+ * highlight (attention wash, 2px attention bar inset at the left edge),
+ * square as structure is. The card sits in it unchanged.
+ */
+.waiting {
+  background: color-mix(in srgb, var(--ds-tone-attention-solid) var(--ds-tint-highlight), transparent);
+  box-shadow: inset 2px 0 0 var(--ds-tone-attention-solid);
+  padding: var(--ds-space-highlight-y) var(--ds-space-chat-pad-x);
+  margin-top: var(--ds-space-8);
+  scroll-margin-top: var(--ds-space-32);
+}
+.waitingHead {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-8);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.waiting > .card {
+  margin-top: var(--ds-space-6);
+}
+
 /* The proposal card: a raised surface inside the agent's turn, as wide as the turn's text. */
 .card {
   display: flex;

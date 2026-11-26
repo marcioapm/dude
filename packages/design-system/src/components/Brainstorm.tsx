@@ -264,6 +264,38 @@ export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: b
   return [`all filed: ${shown.join(", ")}`, ...(who ? [`by ${who}`] : [])];
 }
 
+/** "2 tasks, 1 edit": what the person looking has to file on the card, by kind. */
+export function toFileWords(items: ReadonlyArray<Pick<ProposalCardItem, "kind" | "canFile" | "filed" | "replaced">>, readOnly?: boolean): string {
+  return proposalSummary(yoursToFile(items as ReadonlyArray<ProposalCardItem>, readOnly).map((i) => i.kind));
+}
+
+export interface ProposalWaitingProps extends HTMLAttributes<HTMLElement> {
+  /** What waits on the person looking: "2 tasks", "1 task, 1 edit" (`toFileWords`). */
+  readonly toFile: string;
+  /** The card. */
+  readonly children: ReactNode;
+}
+
+/**
+ * A card with items the person looking can file, drawn as the waiting
+ * question is: QuestionCard's highlight (the attention wash across the
+ * transcript and the 2px attention bar at its left edge, square), with
+ * "Waiting for you to file 2 tasks" above the card. The app draws it only
+ * while `yoursToFile` has items; otherwise the card stands alone and folds
+ * as it does.
+ */
+export function ProposalWaiting({ toFile, className, children, ...rest }: ProposalWaitingProps) {
+  return (
+    <section className={cx(styles["waiting"], className)} aria-label={`Proposed work waiting for you to file: ${toFile}`}
+      data-testid="proposal-waiting" {...rest}>
+      <div className={styles["waitingHead"]}>
+        <StatusMark status="awaiting_input" size="sm" label={`Waiting for you to file ${toFile}`} data-testid="proposal-waiting-mark" />
+      </div>
+      {children}
+    </section>
+  );
+}
+
 /**
  * What the session's agent proposes, for a member to file with a click.
  * Each item says where it goes; an edit shows its text before and after.

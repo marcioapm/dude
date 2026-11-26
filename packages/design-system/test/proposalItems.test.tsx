@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { ProposalCard, foldedWords, nothingLeftToFile, yoursToFile, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
+import { ProposalCard, ProposalWaiting, foldedWords, nothingLeftToFile, toFileWords, yoursToFile, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
@@ -126,5 +126,27 @@ describe("ProposalCard replaced by a later proposal", () => {
     expect(foldedWords([done, replaced("a")])).toEqual(["1 filed", "1 replaced by a later proposal"]);
     expect(foldedWords([done, replaced("a"), { kind: "edit", title: "e", canFile: false, blockedFor: "you" }]))
       .toEqual(["1 filed", "1 for others to file", "1 replaced by a later proposal"]);
+  });
+});
+
+describe("ProposalWaiting", () => {
+  const mine: ProposalCardItem = { kind: "task", title: "a", project, canFile: true };
+  const theirs: ProposalCardItem = { kind: "edit", title: "Edit AN-1", taskKey: "AN-1", canFile: false, blockedFor: "you", why: "Only Márcio can file this" };
+  const done: ProposalCardItem = { ...mine, filed: { by: "Ana", key: "AN-123" } };
+
+  test("what waits on the person looking: their unfiled items, none for a reader or what is someone else's", () => {
+    expect(toFileWords([mine, mine])).toBe("2 tasks");
+    expect(toFileWords([mine, { ...theirs, canFile: true }])).toBe("1 task, 1 edit");
+    expect(toFileWords([done, mine])).toBe("1 task");
+    expect(toFileWords([done, theirs])).toBe("");
+    expect(toFileWords([mine], true)).toBe("");
+  });
+
+  test("the band: the waiting mark's words above the card, which sits in it unchanged", async () => {
+    const el = await mount(<ProposalWaiting toFile="2 tasks"><Card items={[mine, mine]} /></ProposalWaiting>);
+    const band = el.querySelector('[data-testid="proposal-waiting"]')!;
+    expect(band.getAttribute("aria-label")).toBe("Proposed work waiting for you to file: 2 tasks");
+    expect(band.querySelector('[data-testid="proposal-waiting-mark"]')!.textContent).toBe("Waiting for you to file 2 tasks");
+    expect(band.querySelector('[data-testid="proposal-card"]')).toBeTruthy();
   });
 });

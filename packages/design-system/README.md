@@ -66,7 +66,9 @@ audit tools behind all of these, reached when something looks off.
 5. **`awaiting_input` is the only loud thing.** It is the single state where
    the system is blocked on a person. It alone defaults to a solid fill with a
    slow expanding ring. Nothing else may be promoted to solid; if it were, the
-   signal would be gone.
+   signal would be gone. Work proposed for you to file is such a state — it
+   reaches nobody's board until you file it — so it wears `awaiting_input`
+   and the waiting question's highlight, never a tone of its own.
 6. **Live means alive, not busy.** Running states breathe at 2.4s. Nothing
    spins except the running spinner; nothing flashes except a new row, once.
    Reduced motion turns "live" into "still", never into "invisible".
@@ -458,9 +460,25 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   In the live gallery, Show held question opens an ask with later notices;
   Add later turn demonstrates the hold, manual scrolling releases it, and
   Next question selects a new ask.
-- The question itself is a turn: `QuestionCard`. While it waits it is the
-  one loud turn a transcript is allowed, and it is loud once: the attention
-  wash and 2px bar. In grayscale it is still the only barred, tinted turn.
+- The question itself is a turn: `QuestionCard`. While it waits it is one
+  of the two loud turns a transcript is allowed, and it is loud once: the
+  attention wash and 2px bar. In grayscale it and a card waiting to be
+  filed are the only barred, tinted turns.
+- **The other loud turn is a proposal waiting to be filed.** A brainstorm's
+  card with items the person looking can file (`canFile`, not filed, not
+  replaced, and they are not a reader) blocks the work as a question
+  blocks the agent: nothing reaches the board until they file it, and
+  nobody else is told. So `ProposalWaiting` draws it with the question's
+  own pattern — the attention wash across the transcript's width and the
+  2px attention bar inset at the left edge, square — with a
+  `StatusMark awaiting_input` "Waiting for you to file 2 tasks" above the
+  card (the words are `toFileWords`, so "1 task, 1 edit"). With nothing
+  of theirs to file (all filed, the rest someone else's, a reader, a
+  replaced card) there is no band and the card folds as before. The
+  session header says "Needs you · file 2 tasks" while it waits; a waiting
+  question takes the header's word (it blocks the agent), and the card
+  keeps its band. The app holds the waiting card in view on opening, as
+  the waiting question is, when no question waits.
   With `onSubmit` the turn **is the answer form**, laid on the turn's own
   grid — no card, no box:
   - **One question** (`text` + `options`, or one `items` entry): no tabs.

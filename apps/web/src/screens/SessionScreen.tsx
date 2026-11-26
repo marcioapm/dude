@@ -14,8 +14,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation,
+  AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, ProposalWaiting, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, StatusMark, ToolUsage, proposalSummary, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation, toFileWords,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type AttachmentInfo, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
@@ -340,6 +340,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
+  const waiting = reader ? null : waitingCard(detail.proposals ?? []);
   const shared = session.people.filter((m) => m.accepted).length > 1;
   const access = session.access ?? "private";
   const everyone = access === "organisation";
@@ -373,6 +374,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {session.origin ? <OriginLine origin={session.origin} compact testId="session-origin-fact" /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
           {headerStart ? <StartHeaderChip start={headerStart} /> : null}
+          {/* A question waiting on you blocks the agent: its state is the header's; the card keeps its band. */}
+          {yours ? <StatusMark status="awaiting_input" size="sm" label="Needs you · answer the question" data-testid="header-needs-you" />
+            : waiting ? <StatusMark status="awaiting_input" size="sm" label={`Needs you · file ${waiting.words}`} data-testid="header-needs-you" /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
@@ -672,6 +676,22 @@ function tierName(tier: unknown): string | null {
   return typeof name === "string" ? name : null;
 }
 
+/**
+ * The card waiting on the person looking, if any: the latest with items
+ * the API says they can file (a reader's card files nothing), with what
+ * they are in words ("2 tasks", "1 task, 1 edit").
+ */
+export function waitingCard(proposals: ReadonlyArray<Proposal>): { id: string; words: string } | null {
+  for (const p of [...proposals].reverse()) {
+    const kinds = p.items.flatMap((item, i) => {
+      const st = p.status[i];
+      return st?.canFile && !st.filed && st.blockedBy !== "replaced" ? [item.kind] : [];
+    });
+    if (kinds.length > 0) return { id: p.id, words: proposalSummary(kinds) };
+  }
+  return null;
+}
+
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
 function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly, filingAs, you, images, onOpenImage, onFiled }: {
   client: ApiClient;
@@ -719,19 +739,23 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
       setBusy(false);
     }
   };
+  const card = (
+    <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()} order={order}
+      onToggle={(i) => setSelected((s) => {
+        const n = new Set(s);
+        if (n.has(i)) n.delete(i);
+        else {
+          // What it waits on is filed with it: ticked too.
+          n.add(i);
+          for (const b of proposal.status[i]?.filesWith ?? []) n.add(b);
+        }
+        return n;
+      })} />
+  );
+  const toFile = toFileWords(items, readOnly);
   return (
     <div data-testid="proposal" data-proposal={proposal.id}>
-      <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()} order={order}
-        onToggle={(i) => setSelected((s) => {
-          const n = new Set(s);
-          if (n.has(i)) n.delete(i);
-          else {
-            // What it waits on is filed with it: ticked too.
-            n.add(i);
-            for (const b of proposal.status[i]?.filesWith ?? []) n.add(b);
-          }
-          return n;
-        })} />
+      {toFile ? <ProposalWaiting toFile={toFile}>{card}</ProposalWaiting> : card}
       {/* Filed as you, you own what it files: warned now if its pull requests would wait on your GitHub. */}
       {!readOnly && fileable.length > 0 ? <OwnerGithubWarning client={client} owner={people.byId.get(you) ?? null} people={people} /> : null}
       {problem ? <Callout tone="danger" data-testid="proposal-problem">{problem}</Callout> : null}
