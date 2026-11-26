@@ -44,11 +44,7 @@ type model struct {
 }
 
 // refuseNext makes the next call answer status with body, as a proxy refusing it.
-func (m *model) refuseNext(status int, body string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.refuseStatus, m.refuseBody = status, body
-}
+func (m *model) refuseNext(status int, body string) { m.refuseNextAfter(status, "", body) }
 
 // refuseNextAfter is refuseNext with a Retry-After header.
 func (m *model) refuseNextAfter(status int, retryAfter, body string) {
