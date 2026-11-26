@@ -375,7 +375,7 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 	}
 	// The agent's briefing quotes the thread, the non-member marked.
 	if b := w.one(`SELECT prompt FROM runs WHERE session_id = $1`, session); !strings.Contains(b, "Zed Outside (not in dude): CSV export") ||
-		!strings.Contains(b, "Márcia: Earlier in the thread") {
+		!strings.Contains(b, "## The first message\n\nMárcia (in the Slack thread): Earlier in the thread") {
 		t.Fatalf("briefing %s", b)
 	}
 	// The model was told the thread and the projects, on the Judgements tier, and it was recorded as a judgement.
@@ -415,7 +415,8 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 		t.Fatal("Eli did not join the organisation session")
 	}
 	if d := w.one(`SELECT text FROM directives WHERE run_id = (SELECT id FROM runs WHERE session_id = $1) ORDER BY created_at DESC LIMIT 1`,
-		session); !strings.Contains(d, "Zed Outside (not in dude): it also fails for 20") || !strings.Contains(d, "here's another case") {
+		session); !strings.Contains(d, "Zed Outside (not in dude): it also fails for 20") ||
+		!strings.HasPrefix(d, "Eli (in the Slack thread): ") || !strings.Contains(d, "here's another case") {
 		t.Fatalf("directive %s", d)
 	}
 	if !strings.Contains(lastBot(t, w.fake).Text, "Added to your session “CSV export timeout”") {

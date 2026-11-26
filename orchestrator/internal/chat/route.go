@@ -756,7 +756,7 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		}
 		r.Route, r.Reasoning, r.ResultKind, r.ResultID = RouteResume, "the thread is bound to this session", "session", b.Session
 		r.Confidence = nil
-		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m, r.ConversationName); err != nil {
+		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m, r.ConversationName, p.Info().Name); err != nil {
 			return err
 		}
 		r.effects = []effect{replyEffect(Reply{Text: "Added to your session " + quoteTitle(title),
@@ -869,8 +869,12 @@ func writerFrom(who asker, m Mention, conversationName string) delivery.Writer {
 // quoted before it, written into the session as theirs: queued for its
 // live agent, or starting one. They join an organisation session by
 // writing. The caller holds the session's lock.
-func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted string, m Mention, conversationName string) error {
+func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted string, m Mention, conversationName, chatName string) error {
 	if err := delivery.JoinByWriting(ctx, tx, delivery.SessionRef(org, session), who.Person, "person", who.Person); err != nil {
+		return err
+	}
+	said, err := delivery.SaidIn(ctx, tx, session, who.Name, chatName)
+	if err != nil {
 		return err
 	}
 	full := text
@@ -879,17 +883,17 @@ func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who aske
 	}
 	wr := writerFrom(who, m, conversationName)
 	var runID string
-	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` AND NOT `+delivery.Ending+`
+	err = tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` AND NOT `+delivery.Ending+`
 		FOR NO KEY UPDATE`, session).Scan(&runID)
 	if db.IsNotFound(err) {
-		_, _, err = delivery.StartBrainstorm(ctx, tx, org, session, wr, delivery.Opening{Message: delivery.Attributed(who.Name, full), Shown: text})
+		_, _, err = delivery.StartBrainstorm(ctx, tx, org, session, wr, delivery.Opening{Message: delivery.Attributed(said, full), Shown: text})
 		return err
 	}
 	if err != nil {
 		return err
 	}
 	ref := delivery.RunRef{Org: org, SessionID: session, RunID: runID}
-	directive, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: delivery.Attributed(who.Name, full), Scope: "run"})
+	directive, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: delivery.Attributed(said, full), Scope: "run"})
 	if err != nil {
 		return err
 	}

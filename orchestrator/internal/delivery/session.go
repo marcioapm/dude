@@ -143,6 +143,24 @@ func Attributed(name, text string) string {
 	return name + ": " + text
 }
 
+// SaidIn is name as Attributed takes it in a session started from a chat
+// thread, labelled with where the message was typed: "(in dude)" for
+// chatName "", else "(in the <chatName> thread)". A session with no chat
+// origin has nothing to tell apart: name as it is.
+func SaidIn(ctx context.Context, tx pgx.Tx, sessionID, name, chatName string) (string, error) {
+	provider, err := originProvider(ctx, tx, sessionID, "")
+	if err != nil || provider == "" {
+		return name, err
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Someone"
+	}
+	if chatName == "" {
+		return name + " (in dude)", nil
+	}
+	return name + " (in the " + chatName + " thread)", nil
+}
+
 // PersonName is a person's name, or "" for none.
 func PersonName(ctx context.Context, tx pgx.Tx, personID string) (string, error) {
 	if personID == "" {

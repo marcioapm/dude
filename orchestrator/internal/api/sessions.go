@@ -1329,7 +1329,8 @@ func relatedOf(ctx context.Context, tx pgx.Tx, taskID string) (delivery.RelatedT
 }
 
 // sessionChat is a member writing to the session's agent. The agent is
-// told who wrote it (delivery.Attributed). With no live agent the message
+// told who wrote it (delivery.Attributed), and in a session from chat that
+// it was typed in dude (delivery.SaidIn). With no live agent the message
 // starts one, briefed; with one, it is its next input, delivered at its
 // next step (a directive), resuming it if parked. While the agent waits on
 // a question, the person it is for answers it with their message; anyone
@@ -1395,6 +1396,11 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if err != nil {
 			return err
 		}
+		// Typed here, not in the chat thread the session may have come from.
+		said, err := delivery.SaidIn(r.Context(), tx, id, name, "")
+		if err != nil {
+			return err
+		}
 		var runID string
 		var ending bool
 		find := func() error {
@@ -1411,7 +1417,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if db.IsNotFound(err) {
 			created = true
-			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text, body.AttachmentIDs)
+			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, said, body.Text, body.AttachmentIDs)
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -1459,11 +1465,11 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if swap != nil {
 			created = true
-			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(name, body.Text, body.AttachmentIDs))
+			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(said, body.Text, body.AttachmentIDs))
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
-		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
+		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(said, body.Text), Scope: "run"})
 		if err != nil {
 			return err
 		}

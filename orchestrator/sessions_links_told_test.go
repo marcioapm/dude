@@ -154,3 +154,29 @@ func TestALinkWithNoLiveAgentQueuesNothing(t *testing.T) {
 		t.Errorf("a link started an agent")
 	}
 }
+
+// In a session started from a chat thread, a message typed in dude says
+// so, as a thread's says it came from the thread; in one started in dude
+// there is nothing to tell apart: "Name: words".
+func TestAMessageTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, id)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "I already linked it"})
+	run := s.started(id)
+	if p := s.one(`SELECT prompt FROM runs WHERE id = $1`, run); !strings.Contains(p, "## The first message\n\nMárcio Martins (in dude): I already linked it") {
+		t.Errorf("the briefing's message:\n%s", p)
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look again"})
+	if d := s.one(`SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, run); d != "Márcio Martins (in dude): look again" {
+		t.Errorf("directive %q", d)
+	}
+
+	plain := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+plain+"/chat", map[string]any{"text": "hello"})
+	other := s.started(plain)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+plain+"/chat", map[string]any{"text": "again"})
+	if d := s.one(`SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, other); d != "Márcio Martins: again" {
+		t.Errorf("directive with no chat origin %q", d)
+	}
+}
