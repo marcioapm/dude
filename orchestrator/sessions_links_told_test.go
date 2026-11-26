@@ -27,14 +27,20 @@ func (s *sessionWorld) linkNotes(run string) []string {
 	return out
 }
 
+// talking is a new session whose agent was started by a member's message.
+func (s *sessionWorld) talking() (id, run string) {
+	s.t.Helper()
+	id = s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
+	return id, s.started(id)
+}
+
 // A project linked with no repository to a session whose agent is live is
 // told to it as its next input, without parking it: its tools read the
 // project, and a member ticks repositories to check one out.
 func TestAProjectLinkedWithNoRepositoryIsToldToTheLiveAgent(t *testing.T) {
 	s := newSessionWorld(t)
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
-	run := s.started(id)
+	id, run := s.talking()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
 		{"projectId": s.webProject, "repositoryIds": []string{}}}})
@@ -76,9 +82,7 @@ func TestAProjectLinkedWithNoRepositoryIsToldToTheLiveAgent(t *testing.T) {
 // Unlinking is told: a repository whose project stays, then the project.
 func TestAnUnlinkIsToldToTheLiveAgent(t *testing.T) {
 	s := newSessionWorld(t)
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
-	run := s.started(id)
+	id, run := s.talking()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{}}}})
 	notes := s.linkNotes(run)
@@ -98,9 +102,7 @@ func TestAnUnlinkIsToldToTheLiveAgent(t *testing.T) {
 // checkout is told once, by the resume that clones it.
 func TestAProjectLinkedWithARepositoryIsNotAnnouncedTwice(t *testing.T) {
 	s := newSessionWorld(t)
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
-	run := s.started(id)
+	id, run := s.talking()
 	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
 		{"projectId": s.project, "repositoryIds": []string{s.repoID}},
 		{"projectId": s.webProject, "repositoryIds": []string{s.webRepo}}}})
@@ -210,9 +212,7 @@ func TestAMessageTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
 // behind the other instead of deadlocking (40P01).
 func TestAnUnlinkWaitsForTheSyncerSettlingAFailedClone(t *testing.T) {
 	s := newSessionWorld(t)
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
-	run := s.started(id)
+	id, run := s.talking()
 
 	syncer := s.openTx()
 	if _, err := syncer.Exec(t0(), `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, run); err != nil {
@@ -304,9 +304,7 @@ func TestAnAnswerTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
 // told nothing: nothing more is queued for one.
 func TestNothingIsToldToAnEndingAgent(t *testing.T) {
 	s := newSessionWorld(t)
-	id := s.session()
-	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
-	run := s.started(id)
+	id, run := s.talking()
 	queued := func(state string) int {
 		tx, err := s.owner.Begin(t0())
 		if err != nil {
