@@ -155,8 +155,8 @@ func TellLinksChanged(ctx context.Context, tx pgx.Tx, org, sessionID string, bef
 		return err
 	}
 	type project struct {
-		ID, Key, Name string
-		Repos         bool
+		Key, Name string
+		Repos     bool
 	}
 	type repo struct{ Key, Name string }
 	var data struct {
@@ -174,9 +174,11 @@ func TellLinksChanged(ctx context.Context, tx pgx.Tx, org, sessionID string, bef
 			ids = append(ids, p)
 		}
 	}
+	// A repository is linked only under its linked project, so one in
+	// before had its project in before.
 	var repoIDs []string
 	for r, p := range before.Repos {
-		if _, kept := after.Repos[r]; !kept && slices.Contains(after.Projects, p) && slices.Contains(before.Projects, p) && !fence.Hides(p) {
+		if _, kept := after.Repos[r]; !kept && slices.Contains(after.Projects, p) && !fence.Hides(p) {
 			repoIDs = append(repoIDs, r)
 		}
 	}
@@ -191,15 +193,15 @@ func TellLinksChanged(ctx context.Context, tx pgx.Tx, org, sessionID string, bef
 	if err != nil {
 		return err
 	}
+	withRepos := map[string]bool{}
+	for _, p := range after.Repos {
+		withRepos[p] = true
+	}
 	for _, n := range named {
 		if slices.Contains(after.Projects, n.ID) {
-			withRepos := false
-			for _, p := range after.Repos {
-				withRepos = withRepos || p == n.ID
-			}
-			data.Added = append(data.Added, project{n.ID, n.Key, n.Name, withRepos})
+			data.Added = append(data.Added, project{n.Key, n.Name, withRepos[n.ID]})
 		} else {
-			data.Removed = append(data.Removed, project{n.ID, n.Key, n.Name, false})
+			data.Removed = append(data.Removed, project{Key: n.Key, Name: n.Name})
 		}
 	}
 	rows, err = tx.Query(ctx, `SELECT p.key_prefix, r.name FROM repositories r JOIN projects p ON p.id = r.project_id
