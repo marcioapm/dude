@@ -106,8 +106,36 @@ type githubRunJobsIn struct {
 const runJobsMax = 100
 
 type githubBranchRunsIn struct {
-	Repo   string `json:"repo,omitempty"`
-	Branch string `json:"branch,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Workflow string `json:"workflow,omitempty"`
+	Event    string `json:"event,omitempty"`
+}
+
+// A github_branch_runs workflow is one workflow file's bare name or a
+// positive id, so it is one path segment; an event is GitHub's event name.
+var (
+	workflowFile = regexp.MustCompile(`^[A-Za-z0-9_.-]+\.ya?ml$`)
+	workflowID   = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	actionsEvent = regexp.MustCompile(`^[a-z_]+$`)
+)
+
+const (
+	workflowMax = 255
+	eventMax    = 64
+)
+
+// branchRunsFilter is in's workflow and event, trimmed, or a refusal.
+func branchRunsFilter(in githubBranchRunsIn) (forge.RunsFilter, error) {
+	f := forge.RunsFilter{Workflow: strings.TrimSpace(in.Workflow), Event: strings.TrimSpace(in.Event)}
+	if w := f.Workflow; w != "" && (len(w) > workflowMax || strings.Contains(w, "..") ||
+		!workflowFile.MatchString(w) && !workflowID.MatchString(w)) {
+		return f, refuse(rBranchRunsWorkflow, workflowMax)
+	}
+	if e := f.Event; e != "" && (len(e) > eventMax || !actionsEvent.MatchString(e)) {
+		return f, refuse(rBranchRunsEvent, eventMax)
+	}
+	return f, nil
 }
 
 // One github_branch_runs read lists a branch's latest branchRunsMax runs,
@@ -125,7 +153,9 @@ var actionsRunURL = regexp.MustCompile(`^https?://github\.com/([A-Za-z0-9_.-]+/[
 type githubRead struct {
 	Tool, Slug string
 	// The branch github_branch_runs reads; "" for the repository's default.
-	Branch  string
+	Branch string
+	// What github_branch_runs narrows its runs to; empty for every run.
+	Runs    forge.RunsFilter
 	Number  int
 	CheckID int64
 	Query   string
@@ -375,6 +405,10 @@ func readGitHubBranchRuns(ctx context.Context, tx pgx.Tx, c Caller, in githubBra
 	if len(branch) > 255 {
 		return githubRead{}, refuseText(rBranchAtMost255Characters)
 	}
+	filter, err := branchRunsFilter(in)
+	if err != nil {
+		return githubRead{}, err
+	}
 	if repo == "" {
 		slugs, err := readableRepos(ctx, tx, c)
 		if err != nil {
@@ -384,7 +418,7 @@ func readGitHubBranchRuns(ctx context.Context, tx pgx.Tx, c Caller, in githubBra
 			repo = slugs[0]
 		}
 	}
-	read, err := checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_branch_runs", Slug: repo, Branch: branch})
+	read, err := checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_branch_runs", Slug: repo, Branch: branch, Runs: filter})
 	if err != nil || branch != "" {
 		return read, err
 	}
@@ -460,7 +494,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 			}
 			read.Branch = branch
 		}
-		runs, err := gh.BranchRuns(ctx, read.Slug, read.Branch, branchRunsMax, branchJobsMax)
+		runs, err := gh.BranchRuns(ctx, read.Slug, read.Branch, read.Runs, branchRunsMax, branchJobsMax)
 		if err != nil {
 			return nil, githubRefusal(read, err)
 		}
@@ -588,6 +622,12 @@ func readPayload(read githubRead) map[string]any {
 	}
 	if read.Branch != "" {
 		payload["branch"] = read.Branch
+	}
+	if read.Runs.Workflow != "" {
+		payload["workflow"] = read.Runs.Workflow
+	}
+	if read.Runs.Event != "" {
+		payload["event"] = read.Runs.Event
 	}
 	if read.Tool == "github_search" {
 		payload["query"], payload["kind"] = read.Query, read.Kind
@@ -897,8 +937,16 @@ func (w wrapper) branchRuns(read githubRead, runs []forge.BranchRun) map[string]
 		}
 		out = append(out, run)
 	}
-	return map[string]any{"repo": read.Slug, "branch": w.text(read.Branch, 300), "runs": out,
+	res := map[string]any{"repo": read.Slug, "branch": w.text(read.Branch, 300), "runs": out,
 		"next": githubText("branch-runs-next", nil), "external": w.note()}
+	// Validated (branchRunsFilter): dude's words, not GitHub's.
+	if read.Runs.Workflow != "" {
+		res["workflow"] = read.Runs.Workflow
+	}
+	if read.Runs.Event != "" {
+		res["event"] = read.Runs.Event
+	}
+	return res
 }
 
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
