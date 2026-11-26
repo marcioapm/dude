@@ -239,3 +239,41 @@ func TestAnUnlinkWaitsForTheSyncerSettlingAFailedClone(t *testing.T) {
 		t.Errorf("%d repositories still linked", n)
 	}
 }
+
+// An answer typed in dude, as a message or through the form, says so in a
+// session started from chat, as any other message does; in one started in
+// dude it is named as before.
+func TestAnAnswerTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
+	for _, way := range []string{"message", "form", "message to a fresh agent"} {
+		t.Run(way, func(t *testing.T) {
+			s := newSessionWorld(t)
+			id, run, qid := s.asked(`{"question":"Which layout?"}`, false)
+			mustExec(t, s.owner, `UPDATE sessions SET origin = '{"provider":"slack","conversationId":"C1"}' WHERE id = $1`, id)
+			want := "Márcio Martins (in dude) answered your question \"Which layout?\":\n\nGrid"
+			switch way {
+			case "form":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/questions/"+qid+"/answer", map[string]any{"text": "Grid"})
+			case "message":
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "Grid"})
+			default:
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/model", map[string]any{"tier": nil, "harness": "codex"})
+				s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "Grid"})
+				next := s.freshAgent(id, run)
+				if p := s.prompt(next); !strings.Contains(p, want) {
+					t.Errorf("the fresh agent's briefing lacks %q:\n%s", want, p)
+				}
+				return
+			}
+			if d := s.one(`SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, run); d != want {
+				t.Errorf("directive %q, want %q", d, want)
+			}
+		})
+	}
+	s := newSessionWorld(t)
+	_, run, qid := s.asked(`{"question":"Which layout?"}`, false)
+	id := s.one(`SELECT session_id FROM runs WHERE id = $1`, run)
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/questions/"+qid+"/answer", map[string]any{"text": "Grid"})
+	if d := s.one(`SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, run); d != "Márcio Martins answered your question \"Which layout?\":\n\nGrid" {
+		t.Errorf("directive with no chat origin %q", d)
+	}
+}

@@ -1451,12 +1451,12 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 			if swap != nil {
-				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
+				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, said, p, body.AttachmentIDs)
 				out = map[string]any{"runId": next, "created": true, "questionId": questionID}
 				created = true
 				return err
 			}
-			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
+			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, said, p, body.AttachmentIDs)
 			if err != nil {
 				return err
 			}
@@ -1699,6 +1699,10 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 		}
 		name, err := delivery.PersonName(r.Context(), tx, p.Person)
 		if err != nil {
+			return err
+		}
+		// Typed here, not in the chat thread the session may have come from.
+		if name, err = delivery.SaidIn(r.Context(), tx, id, name, ""); err != nil {
 			return err
 		}
 		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}
