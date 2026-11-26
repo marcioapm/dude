@@ -67,6 +67,8 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
   }, [pending, repos]);
 
   const settled = (id: string) => setPending((s) => (s.has(id) ? new Set([...s].filter((p) => p !== id)) : s));
+  // toggleRepo settles nothing: a project's repository boxes show only once
+  // its repositories arrived, and that render's effect settles it anyway.
   const toggleProject = (id: string) => {
     const ticking = !picked.has(id);
     const fresh = ticking && !linked.some((p) => p.id === id);
@@ -80,17 +82,14 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
     if (fresh && !loaded) setPending((s) => new Set(s).add(id));
     else settled(id);
   };
-  const toggleRepo = (projectId: string, repoId: string) => {
-    settled(projectId);
-    setPicked((m) => {
-      const next = new Map(m);
-      const set = new Set(next.get(projectId));
-      if (set.has(repoId)) set.delete(repoId);
-      else set.add(repoId);
-      next.set(projectId, set);
-      return next;
-    });
-  };
+  const toggleRepo = (projectId: string, repoId: string) => setPicked((m) => {
+    const next = new Map(m);
+    const set = new Set(next.get(projectId));
+    if (set.has(repoId)) set.delete(repoId);
+    else set.add(repoId);
+    next.set(projectId, set);
+    return next;
+  });
   const save = async () => {
     setBusy(true);
     setProblem(null);
