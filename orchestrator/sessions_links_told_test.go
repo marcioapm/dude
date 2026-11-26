@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // linkNotes are the texts dude queued on the Run telling it of a link.
@@ -178,5 +179,63 @@ func TestAMessageTypedInDudeSaysSoInASessionFromChat(t *testing.T) {
 	s.ok(s.marcio, "POST", "/internal/sessions/"+plain+"/chat", map[string]any{"text": "again"})
 	if d := s.one(`SELECT text FROM directives WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, other); d != "Márcio Martins: again" {
 		t.Errorf("directive with no chat origin %q", d)
+	}
+}
+
+// The syncer settling a failed clone locks the session's Run, then deletes
+// its session_repositories row. An owner unticking that repository at the
+// same moment locks the Run before touching the row, so the two queue one
+// behind the other instead of deadlocking (40P01).
+func TestAnUnlinkWaitsForTheSyncerSettlingAFailedClone(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/chat", map[string]any{"text": "look at billing"})
+	run := s.started(id)
+
+	syncer := s.openTx()
+	if _, err := syncer.Exec(t0(), `SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, run); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		status int
+		body   map[string]any
+	}
+	unlinked := make(chan answer, 1)
+	go func() {
+		status, body := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/link", map[string]any{"projects": []map[string]any{
+			{"projectId": s.project, "repositoryIds": []string{}}}})
+		unlinked <- answer{status, body}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); s.count(`SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> $1
+		  AND query LIKE '%FROM runs r WHERE r.session_id = $1%FOR NO KEY UPDATE%'`, syncer.pid) == 0; {
+		select {
+		case a := <-unlinked:
+			t.Fatalf("the unlink did not wait on the syncer's Run: %d %v", a.status, a.body)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the unlink never waited on a lock")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The unlink waits; the syncer goes on to its delete, which must not
+	// wait on the unlink.
+	if _, err := syncer.Exec(t0(), `DELETE FROM session_repositories WHERE session_id = $1 AND repository_id = $2`, id, s.repoID); err != nil {
+		t.Fatalf("the syncer's delete: %v", err)
+	}
+	if err := syncer.Commit(t0()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-unlinked:
+		if a.status != 200 {
+			t.Fatalf("the unlink: %d %v", a.status, a.body)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the unlink never finished")
+	}
+	if n := s.count(`SELECT count(*) FROM session_repositories WHERE session_id = $1`, id); n != 0 {
+		t.Errorf("%d repositories still linked", n)
 	}
 }
