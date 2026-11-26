@@ -374,6 +374,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 	}
 	archived := r.URL.Query().Get("archived") == "1"
 	var sessions, invitations, questions, mentions, organisation json.RawMessage
+	var proposals []waitingProposal
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// Yours: those you accepted, and, for an admin, those its admins own
 		// (their owner left). An organisation session you never joined is
@@ -435,18 +436,82 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 			p.Person).Scan(&mentions); err != nil {
 			return err
 		}
-		return tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
 			SELECT q.id, q.prompt, q.options, q.items, q.asked_at AS "askedAt", s.id AS "sessionId", s.title
 			FROM questions q JOIN runs r ON r.id = q.run_id JOIN sessions s ON s.id = r.session_id
 			WHERE q.status = 'open' AND session_role(s.id, $1) IN ('owner', 'chat')
 			  AND (q.to_person = $1 OR (q.to_person IS NULL AND session_role(s.id, $1) = 'owner'))) x`,
-			p.Person).Scan(&questions)
+			p.Person).Scan(&questions); err != nil {
+			return err
+		}
+		proposals, err = waitingProposals(r.Context(), tx, p.Person)
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions, "organisation": organisation})
+	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions,
+		"organisation": organisation, "proposals": proposals})
 	return nil
+}
+
+// waitingProposal is a session whose latest card has items the caller can
+// file: what Waiting on you lists and counts.
+type waitingProposal struct {
+	SessionID  string   `json:"sessionId"`
+	Title      *string  `json:"title"`
+	ProposalID string   `json:"proposalId"`
+	Count      int      `json:"count"`
+	Kinds      []string `json:"kinds"`
+	ProposedAt any      `json:"proposedAt"`
+}
+
+// waitingProposals is, for person, each session (theirs, not archived,
+// where they can chat) whose latest card still has an unfiled item, kept
+// when proposalsFor says some of them are theirs to file: the card's own
+// rule, so the count is the one the session's page shows.
+func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingProposal, error) {
+	rows, err := tx.Query(ctx, `SELECT s.id, s.title, s.role FROM (
+			SELECT c.id, c.title, session_role(c.id, $1) AS role FROM sessions c
+			WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL)) s
+		JOIN LATERAL (`+strings.Replace(latestProposalSQL, "$1", "s.id", 1)+`) p ON true
+		WHERE s.role IN ('owner', 'chat')
+		  AND EXISTS (SELECT 1 FROM session_proposals sp, jsonb_array_elements(sp.items) WITH ORDINALITY AS it(item, n)
+			WHERE sp.id = p.id AND NOT EXISTS (SELECT 1 FROM session_filings f WHERE f.proposal_id = sp.id AND f.item = it.n - 1))`, person)
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		id, role string
+		title    *string
+	}
+	var candidates []candidate
+	var c candidate
+	if _, err := pgx.ForEachRow(rows, []any{&c.id, &c.title, &c.role}, func() error { candidates = append(candidates, c); return nil }); err != nil {
+		return nil, err
+	}
+	out := []waitingProposal{}
+	for _, c := range candidates {
+		cards, err := proposalsFor(ctx, tx, c.id, person, c.role)
+		if err != nil {
+			return nil, err
+		}
+		if len(cards) == 0 {
+			continue
+		}
+		latest := cards[len(cards)-1]
+		w := waitingProposal{SessionID: c.id, Title: c.title, ProposalID: latest.ID, ProposedAt: latest.CreatedAt, Kinds: []string{}}
+		for n, st := range latest.Status {
+			if st["canFile"] == true {
+				w.Count++
+				w.Kinds = append(w.Kinds, latest.Items[n].Kind)
+			}
+		}
+		if w.Count > 0 {
+			out = append(out, w)
+		}
+	}
+	return out, nil
 }
 
 // sessionProjectsJSON (SQL, over sessions s): its linked projects, each

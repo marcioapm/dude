@@ -2443,3 +2443,47 @@ describe("proposed work waiting on you", () => {
     expect(mark(page)).toBe("Waiting for you to file 1 task");
   });
 });
+
+describe("proposals in Waiting on you", () => {
+  class ProposalsClient extends SessionClient {
+    list: SessionsList = {
+      sessions: [{ id: SESSION, title: "Warehouse nightlies", role: "owner", createdAt: at(0), owner: ref(ME), shared: false, projects: [],
+        runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(30), archived: false }],
+      invitations: [], questions: [],
+      proposals: [{ sessionId: SESSION, title: "Warehouse nightlies", proposalId: "prp_1", count: 2, kinds: ["task", "task"], proposedAt: at(30) }],
+    };
+    override sessions(): Promise<SessionsList> {
+      return Promise.resolve(this.list);
+    }
+  }
+
+  test("a card with items you can file is a row: the brainstorm's face, what it proposed, the session, and Review and file to its card", async () => {
+    const client = new ProposalsClient(detail("owner", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "A", goal: "g" }, { kind: "task", project: "BL", title: "B", goal: "g" }],
+        status: [{ canFile: true }, { canFile: true }] }],
+    }));
+    const page = await shell("#/waiting", client);
+    const row = await until(() => page.querySelector("[data-testid=session-proposal]"), "the proposal row");
+    expect(row.textContent).toContain("Brainstorm proposed 2 tasks for you to file");
+    expect(row.textContent).toContain("Warehouse nightlies");
+    expect(row.querySelector("[role=img][data-role=brainstorm]")).toBeTruthy();
+    const facets = [...page.querySelectorAll("[data-testid=inbox] *")].map((n) => n.textContent ?? "");
+    expect(facets.some((t) => t.startsWith("Proposals"))).toBe(true);
+    // The sidebar's count has it.
+    const count = await until(() => page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)?.[0], "the count");
+    expect(count).toBe("1");
+    await click(row.querySelector("[data-testid=proposal-review]")!);
+    await until(() => window.location.hash.includes(`sessions/${SESSION}`) || null, "the session");
+    await until(() => page.querySelector("[data-testid=session-screen] [data-proposal=prp_1] [data-testid=proposal-waiting]"), "the card waiting");
+  });
+
+  test("no entry, no row and no count once there is nothing of yours to file", async () => {
+    const client = new ProposalsClient(detail("owner"));
+    client.list = { ...client.list, proposals: [] };
+    const page = await shell("#/waiting", client);
+    await until(() => page.querySelector("[data-testid=inbox]"), "the inbox");
+    await settle();
+    expect(page.querySelector("[data-testid=session-proposal]")).toBeNull();
+    expect(page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)).toBeNull();
+  });
+});

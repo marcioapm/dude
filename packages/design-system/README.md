@@ -479,6 +479,10 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   question takes the header's word (it blocks the agent), and the card
   keeps its band. The app holds the waiting card in view on opening, as
   the waiting question is, when no question waits.
+  It counts in Waiting on you as a question does: a `WaitingRow mine`
+  with the brainstorm's face, "Brainstorm proposed 2 tasks for you to
+  file", the session's title, and **Review and file**, which opens the
+  session at the card (facet "Proposals").
   With `onSubmit` the turn **is the answer form**, laid on the turn's own
   grid — no card, no box:
   - **One question** (`text` + `options`, or one `items` entry): no tabs.

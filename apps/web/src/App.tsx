@@ -140,7 +140,7 @@ const QUIET_EVENTS: ReadonlySet<string> = new Set([...AGENT_CHATTER, EventTypes.
 const SESSION_LIST_EVENTS: ReadonlySet<string> = new Set([
   EventTypes.BrainstormCreated, EventTypes.BrainstormShared, EventTypes.BrainstormJoined, EventTypes.BrainstormDeclined,
   EventTypes.BrainstormMemberRemoved, EventTypes.BrainstormOwnerChanged, EventTypes.BrainstormLinked, EventTypes.BrainstormFiled,
-  EventTypes.BrainstormRenamed,
+  EventTypes.BrainstormRenamed, EventTypes.BrainstormProposed,
   EventTypes.QuestionAsked, EventTypes.QuestionAnswered, EventTypes.RunCreated, EventTypes.RunCompleted, EventTypes.RunFailed,
   EventTypes.RunPaused, EventTypes.RunResumed,
   EventTypes.BrainstormAccessChanged, EventTypes.BrainstormOwnerLeft, EventTypes.BrainstormOwnerTaken, EventTypes.BrainstormMentioned,
@@ -808,7 +808,8 @@ export function App({ client, onSignOut, onKeyRefused }: AppProps) {
         online={people.all.filter((p) => p.online).sort((a, b) => Number(b.id === people.you) - Number(a.id === people.you))}
         onWaitingSelect={() => go({ view: "inbox" })}
         waitingSelected={place?.view === "inbox"}
-        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0) + (sessionsList?.mentions?.length ?? 0)}
+        waitingExtra={(sessionsList?.invitations.length ?? 0) + (sessionsList?.questions.length ?? 0) + (sessionsList?.mentions?.length ?? 0)
+          + (sessionsList?.proposals?.length ?? 0)}
         sessions={
           <SidebarSessions
             sessions={(sessionsList?.sessions ?? []).map((s) => ({ id: s.id, title: sessionTitle(s), shared: s.shared,

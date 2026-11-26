@@ -145,10 +145,22 @@ export interface SessionQuestionLine {
   title: string | null;
 }
 
+/** A session whose latest proposal has items you can file: `count` of them, by `kinds`, in the card's order. */
+export interface SessionProposalLine {
+  sessionId: string;
+  title: string | null;
+  proposalId: string;
+  count: number;
+  kinds: ProposalItem["kind"][];
+  proposedAt: string;
+}
+
 export interface SessionsList {
   sessions: SessionSummary[];
   invitations: SessionInvitation[];
   questions: SessionQuestionLine[];
+  /** Absent from an older orchestrator. */
+  proposals?: SessionProposalLine[];
   /** Absent from an older orchestrator. */
   mentions?: SessionMentionLine[];
   /** Absent from an older orchestrator. */

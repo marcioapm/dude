@@ -52,3 +52,60 @@ func TestALaterProposalReplacesTheCard(t *testing.T) {
 		t.Errorf("%d tasks filed, want the earlier card's and the latest's", n)
 	}
 }
+
+// waiting is the caller's proposals entry in GET /internal/sessions for the session, nil without one.
+func (s *sessionWorld) waiting(person, session string) map[string]any {
+	s.t.Helper()
+	list, _ := s.ok(person, "GET", "/internal/sessions", nil)["proposals"].([]any)
+	for _, p := range list {
+		if m := p.(map[string]any); m["sessionId"] == session {
+			return m
+		}
+	}
+	return nil
+}
+
+// The sessions list says, for the caller, which sessions' latest card has
+// items they can file, and how many, by the card's own rule: the owner's
+// tasks count and Márcio's edit does not for Ana; a reader has none; a
+// filed item no longer counts; an earlier card a later one replaced is
+// never counted.
+func TestTheListSaysWhichCardsWaitOnYou(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	s.join(id, s.ana, "chat")
+	s.join(id, s.joao, "read")
+	mine := s.taskIn(s.project, "Daily rollup", s.marcio)
+	early := s.proposal(id, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Old idea", Goal: "Something proposed before"}})
+	latest := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "task", Project: "BL", Title: "Meter runs", Goal: "Count experiment runs per org per day"},
+		{Kind: "task", Project: "BL", Title: "Dedupe runs", Goal: "The meter's 24h key is not enough for retries"},
+		{Kind: "edit", Task: s.keyOf(mine), After: &delivery.TaskText{Goal: ptr("Count each run id once")}},
+	})
+
+	w := s.waiting(s.marcio, id)
+	if w == nil || w["proposalId"] != latest || w["count"] != float64(3) || w["title"] != "Usage-based billing" || w["proposedAt"] == nil {
+		t.Fatalf("Márcio's entry: %v", w)
+	}
+	if kinds, _ := w["kinds"].([]any); len(kinds) != 3 || kinds[0] != "task" || kinds[2] != "edit" {
+		t.Errorf("kinds %v", w["kinds"])
+	}
+	if w := s.waiting(s.ana, id); w == nil || w["count"] != float64(2) {
+		t.Errorf("Ana's entry (Márcio's edit is his): %v", w)
+	}
+	if w := s.waiting(s.joao, id); w != nil {
+		t.Errorf("a reader's entry: %v", w)
+	}
+
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": latest, "items": []int{0, 1}})
+	if w := s.waiting(s.marcio, id); w == nil || w["count"] != float64(1) {
+		t.Errorf("after filing two: %v", w)
+	}
+	if w := s.waiting(s.ana, id); w != nil {
+		t.Errorf("Ana, with only Márcio's edit left: %v", w)
+	}
+	s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": latest, "items": []int{2}})
+	if w := s.waiting(s.marcio, id); w != nil {
+		t.Errorf("all filed, the earlier card replaced (%s): %v", early, w)
+	}
+}
