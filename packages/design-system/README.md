@@ -829,6 +829,13 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   "Filing as Ana: 2 tasks, 1 edit. Nothing starts." An item only someone
   else may file is dimmed and says whose ("Only Márcio can file this: it's
   his task"); a filed one says who filed it as what ("Ana filed BL-61").
+  A task is read on the card: its goal (`detail`) is clamped to three
+  lines with **Show all / Show less** (`ClampedBody`, shared with a
+  prompt's clamp in the Chat: measured, so a short goal gets no toggle),
+  and its `criteria` sit under it in a closed `Disclosure` titled
+  "Acceptance criteria" with their count, a plain list. An agent's goal
+  after an investigation runs to paragraphs; drawn whole, two of them
+  push the card's ticks and File off the screen.
   A reader (`readOnly`) sees the folded line, opens it to read, and files
   nothing. Nothing on the
   card names the session: the work filed is the person's, as if typed.

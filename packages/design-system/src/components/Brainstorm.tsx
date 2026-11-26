@@ -11,6 +11,8 @@ import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { RefLead } from "./RefLead.tsx";
 import { StatusMark } from "./StatusMark.tsx";
+import { ClampedBody } from "./ClampedBody.tsx";
+import { Disclosure } from "./Disclosure.tsx";
 import styles from "./Brainstorm.module.css";
 
 /*
@@ -131,8 +133,10 @@ export interface ProposalCardItem {
   readonly kind: ProposalKind;
   /** The title: a new epic's or task's, or what an edit, comment or note is on ("Edit BL-58 · Daily rollup", "Note on Usage"). */
   readonly title: ReactNode;
-  /** One line under it: a task's goal, an epic's description, the comment's words. */
+  /** Under it: a task's goal (clamped to three lines behind Show all), an epic's description, the comment's words. */
   readonly detail?: ReactNode;
+  /** A task's acceptance criteria, listed under its goal in a closed "Acceptance criteria" disclosure. */
+  readonly criteria?: ReadonlyArray<string> | undefined;
   /** A task item's images, filed with it as the task's own: the app's rendering of them (thumbnails), under its detail. */
   readonly images?: ReactNode;
   /** A proposed epic's notes, pinned for its agents when it is filed: Markdown, in order. */
@@ -201,6 +205,9 @@ export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
     .map(([k, n]) => `${n} ${KIND_WORD[k][n === 1 ? 0 : 1]}`)
     .join(", ");
 }
+
+/** A task's goal on the card: this many lines, then Show all. */
+const GOAL_LINES = 3;
 
 /** How many filed items the folded line names before "+N more". */
 const FOLDED_NAMES = 4;
@@ -392,7 +399,14 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                   {item.title}
                   {item.tag ? <span className={styles["tag"]}>{item.tag}</span> : null}
                 </div>
-                {item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.detail && item.kind === "task" ? (
+                  <ClampedBody lines={GOAL_LINES}><div className={styles["itemDetail"]} data-testid="item-goal">{item.detail}</div></ClampedBody>
+                ) : item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.kind === "task" && item.criteria?.length ? (
+                  <Disclosure className={styles["criteria"]} title="Acceptance criteria" meta={`${item.criteria.length}`} data-testid="item-criteria">
+                    <ul className={styles["criteriaList"]}>{item.criteria.map((c, n) => <li key={n}>{c}</li>)}</ul>
+                  </Disclosure>
+                ) : null}
                 {item.images ? <div data-testid="proposal-images">{item.images}</div> : null}
                 {item.notes && item.notes.length > 0 ? <ProposedNotes notes={item.notes} /> : null}
                 {item.relations?.length ? <ItemRelations relations={item.relations} /> : null}

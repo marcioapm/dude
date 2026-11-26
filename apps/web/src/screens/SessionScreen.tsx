@@ -757,7 +757,8 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
       return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common,
         ...(item.notes?.length ? { notes: item.notes } : {}) };
     case "task":
-      return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common };
+      return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common,
+        ...(item.acceptanceCriteria?.length ? { criteria: item.acceptanceCriteria } : {}) };
     case "edit":
       return { kind: "edit", title: `Edit ${item.task ?? ""}`, taskKey: item.task,
         before: textOf(item.before), after: textOf(item.after), ...common };

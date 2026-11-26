@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { type HTMLAttributes, type ReactNode } from "react";
 import { cx } from "../util/cx.ts";
 import { formatTimestamp } from "../util/format.ts";
 import { toMs } from "../util/useNow.ts";
@@ -9,6 +9,7 @@ import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
 import { ActivityIndicator, type ActivityIndicatorProps } from "./ActivityIndicator.tsx";
 import { CostDisplay, Duration, TokenCount } from "./Numbers.tsx";
 import { Markdown, type MarkdownMention } from "./Markdown.tsx";
+import { ClampedBody } from "./ClampedBody.tsx";
 import styles from "./ChatMessage.module.css";
 
 export type ChatMessageKind = "agent" | "human" | "system";
@@ -354,54 +355,4 @@ export function ChatMessage({
  */
 export function ChatAside({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cx(styles["aside"], className)} {...rest} />;
-}
-
-/**
- * Clamps its child to `lines` and offers "Show all" only when the content
- * actually overflows — measured after layout, so a four-line prompt gets
- * no control and a forty-line one gets exactly one.
- */
-function ClampedBody({ lines, children }: { readonly lines: number | null; readonly children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const [limit, setLimit] = useState<number | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || lines === null) return;
-    const measure = () => {
-      // The body's own line box: it differs by density and when Markdown
-      // switches a multi-block reply to prose leading. The body is the
-      // child, so a `1lh` on this wrapper would read the wrong leading.
-      const line = Number.parseFloat(getComputedStyle(el.firstElementChild ?? el).lineHeight);
-      if (!Number.isFinite(line)) return;
-      setLimit(lines * line);
-      setOverflows(el.scrollHeight > lines * line + line / 2);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    // Content that changes size (a prompt that finishes arriving) re-measures
-    // through the observer, not through a dependency on `children`, which
-    // is a new node every render.
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [lines]);
-
-  if (lines === null) return <>{children}</>;
-  const clamped = overflows && !open && limit !== null;
-  return (
-    <div className={cx(styles["clamp"], clamped && styles["clamped"])}>
-      <div ref={ref} className={styles["clampInner"]} style={clamped ? { maxHeight: limit } : undefined}>
-        {children}
-      </div>
-      {overflows ? (
-        <button type="button" className={styles["clampToggle"]} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-          <Icon name={open ? "chevron-up" : "chevron-down"} size={11} strokeWidth={2} />
-          {open ? "Show less" : "Show all"}
-        </button>
-      ) : null}
-    </div>
-  );
 }

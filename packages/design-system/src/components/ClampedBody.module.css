@@ -1,0 +1,40 @@
+/*
+ * A body clamped to some lines behind Show all / Show less: a prompt in
+ * the Chat, a proposed task's goal on its card.
+ */
+
+.clamp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  min-width: 0;
+}
+.clampInner {
+  min-width: 0;
+}
+.clamped .clampInner {
+  overflow: hidden;
+  /* Fade the last line out so the cut reads as a cut. A mask, not a
+     gradient overlay: row washes are translucent, so there is no one
+     colour to fade to. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+.clampToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 var(--ds-space-6) 0 var(--ds-space-4);
+  margin-left: calc(var(--ds-space-4) * -1);
+  border: 0;
+  border-radius: var(--ds-radius-mark);
+  background: transparent;
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-medium);
+  color: var(--ds-color-accent-text);
+}
+.clampToggle:hover {
+  background: var(--ds-color-hover-wash);
+}

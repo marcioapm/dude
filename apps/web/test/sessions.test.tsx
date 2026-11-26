@@ -2354,3 +2354,20 @@ describe("the Link dialog", () => {
     expect(ticked(page, "api")).toBe(true);
   });
 });
+
+describe("proposed work on the session page", () => {
+  const LONG = "The nightly's coverage step fails before any test runs. ".repeat(12).trim();
+  const task = (title: string, over: Record<string, unknown> = {}) =>
+    ({ kind: "task" as const, project: "BL", title, goal: LONG, acceptanceCriteria: ["Clone with the defaults.", "The nightly gets past setup."], ...over });
+
+  test("a task item is drawn with its goal clamped and its acceptance criteria folded under it", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [task("Clone with defaults")], status: [{ canFile: true }] }],
+    })));
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.querySelector("[data-testid=item-goal]")!.textContent).toBe(LONG);
+    const criteria = card.querySelector<HTMLDetailsElement>("[data-testid=item-criteria]")!;
+    expect(criteria.open).toBe(false);
+    expect([...criteria.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Clone with the defaults.", "The nightly gets past setup."]);
+  });
+});

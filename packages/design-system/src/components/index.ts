@@ -54,6 +54,7 @@ export type { ThinkingBlockProps } from "./ThinkingBlock.tsx";
 export { AgentPlan, PlanMeter, planProgress } from "./AgentPlan.tsx";
 export type { AgentPlanProps, PlanItem, PlanMeterProps } from "./AgentPlan.tsx";
 export { ChatAside, ChatMessage } from "./ChatMessage.tsx";
+export { ClampedBody } from "./ClampedBody.tsx";
 export type { ChatMessageProps, ChatMessageKind, HumanIntent } from "./ChatMessage.tsx";
 export { ChatThread } from "./ChatThread.tsx";
 export type { ChatThreadProps } from "./ChatThread.tsx";

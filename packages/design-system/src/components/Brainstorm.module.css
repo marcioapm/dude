@@ -137,6 +137,19 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+/* A task's criteria, folded under its goal: a plain list. */
+.criteria {
+  margin-top: var(--ds-space-4);
+}
+.criteriaList {
+  margin: 0;
+  padding-left: var(--ds-space-16);
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-text-secondary);
+}
+.criteriaList li + li {
+  margin-top: var(--ds-space-4);
+}
 /* A proposed epic's notes: pinned for its agents when it is filed. */
 .notes {
   display: flex;
