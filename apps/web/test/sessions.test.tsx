@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import type { AgentMachine, Harness, Machine, PersistedEvent, ProposalItemStatus, Raise, SessionDetail, SessionModel, SessionsList } from "@dude/domain";
+import type { AgentMachine, Harness, Machine, PersistedEvent, ProposalItemStatus, Raise, SessionDetail, SessionLink, SessionModel, SessionsList } from "@dude/domain";
 import { act, click, mount, settle, type, until } from "./dom.ts";
 import { FixtureClient, emit, type LedgerQuery } from "../src/fixtures/client.ts";
 import { PEOPLE, YOU } from "../src/fixtures/data.ts";
@@ -13,6 +13,7 @@ import { PeopleProvider } from "../src/people.tsx";
 import { SessionScreen, sessionNotice } from "../src/screens/SessionScreen.tsx";
 import { InboxScreen } from "../src/screens/InboxScreen.tsx";
 import { WelcomeScreen } from "../src/screens/WelcomeScreen.tsx";
+import { LinkDialog } from "../src/screens/SessionDialogs.tsx";
 import { forgetModelOptions } from "../src/sessionModel.ts";
 import { formatPlace, parsePlace } from "../src/place.ts";
 import type { FileResult } from "@dude/domain";
@@ -2271,5 +2272,85 @@ describe("Try again hands each unread message on as the directive it replaces, n
     const aside = await until(() => [...page.querySelectorAll("[data-testid=human-turn]")].find((t) => t.textContent?.includes("use jobs")) ?? null, "the aside");
     expect(aside.textContent).toContain("Will be read when the agent starts.");
     expect(aside.textContent).not.toContain("goes after the answer");
+  });
+});
+
+describe("the Link dialog", () => {
+  const repo = (id: string, name: string) => ({ id, name, url: `git://x/${name}.git`, defaultBranch: "main", trust: "trusted_internal" as const });
+  const REPOS: Record<string, ReturnType<typeof repo>[]> = {
+    prj_bl: [repo("repo_bl", "billing"), repo("repo_bl_jobs", "jobs")],
+    prj_wc: [repo("repo_web", "web"), repo("repo_api", "api")],
+    prj_ops: [repo("repo_infra", "infra")],
+  };
+  /** Answers getProject when release() is called, as a slow API would. */
+  class SlowProjects extends FixtureClient {
+    constructor() {
+      super("a");
+    }
+    waiting: Array<() => void> = [];
+    override getProject(id: string) {
+      return new Promise<Awaited<ReturnType<FixtureClient["getProject"]>>>((resolve) =>
+        this.waiting.push(() => resolve({ id, repositories: REPOS[id] ?? [] } as unknown as Awaited<ReturnType<FixtureClient["getProject"]>>)));
+    }
+    async release() {
+      await act(async () => { for (const r of this.waiting.splice(0)) r(); });
+      await settle();
+    }
+  }
+  async function dialog(client: SlowProjects, saved: SessionLink[][]) {
+    const linked = [{ id: "prj_bl", key: "BL", name: "billing", repositories: [{ id: "repo_bl", name: "billing", defaultBranch: "main" }] }];
+    const projects = [{ id: "prj_bl", name: "billing" }, { id: "prj_wc", name: "web-console" }, { id: "prj_ops", name: "operations" }];
+    const m = await mount(<TooltipProvider><LinkDialog client={client} projects={projects} linked={linked} open onClose={() => undefined}
+      onSave={async (links) => void saved.push(links)} /></TooltipProvider>);
+    mounted.push(m.unmount);
+    await settle();
+    return document.body;
+  }
+  const check = (page: ParentNode, name: string) => allByRole(page, "checkbox", name)[0] ?? null;
+  const project = (page: ParentNode, name: string) => check(page, name)!;
+  const ticked = (page: ParentNode, name: string) => check(page, `${name} · main`)?.getAttribute("aria-checked") === "true";
+  const shown = (page: ParentNode, name: string) => check(page, `${name} · main`) !== null;
+
+  test("ticking a project not linked ticks all its repositories once they load; a linked project's ticks stay as they were", async () => {
+    const client = new SlowProjects();
+    const saved: SessionLink[][] = [];
+    const page = await dialog(client, saved);
+    await client.release();
+    // BL was linked with one of its two repositories: left as it was.
+    expect(ticked(page, "billing")).toBe(true);
+    expect(ticked(page, "jobs")).toBe(false);
+    await click(project(page, "web-console"));
+    await click(project(page, "operations"));
+    await client.release();
+    await until(() => ticked(page, "web") || null, "web ticked");
+    expect(ticked(page, "api")).toBe(true);
+    expect(ticked(page, "infra")).toBe(true);
+    // Unticked by the person, a repository stays unticked.
+    await click(check(page, "api · main")!);
+    await settle();
+    expect(ticked(page, "api")).toBe(false);
+    await click(allByRole(page, "button", "Link").at(-1)!);
+    await until(() => saved.length || null, "saved");
+    expect(saved[0]).toEqual([
+      { projectId: "prj_bl", repositoryIds: ["repo_bl"] },
+      { projectId: "prj_wc", repositoryIds: ["repo_web"] },
+      { projectId: "prj_ops", repositoryIds: ["repo_infra"] },
+    ]);
+  });
+
+  test("a repository unticked before the project's repositories arrive is not ticked again", async () => {
+    const client = new SlowProjects();
+    const page = await dialog(client, []);
+    await client.release();
+    await click(project(page, "web-console"));
+    // Ticked and unticked again before they load: nothing to tick.
+    await click(project(page, "web-console"));
+    await client.release();
+    expect(shown(page, "web")).toBe(false);
+    // Ticked once more, with its repositories known: ticked at once.
+    await click(project(page, "web-console"));
+    await settle();
+    expect(ticked(page, "web")).toBe(true);
+    expect(ticked(page, "api")).toBe(true);
   });
 });
