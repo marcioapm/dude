@@ -39,6 +39,8 @@ type model struct {
 	// The next call's refusal: its status and body, once.
 	refuseStatus int
 	refuseBody   string
+	// The refusal's Retry-After header, when not "".
+	refuseRetryAfter string
 }
 
 // refuseNext makes the next call answer status with body, as a proxy refusing it.
@@ -46,6 +48,13 @@ func (m *model) refuseNext(status int, body string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.refuseStatus, m.refuseBody = status, body
+}
+
+// refuseNextAfter is refuseNext with a Retry-After header.
+func (m *model) refuseNextAfter(status int, retryAfter, body string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refuseStatus, m.refuseBody, m.refuseRetryAfter = status, body, retryAfter
 }
 
 func (m *model) queue(answers ...string) {
@@ -74,7 +83,10 @@ func (m *model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.sent = append(m.sent, body)
 	if status, refusal := m.refuseStatus, m.refuseBody; status != 0 {
-		m.refuseStatus, m.refuseBody = 0, ""
+		if m.refuseRetryAfter != "" {
+			w.Header().Set("Retry-After", m.refuseRetryAfter)
+		}
+		m.refuseStatus, m.refuseBody, m.refuseRetryAfter = 0, "", ""
 		m.mu.Unlock()
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(refusal))

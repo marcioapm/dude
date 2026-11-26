@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 )
@@ -280,6 +281,26 @@ func TestChatRoutingRetriesATransientModelFailure(t *testing.T) {
 			t.Fatalf("reactions %v", r)
 		}
 	})
+	// The proxy's Retry-After is honoured up to 30 s, when longer than the
+	// first backoff (5 s): someone waits on the mention.
+	for _, c := range []struct {
+		retryAfter string
+		want       time.Duration
+	}{{"120", 30 * time.Second}, {"8", 8 * time.Second}} {
+		t.Run("a 429 with Retry-After "+c.retryAfter, func(t *testing.T) {
+			w := setup(t)
+			w.model.refuseNextAfter(http.StatusTooManyRequests, c.retryAfter, `{"error":{"message":"slow down"}}`)
+			_, ev := w.receive("Eli", "C1", "", "file: stream it")
+			w.once()
+			e := w.event(ev)
+			if e.Processed || e.Decision || e.Attempts != 1 {
+				t.Fatalf("after the 429: %+v", e)
+			}
+			if e.NextIn > c.want || e.NextIn < c.want-2*time.Second {
+				t.Fatalf("due again in %v, want about %v", e.NextIn, c.want)
+			}
+		})
+	}
 	t.Run("a 400: a brainstorm at once, asked once", func(t *testing.T) {
 		w := setup(t)
 		w.model.refuseNext(http.StatusBadRequest, `{"error":{"message":"invalid model"}}`)

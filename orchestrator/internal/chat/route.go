@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -570,6 +571,10 @@ func channelProjectsReply(where string, added, removed, now []string) string {
 // failed elsewhere leaves fewer.
 const routingRetries = 2
 
+// routingRetryAfterMax caps the proxy's Retry-After on a routing retry:
+// someone waits on the mention, so a long one is not honoured in full.
+const routingRetryAfterMax = 30 * time.Second
+
 // decision is the routing judgement for the delivery: the one kept on it,
 // or asked now and kept before anything acts on it. A model that gave no
 // usable answer is kept as failed. Nothing is kept, for a retry to ask
@@ -596,7 +601,7 @@ func (s *Service) decision(ctx context.Context, d claimed, org string, p Provide
 		return kept, ctx.Err()
 	}
 	if transient, after := llm.Transient(err); transient && d.Attempts < routingRetries && d.Attempts+1 < MaxAttempts {
-		return kept, Transient(err, after)
+		return kept, Transient(err, min(after, routingRetryAfterMax))
 	}
 	kept = storedDecision{CallID: res.CallID, Rounds: rounds, Conv: &conv, Members: members, Thread: &h.Thread}
 	if len(h.Channel.Messages) > 0 {
