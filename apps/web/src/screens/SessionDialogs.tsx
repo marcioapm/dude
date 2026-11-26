@@ -38,9 +38,14 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
   const [repos, setRepos] = useState<Map<string, Repository[]>>(new Map());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // Projects ticked here, not linked when the dialog opened, whose
+  // repositories had not loaded: ticked all when they arrive, unless the
+  // person ticks or unticks one first.
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
     if (!open) return;
     setPicked(new Map(linked.map((p) => [p.id, new Set(p.repositories.map((r) => r.id))])));
+    setPending(new Set());
     setProblem(null);
   }, [open, linked]);
   const want = [...picked.keys()].filter((id) => !repos.has(id)).join(",");
@@ -50,13 +55,33 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
       void client.getProject(id).then((p) => setRepos((m) => new Map(m).set(id, p.repositories)), () => undefined);
     }
   }, [client, want]);
+  useEffect(() => {
+    const arrived = [...pending].filter((id) => repos.has(id));
+    if (arrived.length === 0) return;
+    setPending((s) => new Set([...s].filter((id) => !arrived.includes(id))));
+    setPicked((m) => {
+      const next = new Map(m);
+      for (const id of arrived) if (next.has(id)) next.set(id, new Set(repos.get(id)!.map((r) => r.id)));
+      return next;
+    });
+  }, [pending, repos]);
 
-  const toggleProject = (id: string) => setPicked((m) => {
-    const next = new Map(m);
-    if (next.has(id)) next.delete(id);
-    else next.set(id, new Set());
-    return next;
-  });
+  const settled = (id: string) => setPending((s) => (s.has(id) ? new Set([...s].filter((p) => p !== id)) : s));
+  // toggleRepo settles nothing: a project's repository boxes show only once
+  // its repositories arrived, and that render's effect settles it anyway.
+  const toggleProject = (id: string) => {
+    const ticking = !picked.has(id);
+    const fresh = ticking && !linked.some((p) => p.id === id);
+    const loaded = repos.get(id);
+    setPicked((m) => {
+      const next = new Map(m);
+      if (next.has(id)) next.delete(id);
+      else next.set(id, new Set(fresh && loaded ? loaded.map((r) => r.id) : []));
+      return next;
+    });
+    if (fresh && !loaded) setPending((s) => new Set(s).add(id));
+    else settled(id);
+  };
   const toggleRepo = (projectId: string, repoId: string) => setPicked((m) => {
     const next = new Map(m);
     const set = new Set(next.get(projectId));
@@ -79,7 +104,7 @@ export function LinkDialog({ client, projects, linked, open, onClose, onSave }: 
   };
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()} size="md" title="Link projects"
-      description="The agent reads the projects you link: their tasks, pull requests and findings, and the repositories you tick, checked out read-only. It changes nothing."
+      description="The agent reads the projects you link: their tasks, pull requests and findings, and the repositories you tick, checked out read-only. Linking a project ticks all its repositories; untick any it should not check out. It changes nothing."
       footerProblem={problem}
       footer={<>
         <Button variant="quiet" onClick={onClose}>Cancel</Button>

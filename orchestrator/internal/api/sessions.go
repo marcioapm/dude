@@ -297,9 +297,19 @@ func setLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, projects []
 // the session links now, recorded as linkSession records a link
 // (session.linked with the session's whole set).
 func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f delivery.Filer) error {
+	if err := delivery.LockLiveBrainstorm(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	before, err := delivery.LinkSetOf(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
 	links, err := delivery.AddSessionProject(ctx, tx, org, sessionID, projectID)
 	if err != nil {
 		return linkFailed(err)
+	}
+	if err := delivery.TellLinksChanged(ctx, tx, org, sessionID, before); err != nil {
+		return err
 	}
 	return delivery.SessionEvent(ctx, tx, delivery.SessionRef(org, sessionID), delivery.EvSessionLinked, f.ActorType, f.ActorID,
 		map[string]any{"projects": links})
@@ -308,7 +318,9 @@ func addLink(ctx context.Context, tx pgx.Tx, org, sessionID, projectID string, f
 // linkSession sets what the session reads. Repositories added reach a
 // live agent through the resume path (the syncer parks it and resumes it
 // with them); one unlinked is refused by its tools at once, its checkout
-// left until the next fresh Run. Owner only.
+// left until the next fresh Run. A live agent is told of each project
+// added or removed and each repository removed (delivery.TellLinksChanged).
+// Owner only.
 func (s *Server) linkSession(w http.ResponseWriter, r *http.Request, org string) error {
 	p, err := sessionPrincipal(r)
 	if err != nil {
@@ -325,7 +337,17 @@ func (s *Server) linkSession(w http.ResponseWriter, r *http.Request, org string)
 		if err := lockedOwner(r.Context(), tx, id, p.Person, "link projects"); err != nil {
 			return err
 		}
+		if err := delivery.LockLiveBrainstorm(r.Context(), tx, id); err != nil {
+			return err
+		}
+		before, err := delivery.LinkSetOf(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
 		if err := setLinks(r.Context(), tx, org, id, body.Projects); err != nil {
+			return err
+		}
+		if err := delivery.TellLinksChanged(r.Context(), tx, org, id, before); err != nil {
 			return err
 		}
 		return delivery.SessionEvent(r.Context(), tx, delivery.SessionRef(org, id), delivery.EvSessionLinked, p.ActorType, p.Actor,
@@ -1313,7 +1335,8 @@ func relatedOf(ctx context.Context, tx pgx.Tx, taskID string) (delivery.RelatedT
 }
 
 // sessionChat is a member writing to the session's agent. The agent is
-// told who wrote it (delivery.Attributed). With no live agent the message
+// told who wrote it (delivery.Attributed), and in a session from chat that
+// it was typed in dude (delivery.SaidIn). With no live agent the message
 // starts one, briefed; with one, it is its next input, delivered at its
 // next step (a directive), resuming it if parked. While the agent waits on
 // a question, the person it is for answers it with their message; anyone
@@ -1379,6 +1402,11 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		if err != nil {
 			return err
 		}
+		// Typed here, not in the chat thread the session may have come from.
+		said, err := delivery.SaidIn(r.Context(), tx, id, name, "")
+		if err != nil {
+			return err
+		}
 		var runID string
 		var ending bool
 		find := func() error {
@@ -1395,7 +1423,7 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if db.IsNotFound(err) {
 			created = true
-			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, name, body.Text, body.AttachmentIDs)
+			runID, err = startSessionAgent(r.Context(), tx, org, id, wr, said, body.Text, body.AttachmentIDs)
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
@@ -1429,12 +1457,12 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 				return err
 			}
 			if swap != nil {
-				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
+				next, err := answerByFreshAgent(r.Context(), tx, ref, *swap, questionID, prompt, items, answered, said, p, body.AttachmentIDs)
 				out = map[string]any{"runId": next, "created": true, "questionId": questionID}
 				created = true
 				return err
 			}
-			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, name, p, body.AttachmentIDs)
+			directiveID, err := answerSessionQuestion(r.Context(), tx, ref, questionID, prompt, items, answered, said, p, body.AttachmentIDs)
 			if err != nil {
 				return err
 			}
@@ -1443,11 +1471,11 @@ func (s *Server) sessionChat(w http.ResponseWriter, r *http.Request, org string)
 		}
 		if swap != nil {
 			created = true
-			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(name, body.Text, body.AttachmentIDs))
+			runID, _, err = delivery.ReplaceBrainstorm(r.Context(), tx, ref, *swap, wr, sessionOpening(said, body.Text, body.AttachmentIDs))
 			out = map[string]any{"runId": runID, "created": true}
 			return err
 		}
-		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(name, body.Text), Scope: "run"})
+		directiveID, _, err := delivery.QueueDirective(r.Context(), tx, ref, delivery.Directive{Text: delivery.Attributed(said, body.Text), Scope: "run"})
 		if err != nil {
 			return err
 		}
@@ -1677,6 +1705,10 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, org strin
 		}
 		name, err := delivery.PersonName(r.Context(), tx, p.Person)
 		if err != nil {
+			return err
+		}
+		// Typed here, not in the chat thread the session may have come from.
+		if name, err = delivery.SaidIn(r.Context(), tx, id, name, ""); err != nil {
 			return err
 		}
 		ref := delivery.RunRef{Org: org, SessionID: id, RunID: runID}

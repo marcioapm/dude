@@ -322,14 +322,29 @@ type BranchJob struct {
 	Name, Status, Conclusion string
 }
 
+// RunsFilter narrows BranchRuns: Workflow, a workflow's file name or
+// numeric id, lists only its runs; Event (schedule, push, …) only runs
+// that event triggered. Either may be empty. Callers validate them.
+type RunsFilter struct {
+	Workflow, Event string
+}
+
 // BranchRuns reads branch's most recent Actions runs on slug, newest
 // first, at most runs of them, each with at most jobs of its latest
 // attempt's jobs: one request for the runs and one per run for its jobs.
 // A run whose jobs GitHub failed to answer for is kept, JobsUnread.
-func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs int) ([]BranchRun, error) {
+func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, filter RunsFilter, runs, jobs int) ([]BranchRun, error) {
 	// No branch would list every branch's runs, never what was asked.
 	if branch == "" {
 		return nil, fmt.Errorf("no branch to read the runs of on %s", slug)
+	}
+	path := fmt.Sprintf("/repos/%s/actions/runs", slug)
+	if filter.Workflow != "" {
+		path = fmt.Sprintf("/repos/%s/actions/workflows/%s/runs", slug, url.PathEscape(filter.Workflow))
+	}
+	query := "branch=" + url.QueryEscape(branch)
+	if filter.Event != "" {
+		query += "&event=" + url.QueryEscape(filter.Event)
 	}
 	ctx = agentReadContext(ctx)
 	if err := g.readBudget(ctx, slug, "core"); err != nil {
@@ -347,7 +362,7 @@ func (g *GitHub) BranchRuns(ctx context.Context, slug, branch string, runs, jobs
 			CreatedAt  string `json:"created_at"`
 		} `json:"workflow_runs"`
 	}
-	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/actions/runs?branch=%s&per_page=%d", slug, url.QueryEscape(branch), runs), nil, &listed); err != nil {
+	if err := g.do(ctx, "GET", fmt.Sprintf("%s?%s&per_page=%d", path, query, runs), nil, &listed); err != nil {
 		return nil, err
 	}
 	out := []BranchRun{}

@@ -49,6 +49,10 @@ type WorkflowRun struct {
 	CreatedAt string
 	// The attempt: 0 reads as 1; a re-run is the same id, attempt n+1.
 	Attempt int
+	// Its workflow's file name (nightly.yml) and id, which
+	// /actions/workflows/{workflow}/runs lists it by.
+	Workflow   string
+	WorkflowID int64
 }
 
 // WorkflowJob is one job of a WorkflowRun; FailedSteps' steps failed, the
@@ -92,10 +96,11 @@ func (s *Server) runJSON(id int64, run WorkflowRun) map[string]any {
 }
 
 // workflowRuns lists the repository's runs as GitHub does: newest first
-// (by CreatedAt, then id), of one branch when branch is given, a page of
-// per_page.
+// (by CreatedAt, then id), of one branch when branch is given, of one
+// event when event is, of one workflow (file name or id) under
+// /actions/workflows/{workflow}/runs, a page of per_page.
 func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
-	branch := r.URL.Query().Get("branch")
+	branch, event, workflow := r.URL.Query().Get("branch"), r.URL.Query().Get("event"), r.PathValue("workflow")
 	type listed struct {
 		id  int64
 		run WorkflowRun
@@ -103,7 +108,8 @@ func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
 	var all []listed
 	s.mu.Lock()
 	for id, run := range s.WorkflowRuns {
-		if branch == "" || run.Branch == branch {
+		if (branch == "" || run.Branch == branch) && (event == "" || run.Event == event) &&
+			(workflow == "" || run.Workflow == workflow || strconv.FormatInt(run.WorkflowID, 10) == workflow) {
 			all = append(all, listed{id, run})
 		}
 	}

@@ -8,9 +8,47 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// CallError is Complete failing to get an answer from the proxy: no answer
+// at all (Status 0: the transport, a timeout, the caller's deadline), or
+// one with a status other than 2xx. Its text is the error's as before.
+type CallError struct {
+	msg string
+	// The proxy's HTTP status; 0 when it gave none, or when its body could
+	// not be read, whatever its status (a 2xx included).
+	Status int
+	// The proxy's Retry-After, when it gave one in seconds.
+	RetryAfter time.Duration
+	err        error
+}
+
+func (e *CallError) Error() string { return e.msg }
+func (e *CallError) Unwrap() error { return e.err }
+
+// Transient is whether asking again later may succeed: no answer, a 5xx,
+// or a 429. Any other status, and every error that is not a CallError (an
+// answer that does not parse, no model, judgements off), is not.
+func Transient(err error) (bool, time.Duration) {
+	var c *CallError
+	if !errors.As(err, &c) {
+		return false, 0
+	}
+	if c.Status == 0 || c.Status >= 500 || c.Status == http.StatusTooManyRequests {
+		return true, c.RetryAfter
+	}
+	return false, 0
+}
+
+func retryAfter(h http.Header) time.Duration {
+	if s, err := strconv.ParseInt(strings.TrimSpace(h.Get("Retry-After")), 10, 64); err == nil && s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	return 0
+}
 
 // CompleteTimeout bounds one Complete call when its Call names none.
 const CompleteTimeout = 60 * time.Second
@@ -102,11 +140,11 @@ func (c Client) Complete(ctx context.Context, call Call) (Completion, error) {
 		out.LatencyMs = time.Since(start).Milliseconds()
 		if ctx.Err() == context.DeadlineExceeded {
 			if context.Cause(ctx) == callTimeout {
-				return out, fmt.Errorf("no answer from the LLM proxy in %s", timeout)
+				return out, &CallError{msg: fmt.Sprintf("no answer from the LLM proxy in %s", timeout)}
 			}
-			return out, errors.New("no answer from the LLM proxy before the caller's deadline")
+			return out, &CallError{msg: "no answer from the LLM proxy before the caller's deadline"}
 		}
-		return out, fmt.Errorf("no answer from the LLM proxy: %w", err)
+		return out, &CallError{msg: "no answer from the LLM proxy: " + err.Error(), err: err}
 	}
 	res, err := c.http().Do(req)
 	if err != nil {
@@ -121,7 +159,8 @@ func (c Client) Complete(ctx context.Context, call Call) (Completion, error) {
 	status := res.StatusCode
 	out.Status = &status
 	if status/100 != 2 {
-		return out, fmt.Errorf("the LLM proxy answered %d: %s", status, errorMessage(raw))
+		return out, &CallError{msg: fmt.Sprintf("the LLM proxy answered %d: %s", status, errorMessage(raw)),
+			Status: status, RetryAfter: retryAfter(res.Header)}
 	}
 	var parsed struct {
 		Model   string `json:"model"`

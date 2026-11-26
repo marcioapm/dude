@@ -27,3 +27,7 @@
 {{- define "refusals/tools/github/run-link-is-another-repository"}}%s is a run of another repository than %s: leave repo out, or name the link's{{end}}
 
 {{- define "refusals/tools/github/branch-at-most-255-characters"}}branch: at most 255 characters{{end}}
+
+{{- define "refusals/tools/github/branch-runs-workflow"}}workflow is a workflow's file name ending .yml or .yaml (like nightly.yml, no folders), at most %d characters, or its numeric id{{end}}
+
+{{- define "refusals/tools/github/branch-runs-event"}}event is a GitHub Actions event name in lowercase letters and _ (like schedule, push, pull_request, workflow_dispatch), at most %d characters{{end}}

@@ -49,6 +49,9 @@ type StartChildInput struct {
 	BaseRefs map[string]string
 }
 
+// SessionChildProfile is the only profile a session's agent may start.
+const SessionChildProfile = "investigator"
+
 func childPhase(profile string) (string, error) {
 	phase := PhaseForPromptRole(profile)
 	if phase == "" {
@@ -83,6 +86,10 @@ func StartChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput) (string, e
 }
 
 func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLocks func()) (string, error) {
+	// A session names its one profile in the refusal, whatever it asked for.
+	if in.Parent.Kind == ChildParentSession && in.Profile != SessionChildProfile {
+		return "", refuseText(rChildSessionProfile)
+	}
 	phase, err := childPhase(in.Profile)
 	if err != nil {
 		return "", err
@@ -198,7 +205,8 @@ func startChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, betweenLoc
 }
 
 func startSessionChildTx(ctx context.Context, tx pgx.Tx, in StartChildInput, phase string, betweenProbe func()) (string, error) {
-	if in.Profile != "investigator" || in.Capabilities.PublishCode {
+	// startChildTx refused any other profile.
+	if in.Capabilities.PublishCode {
 		return "", refuseText(rChildSessionProfile)
 	}
 	ref := in.Parent.Run

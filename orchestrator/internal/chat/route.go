@@ -9,12 +9,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 	"github.com/marciomartins/dude/orchestrator/internal/ids"
+	"github.com/marciomartins/dude/orchestrator/internal/llm"
 )
 
 // JoinedVia is session.joined's via for someone added to a group session
@@ -562,10 +564,24 @@ func channelProjectsReply(where string, added, removed, now []string) string {
 	return change + ". " + state + ". dude takes it as a hint; what a message says still decides."
 }
 
+// routingRetries is how many times a delivery's routing call that failed
+// transiently (llm.Transient) is asked again, by retrying the delivery,
+// before the failure is kept: fewer than MaxAttempts, as someone is
+// waiting. It counts the delivery's attempts, so an earlier attempt that
+// failed elsewhere leaves fewer.
+const routingRetries = 2
+
+// routingRetryAfterMax caps the proxy's Retry-After on a routing retry:
+// someone waits on the mention, so a long one is not honoured in full.
+const routingRetryAfterMax = 30 * time.Second
+
 // decision is the routing judgement for the delivery: the one kept on it,
 // or asked now and kept before anything acts on it. A model that gave no
-// usable answer is kept as failed; only the delivery's own deadline
-// leaves nothing kept, for a retry to ask again.
+// usable answer is kept as failed. Nothing is kept, for a retry to ask
+// again, when the delivery's own deadline passed, or when the call failed
+// transiently and the delivery has routing retries left: nothing before
+// the decision posts or records anything a retry repeats (the 👀 is
+// claimed once per delivery; the rest are reads).
 func (s *Service) decision(ctx context.Context, d claimed, org string, p Provider, who asker, m Mention, conv ConversationInfo,
 	members []string, h heard, w World) (storedDecision, error) {
 	var kept storedDecision
@@ -583,6 +599,9 @@ func (s *Service) decision(ctx context.Context, d claimed, org string, p Provide
 	res, err := s.ask(ctx, org, p, who, m, conv, h, w)
 	if ctx.Err() != nil {
 		return kept, ctx.Err()
+	}
+	if transient, after := llm.Transient(err); transient && d.Attempts < routingRetries && d.Attempts+1 < MaxAttempts {
+		return kept, Transient(err, min(after, routingRetryAfterMax))
 	}
 	kept = storedDecision{CallID: res.CallID, Rounds: rounds, Conv: &conv, Members: members, Thread: &h.Thread}
 	if len(h.Channel.Messages) > 0 {
@@ -756,7 +775,7 @@ func (s *Service) bound(ctx context.Context, org string, p Provider, inst Instal
 		}
 		r.Route, r.Reasoning, r.ResultKind, r.ResultID = RouteResume, "the thread is bound to this session", "session", b.Session
 		r.Confidence = nil
-		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m, r.ConversationName); err != nil {
+		if err := sendToSession(ctx, tx, org, b.Session, who, m.Text, quoted, m, r.ConversationName, p.Info().Name); err != nil {
 			return err
 		}
 		r.effects = []effect{replyEffect(Reply{Text: "Added to your session " + quoteTitle(title),
@@ -869,8 +888,12 @@ func writerFrom(who asker, m Mention, conversationName string) delivery.Writer {
 // quoted before it, written into the session as theirs: queued for its
 // live agent, or starting one. They join an organisation session by
 // writing. The caller holds the session's lock.
-func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted string, m Mention, conversationName string) error {
+func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who asker, text, quoted string, m Mention, conversationName, chatName string) error {
 	if err := delivery.JoinByWriting(ctx, tx, delivery.SessionRef(org, session), who.Person, "person", who.Person); err != nil {
+		return err
+	}
+	said, err := delivery.SaidIn(ctx, tx, session, who.Name, chatName)
+	if err != nil {
 		return err
 	}
 	full := text
@@ -879,17 +902,17 @@ func sendToSession(ctx context.Context, tx pgx.Tx, org, session string, who aske
 	}
 	wr := writerFrom(who, m, conversationName)
 	var runID string
-	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` AND NOT `+delivery.Ending+`
+	err = tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+delivery.LiveBrainstorm+` AND NOT `+delivery.Ending+`
 		FOR NO KEY UPDATE`, session).Scan(&runID)
 	if db.IsNotFound(err) {
-		_, _, err = delivery.StartBrainstorm(ctx, tx, org, session, wr, delivery.Opening{Message: delivery.Attributed(who.Name, full), Shown: text})
+		_, _, err = delivery.StartBrainstorm(ctx, tx, org, session, wr, delivery.Opening{Message: delivery.Attributed(said, full), Shown: text})
 		return err
 	}
 	if err != nil {
 		return err
 	}
 	ref := delivery.RunRef{Org: org, SessionID: session, RunID: runID}
-	directive, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: delivery.Attributed(who.Name, full), Scope: "run"})
+	directive, _, err := delivery.QueueDirective(ctx, tx, ref, delivery.Directive{Text: delivery.Attributed(said, full), Scope: "run"})
 	if err != nil {
 		return err
 	}

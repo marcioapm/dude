@@ -113,7 +113,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 		var reply Reply
 		switch d.Route {
 		case RouteBrainstorm:
-			id, title, err := s.startSession(ctx, tx, org, who, r, h, d, origin, members)
+			id, title, err := s.startSession(ctx, tx, org, who, r, h, d, origin, members, p.Info().Name)
 			if err != nil {
 				return err
 			}
@@ -132,7 +132,7 @@ func (s *Service) makeOnce(ctx context.Context, org string, p Provider, inst Ins
 			if err := tx.QueryRow(ctx, `SELECT COALESCE(title, '') FROM sessions WHERE id = $1`, d.Session).Scan(&title); err != nil {
 				return err
 			}
-			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, h.quote(), m, r.ConversationName); err != nil {
+			if err := sendToSession(ctx, tx, org, d.Session, who, m.Text, h.quote(), m, r.ConversationName, p.Info().Name); err != nil {
 				return err
 			}
 			r.ResultKind, r.ResultID = "session", d.Session
@@ -261,7 +261,7 @@ func withThread(goal string, h heard) string {
 // conversation; a DM's private), its first message the mention with the
 // thread (or the channel before it) quoted.
 func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who asker, r *request, h heard,
-	d Decision, origin Origin, members []string) (string, string, error) {
+	d Decision, origin Origin, members []string, chatName string) (string, string, error) {
 	id := ids.New(ids.Session)
 	title := clip(trimmed(d.Title), 120)
 	if title == "" {
@@ -319,8 +319,12 @@ func (s *Service) startSession(ctx context.Context, tx pgx.Tx, org string, who a
 		full = q + "\n\n" + full
 	}
 	wr := writerFrom(who, r.Mention, r.ConversationName)
+	said, err := delivery.SaidIn(ctx, tx, id, who.Name, chatName)
+	if err != nil {
+		return "", "", err
+	}
 	if _, _, err := delivery.StartBrainstorm(ctx, tx, org, id, wr,
-		delivery.Opening{Message: delivery.Attributed(who.Name, full), Shown: r.Mention.Text}); err != nil {
+		delivery.Opening{Message: delivery.Attributed(said, full), Shown: r.Mention.Text}); err != nil {
 		return "", "", err
 	}
 	return id, title, nil

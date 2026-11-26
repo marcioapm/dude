@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -193,5 +195,62 @@ func TestACompletionNeedsTheProxy(t *testing.T) {
 	_, err := Client{}.Complete(context.Background(), Call{Model: "m"})
 	if err == nil || !strings.Contains(err.Error(), "DUDE_LLM_URL") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// wrapped stands in for a caller's wrapper (judge's redactedError): it
+// changes the text and still unwraps.
+type wrapped struct{ err error }
+
+func (w wrapped) Error() string { return "redacted" }
+func (w wrapped) Unwrap() error { return w.err }
+
+// Transient is a 5xx, a 429 (with its Retry-After), no answer, a transport
+// error or a timeout; any other status or error is not, wrapped or not.
+func TestTransientIsNoAnswerA5xxOrA429(t *testing.T) {
+	f := &fakeProxy{}
+	for _, tc := range []struct {
+		status    int
+		after     string
+		transient bool
+		wait      time.Duration
+	}{
+		{500, "", true, 0}, {502, "", true, 0}, {503, "7", true, 7 * time.Second}, {504, "", true, 0},
+		{429, "3", true, 3 * time.Second}, {429, "", true, 0},
+		{400, "", false, 0}, {401, "", false, 0}, {403, "", false, 0}, {404, "5", false, 0}, {422, "", false, 0},
+	} {
+		srv := f.serve(t, func(w http.ResponseWriter, _ seen) {
+			if tc.after != "" {
+				w.Header().Set("Retry-After", tc.after)
+			}
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(`{"error":"no"}`))
+		})
+		_, err := Client{URL: srv.URL, Key: "k"}.Complete(context.Background(), Call{Model: "m"})
+		for _, e := range []error{err, wrapped{err}, fmt.Errorf("routing: %w", wrapped{err})} {
+			if got, wait := Transient(e); got != tc.transient || wait != tc.wait {
+				t.Errorf("%d: Transient(%v) = %v %s, want %v %s", tc.status, e, got, wait, tc.transient, tc.wait)
+			}
+		}
+	}
+	// No answer: the proxy unreachable, and a call that timed out.
+	_, err := Client{URL: "http://127.0.0.1:1", Key: "k"}.Complete(context.Background(), Call{Model: "m"})
+	if got, _ := Transient(wrapped{err}); !got || !strings.HasPrefix(err.Error(), "no answer from the LLM proxy") {
+		t.Errorf("transport error %v: transient %v", err, got)
+	}
+	release := make(chan struct{})
+	slow := f.serve(t, func(w http.ResponseWriter, _ seen) { <-release })
+	t.Cleanup(func() { close(release) })
+	_, err = Client{URL: slow.URL, Key: "k"}.Complete(context.Background(), Call{Model: "m", Timeout: 50 * time.Millisecond})
+	if got, _ := Transient(err); !got || err.Error() != "no answer from the LLM proxy in 50ms" {
+		t.Errorf("timeout %v: transient %v", err, got)
+	}
+	// An answer that is not one, and errors that are not the proxy's.
+	empty := f.serve(t, func(w http.ResponseWriter, _ seen) { _, _ = w.Write([]byte(`{"choices":[]}`)) })
+	_, err = Client{URL: empty.URL, Key: "k"}.Complete(context.Background(), Call{Model: "m"})
+	for _, e := range []error{err, errors.New("the LLM proxy answered 502: as text only"), context.DeadlineExceeded, nil} {
+		if got, _ := Transient(e); got {
+			t.Errorf("Transient(%v) = true", e)
+		}
 	}
 }

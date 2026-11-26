@@ -39,13 +39,18 @@ type model struct {
 	// The next call's refusal: its status and body, once.
 	refuseStatus int
 	refuseBody   string
+	// The refusal's Retry-After header, when not "".
+	refuseRetryAfter string
 }
 
 // refuseNext makes the next call answer status with body, as a proxy refusing it.
-func (m *model) refuseNext(status int, body string) {
+func (m *model) refuseNext(status int, body string) { m.refuseNextAfter(status, "", body) }
+
+// refuseNextAfter is refuseNext with a Retry-After header.
+func (m *model) refuseNextAfter(status int, retryAfter, body string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.refuseStatus, m.refuseBody = status, body
+	m.refuseStatus, m.refuseBody, m.refuseRetryAfter = status, body, retryAfter
 }
 
 func (m *model) queue(answers ...string) {
@@ -74,7 +79,10 @@ func (m *model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.sent = append(m.sent, body)
 	if status, refusal := m.refuseStatus, m.refuseBody; status != 0 {
-		m.refuseStatus, m.refuseBody = 0, ""
+		if m.refuseRetryAfter != "" {
+			w.Header().Set("Retry-After", m.refuseRetryAfter)
+		}
+		m.refuseStatus, m.refuseBody, m.refuseRetryAfter = 0, "", ""
 		m.mu.Unlock()
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(refusal))
@@ -375,7 +383,7 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 	}
 	// The agent's briefing quotes the thread, the non-member marked.
 	if b := w.one(`SELECT prompt FROM runs WHERE session_id = $1`, session); !strings.Contains(b, "Zed Outside (not in dude): CSV export") ||
-		!strings.Contains(b, "Márcia: Earlier in the thread") {
+		!strings.Contains(b, "## The first message\n\nMárcia (in the Slack thread): Earlier in the thread") {
 		t.Fatalf("briefing %s", b)
 	}
 	// The model was told the thread and the projects, on the Judgements tier, and it was recorded as a judgement.
@@ -415,7 +423,8 @@ func TestChatPublicMentionMakesAnOrganisationSessionAndBindsTheThread(t *testing
 		t.Fatal("Eli did not join the organisation session")
 	}
 	if d := w.one(`SELECT text FROM directives WHERE run_id = (SELECT id FROM runs WHERE session_id = $1) ORDER BY created_at DESC LIMIT 1`,
-		session); !strings.Contains(d, "Zed Outside (not in dude): it also fails for 20") || !strings.Contains(d, "here's another case") {
+		session); !strings.Contains(d, "Zed Outside (not in dude): it also fails for 20") ||
+		!strings.HasPrefix(d, "Eli (in the Slack thread): ") || !strings.Contains(d, "here's another case") {
 		t.Fatalf("directive %s", d)
 	}
 	if !strings.Contains(lastBot(t, w.fake).Text, "Added to your session “CSV export timeout”") {
@@ -687,6 +696,13 @@ func TestChatFallsBackToABrainstorm(t *testing.T) {
 			}
 			before := len(w.requests())
 			w.mention("Márcia", "C1", "", fmt.Sprintf("case %d", i))
+			if c.answer == "" {
+				// The proxy's 502 for an empty queue is transient: asked twice more before the fallback.
+				for range 2 {
+					w.due()
+					w.sweep()
+				}
+			}
 			got := w.requests()[before:]
 			if len(got) != 1 || got[0].Route != c.route || got[0].AskedRoute != c.asked {
 				t.Fatalf("requests %+v", got)

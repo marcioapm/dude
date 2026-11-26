@@ -1,4 +1,6 @@
-"""Independent brainstorm children publish into their session's existing Files."""
+"""Independent brainstorm children publish into their session's existing Files.
+
+A brainstorm leaves start_agent's profile out: a session starts only investigators."""
 
 import pytest
 from playwright.sync_api import expect
@@ -17,13 +19,15 @@ def test_brainstorm_child_file_and_result_are_member_only(client, owner_dsn, pag
     outsider, outsider_client = _person(client, env, "Outside Research")
     session = client.post("/v1/brainstorms", {"title": "Independent research"}).json()["id"]
     response = client.post(f"/v1/brainstorms/{session}/chat", {
-        "text": "Investigate independently.\n" + _tool("start_agent", {"profile": "investigator", "key": "report"}),
+        "text": "Investigate independently.\n" + _tool("start_agent", {"key": "report"}),
     })
     assert response.status_code in (200, 201), response.text
     parent = response.json()["runId"]
-    child = wait_until(lambda: query(owner_dsn, """SELECT id FROM runs
+    started = wait_until(lambda: query(owner_dsn, """SELECT id, child_profile FROM runs
         WHERE session_id=%s AND source_kind='session' AND parent_run_id=%s""", (session, parent)),
-        timeout=60, message="the brainstorm never started an investigator")[0]["id"]
+        timeout=60, message="the brainstorm never started an investigator")[0]
+    assert started["child_profile"] == "investigator"
+    child = started["id"]
     artifact = wait_until(lambda: next((a for a in client.get("/v1/artifacts", params={"sessionId": session}).json()["artifacts"]
         if a["runId"] == child), None), timeout=90, message="the child's file never reached Files")
     assert artifact["name"] == "REPORT.md"

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/chat"
 )
@@ -210,6 +211,118 @@ func TestChatAFailedRequestKeepsItsCauseForRequests(t *testing.T) {
 		w.mention("Eli", "C1", "", "file: stream it")
 		if got := w.requests(); len(got) != 1 || got[0].Route != "task" || got[0].Failure != "" || got[0].MadeRoute != "" {
 			t.Fatalf("requests %+v", got)
+		}
+	})
+}
+
+// A routing call the proxy failed transiently (a 5xx, a 429, no answer) is
+// not kept: the delivery is tried again and the model asked again, at most
+// twice more, before it falls back to a brainstorm as any failed call does.
+// Nothing before the decision is posted twice; each call is recorded.
+func TestChatRoutingRetriesATransientModelFailure(t *testing.T) {
+	routingCalls := func(w *world) string {
+		return w.one(`SELECT count(*)::text FROM model_calls WHERE organization_id = $1 AND asker = 'chat.route'`, w.org)
+	}
+	t.Run("a 502, then an answer: routed", func(t *testing.T) {
+		w := setup(t)
+		w.model.refuseNext(http.StatusBadGateway, `{"error":{"message":"upstream down"}}`)
+		w.model.queue(answer(map[string]any{"route": "task", "confidence": 0.9, "project": "BIL", "title": "Stream it", "goal": "g"}))
+		ts, ev := w.receive("Eli", "C1", "", "file: stream it")
+		w.once()
+		if e := w.event(ev); e.Processed || e.Decision || e.Attempts != 1 || !strings.Contains(e.LastError, "the LLM proxy answered 502") {
+			t.Fatalf("after the 502: %+v", e)
+		}
+		if got := w.requests(); len(got) != 0 || len(w.fake.BotMessages()) != 0 {
+			t.Fatalf("acted on a transient failure: %+v %+v", got, w.fake.BotMessages())
+		}
+		adds, marks := w.fake.Calls("reactions.add"), w.fake.Reactions("C1", ts)
+		w.due()
+		w.once()
+		// The retry adds only the outcome's mark (✅ in place of the 👀), never the 👀 again.
+		if n, now := w.fake.Calls("reactions.add"), w.fake.Reactions("C1", ts); n != adds+1 || strings.Join(now, ",") != "white_check_mark" {
+			t.Fatalf("the retry added %d reactions (%v, %v before it)", n-adds, now, marks)
+		}
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "task" || got[0].Failure != "" || got[0].ResultKind != "task" {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 2 || routingCalls(w) != "2" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
+		}
+		if n := len(w.fake.BotMessages()); n != 1 {
+			t.Fatalf("%d replies", n)
+		}
+		if n := w.fake.Calls("reactions.add"); strings.Count(strings.Join(w.fake.Reactions("C1", ts), ","), "eyes") > 1 || n == 0 {
+			t.Fatalf("reactions %v (%d adds)", w.fake.Reactions("C1", ts), n)
+		}
+	})
+	t.Run("three 502s: a brainstorm, once", func(t *testing.T) {
+		w := setup(t)
+		// An empty queue answers 502.
+		ts, ev := w.receive("Eli", "C1", "", "why are exports slow?")
+		w.once()
+		adds := w.fake.Calls("reactions.add")
+		for range chat.MaxAttempts {
+			w.due()
+			w.once()
+		}
+		if n := w.fake.Calls("reactions.add"); n != adds {
+			t.Fatalf("the retries added reactions: %d adds, %d before them", n, adds)
+		}
+		if e := w.event(ev); !e.Processed || !e.Decision || e.Attempts != 2 {
+			t.Fatalf("event %+v", e)
+		}
+		got := w.requests()
+		if len(got) != 1 || got[0].Route != "failed" || got[0].ResultKind != "session" || got[0].MadeRoute != "brainstorm" ||
+			!strings.HasPrefix(got[0].Failure, "the routing call failed: the LLM proxy answered 502") {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 3 || routingCalls(w) != "3" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
+		}
+		if n := w.one(`SELECT count(*)::text FROM sessions WHERE organization_id = $1`, w.org); n != "1" {
+			t.Fatalf("%s sessions", n)
+		}
+		if n := len(w.fake.BotMessages()); n != 1 {
+			t.Fatalf("%d replies", n)
+		}
+		if r := w.fake.Reactions("C1", ts); strings.Count(strings.Join(r, ","), "eyes") > 1 {
+			t.Fatalf("reactions %v", r)
+		}
+	})
+	// The proxy's Retry-After is honoured up to 30 s, when longer than the
+	// first backoff (5 s): someone waits on the mention.
+	for _, c := range []struct {
+		retryAfter string
+		want       time.Duration
+	}{{"120", 30 * time.Second}, {"8", 8 * time.Second}} {
+		t.Run("a 429 with Retry-After "+c.retryAfter, func(t *testing.T) {
+			w := setup(t)
+			w.model.refuseNextAfter(http.StatusTooManyRequests, c.retryAfter, `{"error":{"message":"slow down"}}`)
+			_, ev := w.receive("Eli", "C1", "", "file: stream it")
+			w.once()
+			e := w.event(ev)
+			if e.Processed || e.Decision || e.Attempts != 1 {
+				t.Fatalf("after the 429: %+v", e)
+			}
+			if e.NextIn > c.want || e.NextIn < c.want-2*time.Second {
+				t.Fatalf("due again in %v, want about %v", e.NextIn, c.want)
+			}
+		})
+	}
+	t.Run("a 400: a brainstorm at once, asked once", func(t *testing.T) {
+		w := setup(t)
+		w.model.refuseNext(http.StatusBadRequest, `{"error":{"message":"invalid model"}}`)
+		_, ev := w.receive("Eli", "C1", "", "why are exports slow?")
+		w.once()
+		if e := w.event(ev); !e.Processed || !e.Decision || e.Attempts != 0 {
+			t.Fatalf("event %+v", e)
+		}
+		if got := w.requests(); len(got) != 1 || got[0].Route != "failed" || got[0].MadeRoute != "brainstorm" {
+			t.Fatalf("requests %+v", got)
+		}
+		if w.model.calls() != 1 || routingCalls(w) != "1" {
+			t.Fatalf("model asked %d times, %s recorded", w.model.calls(), routingCalls(w))
 		}
 	})
 }

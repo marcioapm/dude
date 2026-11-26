@@ -319,6 +319,13 @@ func TestChatTheAskersClickLinksTheProjectWithItsRepositories(t *testing.T) {
 	if w.woken == woken {
 		t.Fatal("the session's agent was not woken for its new repositories")
 	}
+	// Its live agent is told the project is linked; its checkouts are told
+	// by the resume that clones them.
+	if note := w.one(`SELECT string_agg(d.text, '|') FROM directives d JOIN runs r ON r.id = d.run_id
+		WHERE r.session_id = $1 AND d.text LIKE 'A member linked%'`, session); !strings.HasPrefix(note, "A member linked ABS (Acme Backend) with repositories:") ||
+		strings.Contains(note, "ABS/api") {
+		t.Fatalf("the agent's note %q", note)
+	}
 	// Requests records it on the request.
 	if l := w.one(`SELECT string_agg(l.project_key || ' by ' || pe.name, ',') FROM chat_request_links l JOIN people pe ON pe.id = l.linked_by
 		JOIN chat_requests r ON r.id = l.request_id WHERE r.result_id = $1`, session); l != "ABS by Eli" {

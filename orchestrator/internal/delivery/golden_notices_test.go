@@ -384,3 +384,31 @@ func TestGoldenPreviewReady(t *testing.T) {
 	// One newline at its end: no blank line for git to flag.
 	golden(t, "notices-preview-ready", strings.TrimSuffix(b.String(), "\n"))
 }
+
+// What a session's live agent is told when a member changes its links
+// (TellLinksChanged).
+func TestGoldenLinksChanged(t *testing.T) {
+	type project struct {
+		Key, Name string
+		Repos     bool
+	}
+	type repo struct{ Key, Name string }
+	type data struct {
+		Added, Removed []project
+		Repos          []repo
+	}
+	text := func(d data) string { return strings.TrimSpace(render(linksChangedTmpl, d)) }
+	lines := [][2]string{
+		{"added-bare", text(data{Added: []project{{"ABS", "Acme Backend", false}}})},
+		{"added-with-repositories", text(data{Added: []project{{"ABS", "Acme Backend", true}}})},
+		{"removed", text(data{Removed: []project{{"BIL", "Billing", false}}})},
+		{"repository-removed", text(data{Repos: []repo{{"ABS", "web"}}})},
+		{"all", text(data{Added: []project{{"ABS", "Acme Backend", false}, {"SDK", "Client SDK", true}},
+			Removed: []project{{"BIL", "Billing", false}}, Repos: []repo{{"OPS", "infra"}}})},
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("## " + l[0] + "\n\n" + l[1] + "\n\n")
+	}
+	golden(t, "notices-links-changed", strings.TrimSuffix(b.String(), "\n"))
+}

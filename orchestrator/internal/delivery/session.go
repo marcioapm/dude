@@ -143,6 +143,24 @@ func Attributed(name, text string) string {
 	return name + ": " + text
 }
 
+// SaidIn is name as Attributed takes it in a session started from a chat
+// thread, labelled with where the message was typed: "(in dude)" for
+// chatName "", else "(in the <chatName> thread)". A session with no chat
+// origin has nothing to tell apart: name as it is.
+func SaidIn(ctx context.Context, tx pgx.Tx, sessionID, name, chatName string) (string, error) {
+	provider, err := originProvider(ctx, tx, sessionID, "")
+	if err != nil || provider == "" {
+		return name, err
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Someone"
+	}
+	if chatName == "" {
+		return name + " (in dude)", nil
+	}
+	return name + " (in the " + chatName + " thread)", nil
+}
+
 // PersonName is a person's name, or "" for none.
 func PersonName(ctx context.Context, tx pgx.Tx, personID string) (string, error) {
 	if personID == "" {
@@ -614,11 +632,12 @@ func WithdrawQuestionsTo(ctx context.Context, tx pgx.Tx, org, sessionID, person 
 }
 
 // TellBrainstorm queues a line from dude for the session's live agent,
-// resuming it if it is parked; nothing when none is live.
+// resuming it if it is parked; nothing when none is live, or when it is
+// Ending (nothing more is queued for one).
 func TellBrainstorm(ctx context.Context, tx pgx.Tx, org, sessionID, text string) error {
 	var runID string
-	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` FOR NO KEY UPDATE`,
-		sessionID).Scan(&runID)
+	err := tx.QueryRow(ctx, `SELECT r.id FROM runs r WHERE r.session_id = $1 AND `+LiveBrainstorm+` AND `+Ending+` IS NOT TRUE
+		FOR NO KEY UPDATE`, sessionID).Scan(&runID)
 	if db.IsNotFound(err) {
 		return nil
 	}

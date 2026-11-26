@@ -29,7 +29,7 @@ func TestBranchRunsAreNewestFirstWithTheirJobs(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "release/1 x", 3, 2)
+	runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "release/1 x", RunsFilter{}, 3, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestBranchRunsKeepTheRunsWhenOneRunsJobsFail(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "main", 5, 5)
+			runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "main", RunsFilter{}, 5, 5)
 			if tc.fails {
 				if err == nil {
 					t.Fatalf("read %+v, want it refused", runs)
@@ -99,7 +99,7 @@ func TestBranchRunsOfNoBranchAreRefusedUnasked(t *testing.T) {
 	asked := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { asked++ }))
 	defer srv.Close()
-	if _, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "", 3, 2); err == nil || asked != 0 {
+	if _, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(context.Background(), "acme/api", "", RunsFilter{Event: "schedule"}, 3, 2); err == nil || asked != 0 {
 		t.Fatalf("err %v, %d requests", err, asked)
 	}
 }
@@ -127,11 +127,55 @@ func TestBranchRunsStopWhenTheCallEnds(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(ctx, "acme/api", "main", 5, 5)
+	runs, err := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL}).BranchRuns(ctx, "acme/api", "main", RunsFilter{}, 5, 5)
 	if err == nil || runs != nil {
 		t.Fatalf("read %+v (%v), want the read stopped", runs, err)
 	}
 	if len(asked) != 2 {
 		t.Fatalf("asked %v, want nothing past run 2's jobs", asked)
+	}
+}
+
+// A workflow lists that workflow's runs (its file name or id escaped as one
+// path segment); an event narrows either listing by its trigger.
+func TestBranchRunsNarrowedByWorkflowAndEvent(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.RequestURI())
+		switch r.URL.Path {
+		case "/repos/acme/api/actions/runs", "/repos/acme/api/actions/workflows/nightly_warehouse_snowflake.yml/runs",
+			"/repos/acme/api/actions/workflows/42/runs", "/repos/acme/api/actions/workflows/a b.yml/runs",
+			"/repos/acme/api/actions/workflows/a/b.yml/runs":
+			fmt.Fprint(w, `{"total_count":1,"workflow_runs":[
+				{"id":7,"name":"Nightly","head_sha":"a","event":"schedule","status":"completed","conclusion":"failure","created_at":"2026-11-26T03:00:00Z"}]}`)
+		case "/repos/acme/api/actions/runs/7/jobs":
+			fmt.Fprint(w, `{"total_count":1,"jobs":[{"id":71,"name":"warehouse","status":"completed","conclusion":"failure"}]}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	g := NewGitHub(Credential{Auth: "pat", Secret: "x", APIBaseURL: srv.URL})
+	for _, tc := range []struct {
+		filter RunsFilter
+		want   string
+	}{
+		{RunsFilter{Workflow: "nightly_warehouse_snowflake.yml", Event: "schedule"},
+			"/repos/acme/api/actions/workflows/nightly_warehouse_snowflake.yml/runs?branch=main&event=schedule&per_page=3"},
+		{RunsFilter{Workflow: "42"}, "/repos/acme/api/actions/workflows/42/runs?branch=main&per_page=3"},
+		{RunsFilter{Event: "workflow_dispatch"}, "/repos/acme/api/actions/runs?branch=main&event=workflow_dispatch&per_page=3"},
+		{RunsFilter{Workflow: "a b.yml", Event: "a&b=c"}, "/repos/acme/api/actions/workflows/a%20b.yml/runs?branch=main&event=a%26b%3Dc&per_page=3"},
+		// A slash stays inside the workflow's path segment.
+		{RunsFilter{Workflow: "a/b.yml"}, "/repos/acme/api/actions/workflows/a%2Fb.yml/runs?branch=main&per_page=3"},
+		{RunsFilter{}, "/repos/acme/api/actions/runs?branch=main&per_page=3"},
+	} {
+		asked = nil
+		runs, err := g.BranchRuns(context.Background(), "acme/api", "main", tc.filter, 3, 2)
+		if err != nil || len(runs) != 1 || runs[0].Event != "schedule" || len(runs[0].Jobs) != 1 {
+			t.Fatalf("%+v: %+v %v", tc.filter, runs, err)
+		}
+		if len(asked) != 2 || asked[0] != tc.want {
+			t.Errorf("%+v: asked %v, want %s first", tc.filter, asked, tc.want)
+		}
 	}
 }

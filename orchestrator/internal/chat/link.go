@@ -215,12 +215,22 @@ func (s *Service) linkProject(ctx context.Context, d claimed, p Provider, in Int
 			refusal, linked = fmt.Sprintf(delivery.MChatLinkLinkedAlready, c.Key), false
 			return errLinkRefused
 		}
+		if err := delivery.LockLiveBrainstorm(ctx, tx, offer.Session); err != nil {
+			return err
+		}
+		before, err := delivery.LinkSetOf(ctx, tx, offer.Session)
+		if err != nil {
+			return err
+		}
 		links, err := delivery.AddSessionProject(ctx, tx, d.Org, offer.Session, c.ID)
 		if refused := (delivery.LinkRefusal{}); errors.As(err, &refused) {
 			refusal = linkRefusal(refused, c, p.Info().Name)
 			return errLinkRefused
 		}
 		if err != nil {
+			return err
+		}
+		if err := delivery.TellLinksChanged(ctx, tx, d.Org, offer.Session, before); err != nil {
 			return err
 		}
 		if err := delivery.SessionEvent(ctx, tx, delivery.SessionRef(d.Org, offer.Session), delivery.EvSessionLinked, "person", who.Person,
