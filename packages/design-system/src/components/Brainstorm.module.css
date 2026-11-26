@@ -188,10 +188,10 @@
   color: var(--ds-color-text-secondary);
   white-space: nowrap;
 }
+/* File sits right after the words that say what it files (or why it cannot), not at the card's far edge. */
 .cardFoot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--ds-space-12);
 }
 
