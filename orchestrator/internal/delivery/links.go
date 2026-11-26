@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -88,6 +89,118 @@ func SetSessionLinks(ctx context.Context, tx pgx.Tx, org, sessionID string, link
 	_, err = tx.Exec(ctx, `INSERT INTO session_repositories (session_id, repository_id, organization_id)
 		SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING`, sessionID, db.NonNil(repoIDs), org)
 	return err
+}
+
+// LinkSet is a session's linked projects and repositories at one moment,
+// as LinkSetOf reads it: the before of TellLinksChanged.
+type LinkSet struct {
+	Projects []string
+	// Repository id to its project id.
+	Repos map[string]string
+}
+
+// LinkSetOf reads the session's linked set.
+func LinkSetOf(ctx context.Context, tx pgx.Tx, sessionID string) (LinkSet, error) {
+	rows, err := tx.Query(ctx, `SELECT project_id FROM session_projects WHERE session_id = $1 ORDER BY project_id`, sessionID)
+	if err != nil {
+		return LinkSet{}, err
+	}
+	projects, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return LinkSet{}, err
+	}
+	rows, err = tx.Query(ctx, `SELECT r.id, r.project_id FROM session_repositories sr JOIN repositories r ON r.id = sr.repository_id
+		WHERE sr.session_id = $1`, sessionID)
+	if err != nil {
+		return LinkSet{}, err
+	}
+	pairs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Project string }])
+	if err != nil {
+		return LinkSet{}, err
+	}
+	set := LinkSet{Projects: projects, Repos: map[string]string{}}
+	for _, p := range pairs {
+		set.Repos[p.ID] = p.Project
+	}
+	return set, nil
+}
+
+var linksChangedTmpl = mustTemplate("notices/links-changed")
+
+// TellLinksChanged tells the session's live agent what a link write
+// changed since before (LinkSetOf, read in the same transaction under the
+// session's lock): each project added, each project removed, and each
+// repository removed while its project stays. A repository added is not
+// named: the resume that checks it out tells it (notices/linked). Nothing
+// of a project hidden from the session's chat is named. With no live
+// agent, or nothing to tell, nothing is queued: a fresh agent's briefing
+// lists what is linked.
+func TellLinksChanged(ctx context.Context, tx pgx.Tx, org, sessionID string, before LinkSet) error {
+	after, err := LinkSetOf(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	fence, err := FenceOf(ctx, tx, sessionID, "")
+	if err != nil {
+		return err
+	}
+	type project struct {
+		ID, Key, Name string
+		Repos         bool
+	}
+	type repo struct{ Key, Name string }
+	var data struct {
+		Added, Removed []project
+		Repos          []repo
+	}
+	var ids []string
+	for _, p := range after.Projects {
+		if !slices.Contains(before.Projects, p) && !fence.Hides(p) {
+			ids = append(ids, p)
+		}
+	}
+	for _, p := range before.Projects {
+		if !slices.Contains(after.Projects, p) && !fence.Hides(p) {
+			ids = append(ids, p)
+		}
+	}
+	var repoIDs []string
+	for r, p := range before.Repos {
+		if _, kept := after.Repos[r]; !kept && slices.Contains(after.Projects, p) && slices.Contains(before.Projects, p) && !fence.Hides(p) {
+			repoIDs = append(repoIDs, r)
+		}
+	}
+	if len(ids) == 0 && len(repoIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, key_prefix, name FROM projects WHERE id = ANY($1) ORDER BY key_prefix, id`, db.NonNil(ids))
+	if err != nil {
+		return err
+	}
+	named, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Key, Name string }])
+	if err != nil {
+		return err
+	}
+	for _, n := range named {
+		if slices.Contains(after.Projects, n.ID) {
+			withRepos := false
+			for _, p := range after.Repos {
+				withRepos = withRepos || p == n.ID
+			}
+			data.Added = append(data.Added, project{n.ID, n.Key, n.Name, withRepos})
+		} else {
+			data.Removed = append(data.Removed, project{n.ID, n.Key, n.Name, false})
+		}
+	}
+	rows, err = tx.Query(ctx, `SELECT p.key_prefix, r.name FROM repositories r JOIN projects p ON p.id = r.project_id
+		WHERE r.id = ANY($1) ORDER BY p.key_prefix, r.name`, db.NonNil(repoIDs))
+	if err != nil {
+		return err
+	}
+	if data.Repos, err = pgx.CollectRows(rows, pgx.RowToStructByPos[repo]); err != nil {
+		return err
+	}
+	return TellBrainstorm(ctx, tx, org, sessionID, strings.TrimSpace(render(linksChangedTmpl, data)))
 }
 
 // AddSessionProject links one more project, with every repository of it,
