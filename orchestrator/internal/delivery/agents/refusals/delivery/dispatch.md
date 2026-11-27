@@ -31,3 +31,5 @@
 {{- define "refusals/delivery/dispatch/no-trigger"}}%s at %s has no workflow_dispatch trigger (it runs on %s): GitHub cannot start it by hand. Nothing was dispatched{{end}}
 
 {{- define "refusals/delivery/dispatch/needs-person"}}%s runs on %s, but %s: it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId{{end}}
+
+{{- define "refusals/delivery/dispatch/free-spent"}}%s runs on %s, but %s: it is not CI this change already runs, and this task's %d runs without asking are spent, so the person decides this one. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId{{end}}

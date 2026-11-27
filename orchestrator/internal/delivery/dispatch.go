@@ -130,7 +130,10 @@ type DispatchCheck struct {
 	inputs           map[string]string
 	questionID       string
 	questionOK       bool
-	gh               *forge.GitHub
+	// freeLeft: on the task's own branch, without a question, and the
+	// task has FreeDispatches left.
+	freeLeft bool
+	gh       *forge.GitHub
 	// id is the dispatch's row, reserved (dispatching) by the check.
 	id string
 }
@@ -241,9 +244,31 @@ func CheckDispatchTx(ctx context.Context, tx pgx.Tx, ref RunRef, gh *forge.GitHu
 		if err := checkDispatchQuestionTx(ctx, tx, &c); err != nil {
 			return c, err
 		}
+	} else if c.taskBranch != "" && c.branch == c.taskBranch {
+		// Counted under the task's Chat lock (liveConductorOr), and this
+		// call's row reserved under it too: two calls at once cannot both
+		// take the last free dispatch.
+		var used int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_dispatches d WHERE d.task_id = $1 AND `+freeDispatchCounted,
+			ref.TaskID).Scan(&used); err != nil {
+			return c, err
+		}
+		c.freeLeft = used < FreeDispatches
 	}
 	return c, reserveDispatchTx(ctx, tx, &c)
 }
+
+// FreeDispatches is how many workflows a task's conductor may dispatch on
+// the task's own branch without the person's answer, besides free CI.
+const FreeDispatches = 3
+
+// freeDispatchCounted (SQL, over workflow_dispatches d): d spent one of the
+// task's FreeDispatches: not authorized by a person's answer, not refused
+// by GitHub (nothing ran), and not recorded as free CI. A row still being
+// dispatched has no record yet, and counts until it has one.
+const freeDispatchCounted = `d.question_id IS NULL AND d.state <> '` + DispatchFailed + `'
+	AND NOT EXISTS (SELECT 1 FROM events e WHERE e.run_id = d.dispatched_by AND e.event_type = '` + EvWorkflowDispatched + `'
+		AND e.payload->>'dispatchId' = d.id AND COALESCE((e.payload->>'ci')::boolean, false))`
 
 // reserveDispatchTx inserts c's row, dispatching. Another call that
 // reserved the same answer and committed first makes the insert wait for
@@ -308,7 +333,8 @@ func checkDispatchQuestionTx(ctx context.Context, tx pgx.Tx, c *DispatchCheck) e
 
 // DoDispatch reads the workflow's on: at the ref, refuses one with no
 // workflow_dispatch, and one that is not free CI without the person's
-// approving answer, then dispatches it (Posted). An error with Posted
+// approving answer or, on the task's own branch, one of its
+// FreeDispatches left, then dispatches it (Posted). An error with Posted
 // false: nothing was sent; with Posted set, the POST failed (EndDispatchTx
 // tells which way).
 // Free CI is a workflow that runs for the task's own change (a push to its
@@ -334,13 +360,14 @@ func DoDispatch(ctx context.Context, c DispatchCheck) (DispatchDone, error) {
 	}
 	done.CI = c.taskBranch != "" && c.branch == c.taskBranch && c.base != "" &&
 		forge.WorkflowRunsForChange(raw, c.taskBranch, c.base) == forge.ActionsExpected
-	if !done.CI && !c.questionOK {
-		why := fmt.Sprintf("it does not run for this task's own change (a push to %s, a pull request into %s), or dude cannot tell from its filters", c.taskBranch, c.base)
-		if c.taskBranch == "" || c.branch != c.taskBranch {
-			why = fmt.Sprintf("%s is not this task's branch", c.branch)
-		}
+	if !done.CI && !c.questionOK && !c.freeLeft {
 		approve := DispatchApproval(c.workflow, c.branch)
-		return done, refusef(rDispatchNeedsPerson, c.workflow, strings.Join(triggers, ", "), why, approve, DispatchDecline, approve)
+		if c.taskBranch == "" || c.branch != c.taskBranch {
+			why := fmt.Sprintf("%s is not this task's branch", c.branch)
+			return done, refusef(rDispatchNeedsPerson, c.workflow, strings.Join(triggers, ", "), why, approve, DispatchDecline, approve)
+		}
+		why := fmt.Sprintf("it does not run for this task's own change (a push to %s, a pull request into %s), or dude cannot tell from its filters", c.taskBranch, c.base)
+		return done, refusef(rDispatchFreeSpent, c.workflow, strings.Join(triggers, ", "), why, FreeDispatches, approve, DispatchDecline, approve)
 	}
 	done.Posted = true
 	run, err := c.gh.DispatchWorkflow(ctx, c.slug, c.workflow, c.branch, inputsAny(c.inputs))

@@ -274,6 +274,7 @@ const (
 	rDispatchQuestionSpent                  = "%s already authorized dispatch %s: one answer authorizes one dispatch. Ask the person again (ask_person)"
 	rDispatchQuestionReserved               = "%s is being used by another run_workflow call at the same time: one answer authorizes one dispatch, and that call sends it. Nothing was dispatched by this one"
 	rDispatchMaybe                          = "dude sent the dispatch of %s on %s, and GitHub's answer failed (%s): dude may or may not have started it, and does not send it again. It is listed as %s, unknown: %s before dispatching it again"
+	rDispatchFreeSpent                      = "%s runs on %s, but %s: it is not CI this change already runs, and this task's %d runs without asking are spent, so the person decides this one. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId"
 	rWaitNotDispatchOfThisTask              = "%s is not a workflow this task dispatched (run_workflow's dispatchId; pull_requests lists them under dispatches)"
 	rWaitDispatchFailed                     = "GitHub refused dispatch %s (%s): nothing ran, so there is nothing to wait for. Fix what GitHub refused, then dispatch it again (run_workflow)"
 	rWaitAfterUnreadable                    = "after %q is not a duration: give one such as 45m or 2h"

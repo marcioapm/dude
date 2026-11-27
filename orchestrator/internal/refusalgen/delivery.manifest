@@ -270,6 +270,7 @@ rDispatchQuestionNotApproved            refusals/delivery/dispatch/question-not-
 rDispatchQuestionSpent                  refusals/delivery/dispatch/question-spent
 rDispatchQuestionReserved               refusals/delivery/dispatch/question-reserved
 rDispatchMaybe                          refusals/delivery/dispatch/maybe
+rDispatchFreeSpent                      refusals/delivery/dispatch/free-spent
 rWaitNotDispatchOfThisTask             refusals/delivery/waits/not-dispatch-of-this-task
 rWaitDispatchFailed                    refusals/delivery/waits/dispatch-failed
 rWaitAfterUnreadable                   refusals/delivery/waits/after-unreadable
