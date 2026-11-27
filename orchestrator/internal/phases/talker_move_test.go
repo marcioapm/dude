@@ -2,11 +2,13 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
@@ -198,9 +200,11 @@ func TestAParkedTalkerLuxPlacedAgainHearsWhatIsQueued(t *testing.T) {
 }
 
 // A conductor parked in that state is woken as any parked conductor: the
-// wake's note is queued (WakeConductorTx) and reaches the agent.
+// wake's note is queued (WakeConductorTx) and reaches the agent, once,
+// without lux being asked to stop it again. The state is reached as lux
+// and the agent report it, the exit before lux's preemption.
 func TestAWakeReachesAParkedConductorLuxPlacedAgain(t *testing.T) {
-	w, fake := parkedTalkerLuxMoved(t, "conductor", "none")
+	w, fake := parkedTalkerPreempted(t, "conductor")
 	w.s.WakeWindow = time.Second
 	mustOwner(t, w, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
 		VALUES ('cwk_1', $1, $2, 'decision', 'k', 'the owner waived it', now() - interval '1 minute')`, w.run.Org, w.run.TaskID)
@@ -213,5 +217,148 @@ func TestAWakeReachesAParkedConductorLuxPlacedAgain(t *testing.T) {
 	w.sweeps(2)
 	if got := fake.said(); len(got) != 1 || !strings.Contains(got[0], "the owner waived it") {
 		t.Errorf("sent %q, want the wake's note", got)
+	}
+	if n := fake.stopsAsked(); n != 1 {
+		t.Errorf("lux asked to stop %d times, want only the park's", n)
+	}
+}
+
+func (f *sentLux) stopsAsked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stops
+}
+
+// luxSays is lux's state event for placement epoch, applied and saved in
+// one batch as the follower does.
+func (w *harnessWorld) luxSays(epoch int, state, reason string) {
+	w.t.Helper()
+	ctx := context.Background()
+	raw, _ := json.Marshal(map[string]any{"state": state, "reason": reason})
+	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
+		if err := w.tr.apply(ctx, tx, w.s, lux.Frame{Kind: "lux", Epoch: epoch, EventType: "state", EventData: raw}); err != nil {
+			return err
+		}
+		return w.tr.save(ctx, tx, "", 0)
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// parkedTalkerPreempted is a talker whose agent exited before lux said it
+// was preempting the host: the exit is a failed turn, parked by the sweep
+// (lux asked to stop, once); then lux reports the preemption (stopping,
+// stopped), resumes the Run itself in epoch 2 and runs it.
+func parkedTalkerPreempted(t *testing.T, role string) (*harnessWorld, *sentLux) {
+	w := talkerWorld(t, role)
+	mustOwner(t, w, `UPDATE runs SET agent_session_epoch = 1 WHERE id = $1`, w.run.ID)
+	w.restart()
+	fake := &sentLux{eventsLux: &eventsLux{run: &lux.Run{ID: "lrun_1", State: "running", Epoch: 1,
+		Placements: []lux.Placement{{Epoch: 1, State: "running"}}}}}
+	w.s.Lux = fake
+	t.Cleanup(w.s.Stop)
+	w.turnCutOff()
+	w.sweeps(1)
+	if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = $2`, w.run.ID, w.run.parkKind()); n != 1 {
+		t.Fatalf("the failed turn did not park the talker")
+	}
+	w.luxSays(1, "stopping", "preempt")
+	w.luxSays(1, "stopped", "preempt")
+	w.luxSays(2, "resuming", "auto-resume after preempt")
+	w.luxSays(2, "running", "")
+	fake.mu.Lock()
+	fake.run = &lux.Run{ID: "lrun_1", State: "running", Epoch: 2,
+		Placements: []lux.Placement{{Epoch: 1, State: "exited"}, {Epoch: 2, State: "running"}}}
+	fake.mu.Unlock()
+	return w, fake
+}
+
+// A talker re-placed that way, a run.failed behind it, hears exactly what
+// was queued for it, in order: its failed turn adds no resume nudge.
+func TestAPreemptedParkedTalkerHearsOnlyWhatIsQueued(t *testing.T) {
+	for _, role := range []string{"conductor", "brainstorm"} {
+		t.Run(role, func(t *testing.T) {
+			w, fake := parkedTalkerPreempted(t, role)
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'`, w.run.ID); n != 1 {
+				t.Fatalf("%d run.failed, want 1", n)
+			}
+			w.queue("first")
+			w.queue("second")
+			w.sweeps(2)
+			if got := fake.said(); len(got) != 2 || got[0] != "first" || got[1] != "second" {
+				t.Errorf("sent %q, want first and second only", got)
+			}
+			if n := fake.stopsAsked(); n != 1 {
+				t.Errorf("lux asked to stop %d times, want only the park's", n)
+			}
+		})
+	}
+}
+
+// A talker lux moved and carried on whose agent then exits on its own in
+// the next placement, lux stopping nothing, has failed its turn: parked
+// and counted, not held as part of the earlier move.
+func TestATalkersOwnExitAfterAMoveIsAFailure(t *testing.T) {
+	for _, role := range []string{"conductor", "brainstorm"} {
+		t.Run(role, func(t *testing.T) {
+			w := talkerWorld(t, role)
+			fake := &sentLux{eventsLux: &eventsLux{}}
+			w.s.Lux = fake
+			t.Cleanup(w.s.Stop)
+			w.luxSays(1, "stopping", "preempt")
+			w.turnCutOff()
+			w.luxSays(1, "stopped", "preempt")
+			w.luxSays(2, "resuming", "auto-resume after preempt")
+			w.luxSays(2, "running", "")
+			w.sweeps(1)
+			if got := fake.said(); len(got) != 1 || got[0] != movedNudge {
+				t.Fatalf("sent %q, want the carry-on", got)
+			}
+			w.feedAt(2, processExited)
+			if n := w.count(`SELECT count(*) FROM events WHERE run_id = $1 AND event_type = 'run.failed'
+				AND payload->'failedTurns' = '1' AND payload->'kept' = 'true'`, w.run.ID); n != 1 {
+				t.Errorf("%d run.failed kept with failedTurns 1, want 1", n)
+			}
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND control = 'pause_graceful' AND dude_pause = $2
+				AND (harness_state->>'failedTurns')::int = 1 AND NOT harness_state ? 'brokenTurn'`, w.run.ID, w.run.parkKind()); n != 1 {
+				t.Errorf("not parked for its failed turn, counted once")
+			}
+		})
+	}
+}
+
+// A talker parked on a person (an open question) is not taken up live for
+// a note: it stays paused, sent nothing. Once the question is answered it
+// resumes as any person-parked Run does: lux is asked to stop the
+// placement it put up itself, and the resume follows the stop.
+func TestAPersonParkedTalkerLuxPlacedAgainIsNotTakenUpLive(t *testing.T) {
+	for _, answered := range []bool{false, true} {
+		name := "question open"
+		if answered {
+			name = "question answered"
+		}
+		t.Run(name, func(t *testing.T) {
+			w, fake := parkedTalkerLuxMoved(t, "conductor", "none")
+			status := "open"
+			if answered {
+				status = "answered"
+			}
+			mustOwner(t, w, `UPDATE runs SET dude_pause = 'person' WHERE id = $1`, w.run.ID)
+			mustOwner(t, w, `INSERT INTO questions (id, organization_id, task_id, run_id, prompt, status)
+				VALUES ('q_'||$1, $1, $2, $3, 'Sorted?', $4)`, w.run.Org, w.run.TaskID, w.run.ID, status)
+			w.queue("a note")
+			w.sweeps(2)
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = 'person'`, w.run.ID); n != 1 {
+				t.Errorf("taken up live")
+			}
+			if got := fake.said(); len(got) != 0 {
+				t.Errorf("sent %q", got)
+			}
+			// This fake's placement never records the stop, so each sweep
+			// asks again.
+			if n := fake.stopsAsked(); answered != (n >= 1) {
+				t.Errorf("lux asked to stop %d times; answered %v", n, answered)
+			}
+		})
 	}
 }
