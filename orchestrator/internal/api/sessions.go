@@ -466,27 +466,19 @@ type waitingProposal struct {
 	ProposedAt any      `json:"proposedAt"`
 }
 
-// waitingSessionsSQL (SQL, $1 the person): the sessions whose cards may
-// wait on them, by the rule the questions query applies to an unaddressed
-// question (session_role owner or chat): theirs, joined and not archived,
-// and, for an admin, those its admins own (session_role says owner). An
-// organisation session they never joined is not theirs to be waited on.
-const waitingSessionsSQL = `SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL
-	UNION SELECT a.id FROM sessions a WHERE a.owned_by_admins AND session_role(a.id, $1) = 'owner'
-	  AND NOT EXISTS (SELECT 1 FROM session_people ap WHERE ap.session_id = a.id AND ap.person_id = $1 AND ap.accepted_at IS NOT NULL)`
-
-// waitingProposals is, for person, each session (waitingSessionsSQL, where
-// they can chat) with a card not replaced that still has an unfiled item,
-// kept when cardStatus says some of them are theirs to file: the card's
-// own rule, so the count is the one the session's page shows. Only those
-// cards and their filings are read, for every session at once, and the
-// facts deciding who may file them in one batch: a fixed number of
-// queries, whatever the number of sessions. No images: the list names no
-// item.
+// waitingProposals is, for person, each session with a card that has items
+// they can file, by cardStatus as the session's page decides it, and the
+// card waitingOn picks. The sessions are those an unaddressed question
+// there waits on them in (session_role owner or chat): theirs, joined and
+// not archived, and, for an admin, those its admins own; an organisation
+// session they never joined is not. A fixed number of queries, whatever
+// the number of sessions. No images: the list names no item.
 func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingProposal, error) {
 	rows, err := tx.Query(ctx, `SELECT s.id, s.title, s.role, sp.id, sp.created_at, sp.items FROM (
 			SELECT c.id, c.title, session_role(c.id, $1) AS role FROM sessions c
-			WHERE c.id IN (`+waitingSessionsSQL+`)) s
+			WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL
+				UNION SELECT a.id FROM sessions a WHERE a.owned_by_admins AND session_role(a.id, $1) = 'owner'
+				  AND NOT EXISTS (SELECT 1 FROM session_people ap WHERE ap.session_id = a.id AND ap.person_id = $1 AND ap.accepted_at IS NOT NULL))) s
 		JOIN session_proposals sp ON sp.session_id = s.id
 		WHERE s.role IN ('owner', 'chat') AND NOT (`+replacedCardSQL("sp")+`)
 		  AND EXISTS (SELECT 1 FROM jsonb_array_elements(sp.items) WITH ORDINALITY AS it(item, n)
@@ -556,29 +548,21 @@ func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingP
 // statuses were decided for, with the items they can file: the latest
 // propose card with any, else the latest relation card with any (the
 // web's waitingCard picks the same). Not ok when no card has any.
-func waitingOn(cards []proposalCard) (waitingProposal, bool) {
-	var best *proposalCard
-	for i := range cards {
-		c := &cards[i]
-		can := false
-		for _, st := range c.Status {
-			can = can || st["canFile"] == true
+func waitingOn(cards []proposalCard) (best waitingProposal, ok bool) {
+	bestPropose := false
+	for _, c := range cards {
+		w := waitingProposal{ProposalID: c.ID, ProposedAt: c.CreatedAt, Kinds: []string{}}
+		for n, st := range c.Status {
+			if st["canFile"] == true {
+				w.Count++
+				w.Kinds = append(w.Kinds, c.Items[n].Kind)
+			}
 		}
-		if can && (best == nil || isProposeCard(c.Items) || !isProposeCard(best.Items)) {
-			best = c
-		}
-	}
-	if best == nil {
-		return waitingProposal{}, false
-	}
-	w := waitingProposal{ProposalID: best.ID, ProposedAt: best.CreatedAt, Kinds: []string{}}
-	for n, st := range best.Status {
-		if st["canFile"] == true {
-			w.Count++
-			w.Kinds = append(w.Kinds, best.Items[n].Kind)
+		if propose := isProposeCard(c.Items); w.Count > 0 && (!ok || propose || !bestPropose) {
+			best, ok, bestPropose = w, true, propose
 		}
 	}
-	return w, true
+	return best, ok
 }
 
 // sessionProjectsJSON (SQL, over sessions s): its linked projects, each
@@ -690,9 +674,9 @@ const replacedWhy = "Replaced by a later proposal"
 // A propose card is one with an item that is not a relation; a card of
 // relations only (relate's) is not. Only a propose card replaces, and only
 // an earlier propose card is replaced: a relation card is fileable for as
-// long as it has items, whatever is proposed after it. isProposeCard and
-// proposeCardSQL are the one rule, in Go and in SQL; cards are ordered by
-// (created_at, id), as proposalsFor reads them.
+// long as it has items, whatever is proposed after it. replacedCardSQL
+// says it in SQL; cards are ordered by (created_at, id), as proposalsFor
+// reads them.
 func isProposeCard(items []delivery.ProposalItem) bool {
 	for _, it := range items {
 		if it.Kind != "relation" {
@@ -702,20 +686,18 @@ func isProposeCard(items []delivery.ProposalItem) bool {
 	return false
 }
 
-// proposeCardSQL is isProposeCard over the session_proposals row alias.
-func proposeCardSQL(alias string) string {
-	return `EXISTS (SELECT 1 FROM jsonb_array_elements(` + alias + `.items) AS pk(item) WHERE pk.item->>'kind' IS DISTINCT FROM 'relation')`
-}
-
-// replacedCardSQL (SQL, over the session_proposals row alias): a propose
-// card with a later propose card in its session.
+// replacedCardSQL is replacedCards in SQL, over the session_proposals row
+// alias: a propose card with a later propose card in its session.
 func replacedCardSQL(alias string) string {
-	return proposeCardSQL(alias) + ` AND EXISTS (SELECT 1 FROM session_proposals later WHERE later.session_id = ` + alias + `.session_id
-		AND (later.created_at, later.id) > (` + alias + `.created_at, ` + alias + `.id) AND ` + proposeCardSQL("later") + `)`
+	propose := func(a string) string {
+		return `EXISTS (SELECT 1 FROM jsonb_array_elements(` + a + `.items) AS pk(item) WHERE pk.item->>'kind' IS DISTINCT FROM 'relation')`
+	}
+	return propose(alias) + ` AND EXISTS (SELECT 1 FROM session_proposals later WHERE later.session_id = ` + alias + `.session_id
+		AND (later.created_at, later.id) > (` + alias + `.created_at, ` + alias + `.id) AND ` + propose("later") + `)`
 }
 
 // replacedCards says, of cards in (created_at, id) order, which a later
-// propose card replaced: replacedCardSQL's rule.
+// propose card replaced.
 func replacedCards(cards []proposalCard) []bool {
 	out := make([]bool, len(cards))
 	later := false
