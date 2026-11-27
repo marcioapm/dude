@@ -72,10 +72,12 @@ const idleTurnResets = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e
 // is a writer's (ChatEvent), whatever principal the API saw. A person's
 // answer to its question (question.answered) is a choice, not a
 // conversation, and does not count; nor does a conductor's steer
-// (conductorRunId).
+// (conductorRunId). The directives row does not record its writer, so the
+// writer's event is looked for in the Run's conversation before the
+// delivery (events_run_chat_idx, run_id and cursor < the delivery's).
 var personSaid = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.cursor > $2 AND (
 	e.event_type = '` + EvChatMessage + `' AND ` + personWords("e") + ` AND NOT e.payload ? 'directiveId'
-	OR e.event_type = 'run.directive.delivered' AND EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1
+	OR e.event_type = 'run.directive.delivered' AND EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1 AND p.cursor < e.cursor
 		AND p.event_type IN ('` + EvChatMessage + `', '` + EvRunSteered + `') AND ` + personWords("p") + `
 		AND p.payload->>'directiveId' = e.payload->>'directiveId' AND NOT p.payload ? 'conductorRunId')))`
 
