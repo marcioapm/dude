@@ -121,6 +121,8 @@ func TestGoldenWakeLines(t *testing.T) {
 		{"epic-merge-no-sha", epicMergeLine(epicMerge{TaskKey: "GLD-8", Repo: "api", Base: "main", Number: 14}, epicOverlap{Known: true})},
 		{"voice-quiet", VoiceChangedLine(VoiceQuiet)},
 		{"voice-chatty", VoiceChangedLine(VoiceChatty)},
+		{"idle-turn", idleTurnLine("I'd like one more run with `extra_pytest_args: \"--show-logs\"`.\nMay I start it? " + strings.Repeat("w", 300))},
+		{"idle-turn-notice", IdleTurnNotice()},
 		{"wait-held", renderWaitDigest(waitEval{held: 2, of: 2, waitedAll: true, items: []waitItem{
 			{Kind: "run", Who: "review", RunID: "run_rev", Status: "failed", Ended: true, Error: "lux: the host\nwent away " + strings.Repeat("x", 130), rank: rankBad},
 			{Kind: "pr", PR: "api#12", Head: headA, State: "open", Checks: "failing", Failing: []string{"lint", "unit"}, rank: rankBad},

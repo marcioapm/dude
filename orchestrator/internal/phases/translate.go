@@ -1181,7 +1181,17 @@ func (t *translator) turnDone(ctx context.Context, tx pgx.Tx, s *Syncer, settlin
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
-	return s.event(ctx, tx, t.run, evSessionStopped, ledger.ActorAgent, map[string]any{"reason": "turn_complete"})
+	payload := map[string]any{"reason": "turn_complete"}
+	if t.run.conductor() && t.run.TaskID != "" {
+		// Seen in this transaction: a wait or question the turn opened
+		// holds it.
+		idle, err := delivery.IdleTurnTx(ctx, tx, t.run.ref())
+		if err != nil {
+			return err
+		}
+		maps.Copy(payload, idle)
+	}
+	return s.event(ctx, tx, t.run, evSessionStopped, ledger.ActorAgent, payload)
 }
 
 // settleClone records what became of a repository added at a resume: the

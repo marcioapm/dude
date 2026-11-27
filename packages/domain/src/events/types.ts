@@ -805,7 +805,7 @@ export const EventTypes = {
    * `{ text, reasons, directiveId?, started? }`: reasons are their kinds
    * (decision, escalation, question, steer_read, steer_failed, pr_merged,
    * pr_closed, published, publish_refused, publish_stalled, checkout,
-   * stalled, unblocked, wait, recovered, workflow; safety in older notes); `started` when no conductor was live
+   * stalled, unblocked, wait, recovered, workflow, idle_turn; safety in older notes); `started` when no conductor was live
    * and the note briefed a new one.
    */
   ConductorWoken: "conductor.woken",
