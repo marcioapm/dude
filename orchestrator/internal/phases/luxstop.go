@@ -178,6 +178,12 @@ func (t *translator) decideBroken(ctx context.Context, tx pgx.Tx, s *Syncer, sto
 	return t.failForLux(ctx, tx, s, stop, t.Broken.Error, t.Broken.AgentError)
 }
 
+// movingNow: lux has said it is moving the placement the current turn runs
+// in (a drain, a preemption, a migrate).
+func (t *translator) movingNow() bool {
+	return t.LuxStop != nil && t.LuxStop.Epoch == t.epoch && lux.Moved(t.LuxStop.Reason)
+}
+
 // luxStoppedTurn handles a phase Run's failed turn that is lux's doing:
 // held when its agent's process exited and lux has not said why yet,
 // carried on when lux is moving the Run, failed naming lux's reason
@@ -464,13 +470,14 @@ func (r *phaseRun) scanBroken(raw []byte, secs float64) error {
 // liveAfterMove handles a resumable paused Run that lux placed again itself
 // after a move (replacedByLux): there is no stop of dude's to wait for.
 // A person's resume that only needs the Run running is answered by
-// takeUpLive. A resume that must change the Run (an unsettled machine
-// move's size, an approved repository) cannot be applied to a live
+// takeUpLive, as is a message queued for a parked talker. A resume that
+// must change the Run (an unsettled machine move's size, an approved
+// repository) cannot be applied to a live
 // placement, so lux is asked to stop the Run again and the resume follows
 // once it has stopped. False when it is not such a Run: whilePaused waits
 // for it to stop and resumes it.
 func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
-	if r.talker() || r.LuxRunID == "" {
+	if r.LuxRunID == "" {
 		return false, nil
 	}
 	// Only a Run dude saw lux move is asked about: any other is stopping
@@ -506,7 +513,7 @@ func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
 	if !liveInLux(state) || !replacedByLux(cur, moved) {
 		return false, nil
 	}
-	if r.Control == "resume" && !r.RepoApproved && !r.Moving {
+	if (r.Control == "resume" || r.talkerParked()) && !r.RepoApproved && !r.Moving {
 		taken, changes, err := s.takeUpLive(ctx, r, state)
 		if taken || err != nil || !changes {
 			return taken, err
@@ -529,6 +536,11 @@ func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
 	return false, s.ask(ctx, r, s.Lux.Stop)
 }
 
+// talkerParked is talkerQueued as the sweep's snapshot has it.
+func (r phaseRun) talkerParked() bool {
+	return r.talker() && r.Status == statusPaused && (r.DudePause == "conductor" || r.DudePause == "session") && r.HasDirectives
+}
+
 // placementPoll is how soon a Run lux is placing after a move is looked at
 // again while it waits for a host.
 const placementPoll = 5 * time.Second
@@ -545,8 +557,10 @@ func assigned(cur lux.Run) bool {
 }
 
 // takeUpLive answers a person's resume of a Run lux placed again itself,
-// now in lux state state: it is taken back up as lux has it, its note (or
-// the resume nudge) sent once lux reports it running.
+// or a message queued for a parked talker lux placed again, now in lux
+// state state: it is taken back up as lux has it, its note (or the resume
+// nudge) sent once lux reports it running. A talker's own wait ends with
+// what it is sent, not with its take-up.
 //
 // The sweep's snapshot only nominates the Run. Under its row lock — the one
 // a paused Run's StartMove takes before recording a move — its status,
@@ -567,7 +581,7 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 			return err
 		}
 		var resumable bool
-		if err := tx.QueryRow(ctx, `SELECT r.status = 'paused' AND r.control = 'resume', `+delivery.MoveUnsettled+` OR `+repoApproved+`
+		if err := tx.QueryRow(ctx, `SELECT r.status = 'paused' AND (r.control = 'resume' OR `+talkerQueued+`), `+delivery.MoveUnsettled+` OR `+repoApproved+`
 			FROM runs r WHERE r.id = $1`, r.ID).Scan(&resumable, &changes); err != nil {
 			return err
 		}
@@ -597,7 +611,7 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 				return err
 			}
 		}
-		if r.SourceKind != "" {
+		if r.SourceKind != "" || r.talker() {
 			return nil
 		}
 		return delivery.EndConductorWait(ctx, tx, r.Org, r.ProjectID, r.TaskID)

@@ -2,12 +2,7 @@ package phases
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
-
-	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
 
 // timeLimitWorld is a harnessWorld whose Run is a tester's next round that
@@ -165,16 +160,7 @@ func TestAHeldRoundWithAPausePendingIsReplayedNotPaused(t *testing.T) {
 // timeout, applied and saved in one batch as the follower does.
 func (w *harnessWorld) luxState(state string) {
 	w.t.Helper()
-	ctx := context.Background()
-	raw, _ := json.Marshal(map[string]any{"state": state, "reason": "timeout"})
-	if err := w.s.DB.InOrg(ctx, w.run.Org, func(tx pgx.Tx) error {
-		if err := w.tr.apply(ctx, tx, w.s, lux.Frame{Kind: "lux", Epoch: 1, EventType: "state", EventData: raw}); err != nil {
-			return err
-		}
-		return w.tr.save(ctx, tx, "", 0)
-	}); err != nil {
-		w.t.Fatal(err)
-	}
+	w.luxSays(1, state, "timeout")
 }
 
 // swept is the Run as the sweep takes it up.
