@@ -226,7 +226,7 @@ This delivery is quiet now: decide by your defaults, post in Chat only when some
 
 ## voice-chatty
 
-This delivery is chatty now: talk the work through with the person, and ask the pull-request question when dude wakes you before the pull request.
+This delivery is chatty now: talk the work through with the person; anything they must answer, ask with ask_person. Ask the pull-request question when dude wakes you before the pull request.
 
 ## idle-turn
 
