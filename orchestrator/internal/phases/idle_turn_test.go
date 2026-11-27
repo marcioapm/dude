@@ -142,7 +142,7 @@ func TestAConductorTurnWithSomethingPendingIsNotWoken(t *testing.T) {
 			VALUES ('pr_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 'rep_'||$1, 7, 'https://github.com/o/api/pull/7', 'dude/t', 'main', 'abc', 'T', 'draft')`,
 		"pending wake": `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
 			VALUES ('cwk_'||$1, $1, 'wi_'||$1, 'decision', 'decision:1', 'The checks passed.')`,
-		"decision taken": `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,taken}', '{"action":"open_pr"}') WHERE task_id = 'wi_'||$1`,
+		"decision taken":   `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,taken}', '{"action":"open_pr"}') WHERE task_id = 'wi_'||$1`,
 		"delivery running": `UPDATE workflow_runs SET status = 'running' WHERE task_id = 'wi_'||$1`,
 		"unsent message": `INSERT INTO directives (id, organization_id, task_id, run_id, text)
 			VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'Your checks passed.')`,
