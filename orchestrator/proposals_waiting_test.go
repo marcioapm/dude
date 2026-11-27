@@ -1,16 +1,9 @@
 package orchestrator_test
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/marciomartins/dude/orchestrator/internal/api"
-	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
@@ -132,16 +125,22 @@ func relation(from, to string) []delivery.ProposalItem {
 	return []delivery.ProposalItem{{Kind: "relation", From: from, To: to, RelationKind: "blocks"}}
 }
 
-// statusOf is item n's status on the card, for person, in the session's detail.
-func (s *sessionWorld) statusOf(person, session, card string, n int) map[string]any {
+// statuses is the card's item statuses, for person, in the session's detail.
+func (s *sessionWorld) statuses(person, session, card string) []any {
 	s.t.Helper()
 	for _, c := range s.ok(person, "GET", "/internal/sessions/"+session, nil)["proposals"].([]any) {
 		if m := c.(map[string]any); m["id"] == card {
-			return m["status"].([]any)[n].(map[string]any)
+			return m["status"].([]any)
 		}
 	}
 	s.t.Fatalf("no card %s", card)
 	return nil
+}
+
+// statusOf is item n's status on the card, for person.
+func (s *sessionWorld) statusOf(person, session, card string, n int) map[string]any {
+	s.t.Helper()
+	return s.statuses(person, session, card)[n].(map[string]any)
 }
 
 // Only a propose card replaces, and only an earlier propose card is
@@ -218,17 +217,13 @@ func TestRelationCardsAloneWaitOnYou(t *testing.T) {
 	}
 }
 
-// fileable is how many of the card's items person can file, by the session's detail: what its band counts.
+// fileable is how many of the card's items person can file: what its band counts.
 func (s *sessionWorld) fileable(person, session, card string) int {
 	s.t.Helper()
 	n := 0
-	for _, c := range s.ok(person, "GET", "/internal/sessions/"+session, nil)["proposals"].([]any) {
-		if m := c.(map[string]any); m["id"] == card {
-			for _, st := range m["status"].([]any) {
-				if st.(map[string]any)["canFile"] == true {
-					n++
-				}
-			}
+	for _, st := range s.statuses(person, session, card) {
+		if st.(map[string]any)["canFile"] == true {
+			n++
 		}
 	}
 	return n
@@ -265,40 +260,14 @@ func TestAnAdminOwnedSessionsCardWaitsOnTheAdmin(t *testing.T) {
 // same. No image is read for it.
 func TestTheListReadsWaitingCardsInBoundedQueries(t *testing.T) {
 	s := newSessionWorld(t)
-	counter := &queryCount{}
-	cfg, err := pgxpool.ParseConfig(s.app.Pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.ConnConfig.Tracer = counter
-	pool, err := pgxpool.NewWithConfig(t0(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}}).Handler())
-	t.Cleanup(srv.Close)
+	_, _, get := s.countingServer()
 	list := func(person string) ([]any, int64) {
-		req, _ := http.NewRequest("GET", srv.URL+"/internal/sessions", nil)
-		for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": s.org,
-			"X-Dude-Credential-Kind": "person", "X-Dude-Person": person, "X-Dude-Actor": person} {
-			req.Header.Set(k, v)
-		}
-		before := counter.n.Load()
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		var out map[string]any
-		_ = json.NewDecoder(res.Body).Decode(&out)
-		if res.StatusCode != 200 {
-			t.Fatalf("list: %d %v", res.StatusCode, out)
-		}
+		out, n := get(person, "/internal/sessions")
 		proposals, _ := out["proposals"].([]any)
-		return proposals, counter.n.Load() - before
+		return proposals, n
 	}
 	mine, other := s.keyOf(s.taskIn(s.project, "Daily rollup", s.marcio)), s.keyOf(s.taskIn(s.project, "Weekly rollup", s.marcio))
+	cards := map[string]string{}
 	for i := 0; i < 20; i++ {
 		id := s.session()
 		if i == 0 {
@@ -313,6 +282,7 @@ func TestTheListReadsWaitingCardsInBoundedQueries(t *testing.T) {
 			{Kind: "link_project", Project: "BL", Why: "it reads it"},
 		})
 		s.proposal(id, relation(mine, other))
+		cards[id] = card
 		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": card, "items": []int{0}})
 	}
 	few, one := list(s.ana)
@@ -324,9 +294,14 @@ func TestTheListReadsWaitingCardsInBoundedQueries(t *testing.T) {
 	if twenty != one {
 		t.Errorf("the list ran %d queries with 20 waiting sessions, %d with 1: it must not grow with them", twenty, one)
 	}
-	// Márcio: the second task, his edit and the comment (BL is linked already).
-	if w := many[0].(map[string]any); w["count"] != float64(3) {
-		t.Errorf("Márcio's entry: %v", w)
+	// Márcio, in each session: the second task, his edit and the comment (BL is linked already).
+	seen := map[any]bool{}
+	for i, e := range many {
+		w := e.(map[string]any)
+		if seen[w["sessionId"]] || w["proposalId"] != cards[w["sessionId"].(string)] || w["count"] != float64(3) {
+			t.Errorf("Márcio's entry %d: %v", i, w)
+		}
+		seen[w["sessionId"]] = true
 	}
 	// Ana: the task and the comment; the edit is Márcio's.
 	if w := few[0].(map[string]any); w["count"] != float64(2) {

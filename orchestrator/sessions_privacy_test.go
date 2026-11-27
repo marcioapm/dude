@@ -441,13 +441,10 @@ func (q *queryCount) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.Tra
 }
 func (q *queryCount) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// A session's detail reads its proposal cards — every one it ever had,
-// with each item's filing and who may file it — in a number of queries
-// that does not grow with them: one session with 1 card and one with 40
-// cards of 10 items (half filed, edits and comments among them) cost the
-// same. And it says the same thing, item by item, as before.
-func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
-	s := newSessionWorld(t)
+// countingServer is the API on a pool of its own that counts its queries,
+// and a GET of it as person with the queries that ran.
+func (s *sessionWorld) countingServer() (*httptest.Server, *queryCount, func(person, path string) (map[string]any, int64)) {
+	t := s.t
 	counter := &queryCount{}
 	cfg, err := pgxpool.ParseConfig(s.app.Pool.Config().ConnString())
 	if err != nil {
@@ -461,8 +458,8 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 	t.Cleanup(pool.Close)
 	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}}).Handler())
 	t.Cleanup(srv.Close)
-	get := func(person, session string) (map[string]any, int64) {
-		req, _ := http.NewRequest("GET", srv.URL+"/internal/sessions/"+session, nil)
+	return srv, counter, func(person, path string) (map[string]any, int64) {
+		req, _ := http.NewRequest("GET", srv.URL+path, nil)
 		for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": s.org,
 			"X-Dude-Credential-Kind": "person", "X-Dude-Person": person, "X-Dude-Actor": person} {
 			req.Header.Set(k, v)
@@ -476,9 +473,22 @@ func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		if res.StatusCode != 200 {
-			t.Fatalf("detail: %d %v", res.StatusCode, out)
+			t.Fatalf("GET %s: %d %v", path, res.StatusCode, out)
 		}
 		return out, counter.n.Load() - before
+	}
+}
+
+// A session's detail reads its proposal cards — every one it ever had,
+// with each item's filing and who may file it — in a number of queries
+// that does not grow with them: one session with 1 card and one with 40
+// cards of 10 items (half filed, edits and comments among them) cost the
+// same. And it says the same thing, item by item, as before.
+func TestASessionsDetailReadsItsCardsInBoundedQueries(t *testing.T) {
+	s := newSessionWorld(t)
+	srv, counter, counted := s.countingServer()
+	get := func(person, session string) (map[string]any, int64) {
+		return counted(person, "/internal/sessions/"+session)
 	}
 
 	mine := s.taskIn(s.project, "Daily rollup", s.marcio)
