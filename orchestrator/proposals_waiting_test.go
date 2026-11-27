@@ -200,3 +200,43 @@ func TestRelationCardsAloneWaitOnYou(t *testing.T) {
 		t.Errorf("filing the first relation card: %v", r)
 	}
 }
+
+// fileable is how many of the card's items person can file, by the session's detail: what its band counts.
+func (s *sessionWorld) fileable(person, session, card string) int {
+	s.t.Helper()
+	n := 0
+	for _, c := range s.ok(person, "GET", "/internal/sessions/"+session, nil)["proposals"].([]any) {
+		if m := c.(map[string]any); m["id"] == card {
+			for _, st := range m["status"].([]any) {
+				if st.(map[string]any)["canFile"] == true {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// A session whose owner left is its admins': an admin, who is not in it,
+// is waited on by its card as its page says (the same count as the band),
+// as an unaddressed question there waits on them; a member who is not in
+// it is not.
+func TestAnAdminOwnedSessionsCardWaitsOnTheAdmin(t *testing.T) {
+	s := newSessionWorld(t)
+	id := s.session()
+	card := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "task", Project: "BL", Title: "Meter runs", Goal: "Count experiment runs per org per day"},
+		{Kind: "task", Project: "BL", Title: "Dedupe runs", Goal: "The meter's 24h key is not enough for retries"},
+	})
+	s.ownerLeaves(id)
+	band := s.fileable(s.admin, id, card)
+	if band != 2 {
+		t.Fatalf("the admin's band counts %d, want 2", band)
+	}
+	if w := s.waiting(s.admin, id); w == nil || w["proposalId"] != card || w["count"] != float64(band) {
+		t.Errorf("the admin's entry: %v, want card %s with %d", w, card, band)
+	}
+	if w := s.waiting(s.joao, id); w != nil {
+		t.Errorf("a member not in it, no admin: %v", w)
+	}
+}

@@ -466,14 +466,23 @@ type waitingProposal struct {
 	ProposedAt any      `json:"proposedAt"`
 }
 
-// waitingProposals is, for person, each session (theirs, not archived,
-// where they can chat) with a card not replaced that still has an unfiled
+// waitingSessionsSQL (SQL, $1 the person): the sessions whose cards may
+// wait on them, by the rule the questions query applies to an unaddressed
+// question (session_role owner or chat): theirs, joined and not archived,
+// and, for an admin, those its admins own (session_role says owner). An
+// organisation session they never joined is not theirs to be waited on.
+const waitingSessionsSQL = `SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL
+	UNION SELECT a.id FROM sessions a WHERE a.owned_by_admins AND session_role(a.id, $1) = 'owner'
+	  AND NOT EXISTS (SELECT 1 FROM session_people ap WHERE ap.session_id = a.id AND ap.person_id = $1 AND ap.accepted_at IS NOT NULL)`
+
+// waitingProposals is, for person, each session (waitingSessionsSQL, where
+// they can chat) with a card not replaced that still has an unfiled
 // item, kept when proposalsFor says some of them are theirs to file: the
 // card's own rule, so the count is the one the session's page shows.
 func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingProposal, error) {
 	rows, err := tx.Query(ctx, `SELECT s.id, s.title, s.role FROM (
 			SELECT c.id, c.title, session_role(c.id, $1) AS role FROM sessions c
-			WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL)) s
+			WHERE c.id IN (`+waitingSessionsSQL+`)) s
 		WHERE s.role IN ('owner', 'chat')
 		  AND EXISTS (SELECT 1 FROM session_proposals sp, jsonb_array_elements(sp.items) WITH ORDINALITY AS it(item, n)
 			WHERE sp.session_id = s.id AND NOT (`+replacedCardSQL("sp")+`)
