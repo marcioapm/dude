@@ -497,9 +497,7 @@ func (t *translator) luxEvent(ctx context.Context, tx pgx.Tx, s *Syncer, f lux.F
 			}
 			return t.ended(ctx, tx, s, state, str("reason"), stage, f.Epoch)
 		}
-		if !t.run.talker() {
-			return t.stateSeen(ctx, tx, s, state, str("reason"), f.Epoch)
-		}
+		return t.stateSeen(ctx, tx, s, state, str("reason"), f.Epoch)
 	case evLuxDiskExceeded:
 		var d struct{ UsedBytes, LimitBytes int64 }
 		_ = json.Unmarshal(f.EventData, &d)
@@ -1420,7 +1418,10 @@ func (t *translator) turnFailed(ctx context.Context, tx pgx.Tx, s *Syncer, agent
 		return err
 	}
 	reason := turnFailure(agentErr, tier, model, produced)
-	if !t.run.talker() {
+	// A talker's turn is lux's only when lux is moving its placement: any
+	// other stop, or an exit lux has not explained, is parked below as the
+	// agent's failure.
+	if !t.run.talker() || t.movingNow() {
 		if held, err := t.luxStoppedTurn(ctx, tx, s, agentErr, reason); held || err != nil {
 			return err
 		}

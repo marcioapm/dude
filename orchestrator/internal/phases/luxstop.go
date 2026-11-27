@@ -178,6 +178,12 @@ func (t *translator) decideBroken(ctx context.Context, tx pgx.Tx, s *Syncer, sto
 	return t.failForLux(ctx, tx, s, stop, t.Broken.Error, t.Broken.AgentError)
 }
 
+// movingNow: lux has said it is moving the placement the current turn runs
+// in (a drain, a preemption, a migrate).
+func (t *translator) movingNow() bool {
+	return t.LuxStop != nil && t.LuxStop.Epoch == t.epoch && lux.Moved(t.LuxStop.Reason)
+}
+
 // luxStoppedTurn handles a phase Run's failed turn that is lux's doing:
 // held when its agent's process exited and lux has not said why yet,
 // carried on when lux is moving the Run, failed naming lux's reason
