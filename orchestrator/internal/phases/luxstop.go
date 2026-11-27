@@ -470,9 +470,9 @@ func (r *phaseRun) scanBroken(raw []byte, secs float64) error {
 // liveAfterMove handles a resumable paused Run that lux placed again itself
 // after a move (replacedByLux): there is no stop of dude's to wait for.
 // A person's resume that only needs the Run running is answered by
-// takeUpLive, as is a parked talker's queued message, which resumes it as
-// any message to a parked talker does. A resume that must change the Run (an unsettled machine
-// move's size, an approved repository) cannot be applied to a live
+// takeUpLive, as is a message queued for a parked talker. A resume that
+// must change the Run (an unsettled machine move's size, an approved
+// repository) cannot be applied to a live
 // placement, so lux is asked to stop the Run again and the resume follows
 // once it has stopped. False when it is not such a Run: whilePaused waits
 // for it to stop and resumes it.
@@ -536,8 +536,7 @@ func (s *Syncer) liveAfterMove(ctx context.Context, r phaseRun) (bool, error) {
 	return false, s.ask(ctx, r, s.Lux.Stop)
 }
 
-// talkerParked: a talker parked between turns (its warm period's end, a
-// failed turn) that something queued for is due to be resumed (resumable).
+// talkerParked is talkerQueued as the sweep's snapshot has it.
 func (r phaseRun) talkerParked() bool {
 	return r.talker() && r.Status == statusPaused && (r.DudePause == "conductor" || r.DudePause == "session") && r.HasDirectives
 }
@@ -582,8 +581,7 @@ func (s *Syncer) takeUpLive(ctx context.Context, r phaseRun, state string) (take
 			return err
 		}
 		var resumable bool
-		if err := tx.QueryRow(ctx, `SELECT r.status = 'paused' AND (r.control = 'resume'
-				OR r.dude_pause IN ('conductor', 'session') AND `+unsentDirective+`), `+delivery.MoveUnsettled+` OR `+repoApproved+`
+		if err := tx.QueryRow(ctx, `SELECT r.status = 'paused' AND (r.control = 'resume' OR `+talkerQueued+`), `+delivery.MoveUnsettled+` OR `+repoApproved+`
 			FROM runs r WHERE r.id = $1`, r.ID).Scan(&resumable, &changes); err != nil {
 			return err
 		}

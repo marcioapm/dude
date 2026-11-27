@@ -511,7 +511,12 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
 	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
 	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + delivery.MoveUnsettled + `)
-	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
+	OR ` + talkerQueued + `))`
+
+// talkerQueued (SQL, over runs r): a talker parked between turns (its warm
+// period's end, a failed turn) has something queued for it, so is due to be
+// resumed. talkerParked is its reading of the sweep's snapshot.
+const talkerQueued = `(r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)`
 
 // unsentDirective (SQL, over runs r): something is queued for the agent
 // that lux does not have yet, and is not held for an answer (HeldBack).
