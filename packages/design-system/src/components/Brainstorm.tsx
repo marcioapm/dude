@@ -265,8 +265,8 @@ export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: b
 }
 
 /** "2 tasks, 1 edit": what the person looking has to file on the card, by kind. */
-export function toFileWords(items: ReadonlyArray<Pick<ProposalCardItem, "kind" | "canFile" | "filed" | "replaced">>, readOnly?: boolean): string {
-  return proposalSummary(yoursToFile(items as ReadonlyArray<ProposalCardItem>, readOnly).map((i) => i.kind));
+export function toFileWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): string {
+  return proposalSummary(yoursToFile(items, readOnly).map((i) => i.kind));
 }
 
 export interface ProposalWaitingProps extends HTMLAttributes<HTMLElement> {

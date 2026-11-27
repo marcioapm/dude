@@ -15,7 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { firstName, type NavProject } from "@dude/design-system";
 import {
   AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, ProposalWaiting, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, StatusMark, ToolUsage, proposalSummary, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation, toFileWords,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, StatusMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation, toFileWords,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type AttachmentInfo, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
@@ -342,7 +342,7 @@ export function SessionScreen({ client, sessionId, proposal: asked, projects, on
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
-  const waiting = reader ? null : waitingCard(detail.proposals ?? []);
+  const waiting = waitingCard(detail.proposals ?? [], reader, linkedKeys, you.id);
   // The card asked for (a link, Review and file) is held in view, else the one waiting on you; a question waiting on you comes first.
   const held = asked && detail.proposals?.some((p) => p.id === asked) ? asked : waiting?.id ?? null;
   const shared = session.people.filter((m) => m.accepted).length > 1;
@@ -685,21 +685,18 @@ export const proposalSelector = (id: string) => `[data-proposal="${CSS.escape(id
 
 /**
  * The card waiting on the person looking, if any: the latest proposed
- * card (one with an item that is not a relation) with items the API says
- * they can file, else the latest card of relations with any (a reader's
- * card files nothing), with what they are in words ("2 tasks", "1 task,
- * 1 edit"). The list's proposals entry picks the same card.
+ * card (one with an item that is not a relation) with items yours to file
+ * (`toFileWords`, the card's band), else the latest card of relations with
+ * any. The list's proposals entry picks the same card.
  */
-export function waitingCard(proposals: ReadonlyArray<Proposal>): { id: string; words: string } | null {
+function waitingCard(proposals: ReadonlyArray<Proposal>, readOnly: boolean, linked: ReadonlyMap<string, { key: string; name: string }>,
+  you: string): { id: string; words: string } | null {
   let relations: { id: string; words: string } | null = null;
   for (const p of [...proposals].reverse()) {
-    const kinds = p.items.flatMap((item, i) => {
-      const st = p.status[i];
-      return st?.canFile && !st.filed && st.blockedBy !== "replaced" ? [item.kind] : [];
-    });
-    if (kinds.length === 0) continue;
-    if (p.items.some((item) => item.kind !== "relation")) return { id: p.id, words: proposalSummary(kinds) };
-    relations ??= { id: p.id, words: proposalSummary(kinds) };
+    const words = toFileWords(p.items.map((item, i) => cardItem(item, p.status[i] ?? {}, linked, new Set(), you)), readOnly);
+    if (!words) continue;
+    if (p.items.some((item) => item.kind !== "relation")) return { id: p.id, words };
+    relations ??= { id: p.id, words };
   }
   return relations;
 }
