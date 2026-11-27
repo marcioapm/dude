@@ -114,7 +114,7 @@ func TestAConductorTurnWithSomethingPendingIsNotWoken(t *testing.T) {
 		"question on the task": `INSERT INTO questions (id, organization_id, task_id, prompt, options, addressee)
 			VALUES ('q_'||$1, $1, 'wi_'||$1, 'Which one?', '["A","B"]', 'person')`,
 		"escalation": `UPDATE workflow_runs SET state = state || '{"escalation":{"reason":"review_rounds_exhausted"}}' WHERE task_id = 'wi_'||$1`,
-		"phase run": `UPDATE runs SET status = 'running', phase = 'implement' WHERE id = 'other_'||$1`,
+		"phase run":  `UPDATE runs SET status = 'running', phase = 'implement' WHERE id = 'other_'||$1`,
 		"dispatch": `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state)
 			VALUES ('wfd_'||$1, $1, 'wi_'||$1, (SELECT id FROM repositories WHERE organization_id = $1 LIMIT 1), 'ci.yml', 'b', 'bound')`,
 	} {

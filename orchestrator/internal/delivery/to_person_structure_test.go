@@ -40,8 +40,9 @@ var toPersonAllowed = map[string]string{
 // toPersonReaders name "awaiting_input" or EvQuestionAsked only to read
 // them, in a shape isRead does not know. Each says why; keep it short.
 var toPersonReaders = map[string]string{
-	"delivery/replay.go:replayTypes":  "the event types the replay reads and renders",
-	"delivery/relations.go:stateWord": "a blocker's state in words, keyed by task status",
+	"delivery/replay.go:replayTypes":       "the event types the replay reads and renders",
+	"delivery/relations.go:stateWord":      "a blocker's state in words, keyed by task status",
+	"delivery/idle_turn.go:idleTurnResets": "a conductor's question since its last idle turn end ends the stretch",
 }
 
 // toPersonOffenders still reach a person without ToPersonTx, or through it
