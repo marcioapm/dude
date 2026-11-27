@@ -25,7 +25,8 @@ func (w *world) spendFreeDispatches(task string) {
 // a workflow_dispatch trigger without asking, up to three per task; the
 // fourth needs the person, as does any other ref from the first. A
 // dispatch GitHub refused (nothing ran) spends none, free CI spends none,
-// and an answered question still authorizes one past the three.
+// one the person authorized spends none, and an answered question still
+// authorizes one past the three.
 func TestThreeDispatchesOnTheTasksBranchNeedNoQuestion(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
 	// Another ref is the person's, free runs left or not. (A Run makes at
@@ -37,6 +38,13 @@ func TestThreeDispatchesOnTheTasksBranchNeedNoQuestion(t *testing.T) {
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = 422 })
 	w.refused(task, "run_workflow", `{"workflow":"nightly.yml"}`, "422")
 	w.gh.Set(func(s *fakegithub.Server) { s.DispatchStatus = 0 })
+
+	// One the person authorized spends none of the three.
+	early := delivery.DispatchApproval("release.yml", branch)
+	mustExec(t, w.owner, `INSERT INTO questions (id, organization_id, task_id, prompt, options, status, answer, answered_at, addressee)
+		VALUES ('q_release', $1, $2, 'Run release.yml?', $3::jsonb, 'answered', $4, now(), 'person')`,
+		w.org, task, `["`+early+`", "`+delivery.DispatchDecline+`"]`, early)
+	w.dispatched(task, `{"workflow":"release.yml","questionId":"q_release"}`)
 
 	first := w.dispatched(task, `{"workflow":"nightly.yml"}`)
 	w.dispatched(task, `{"workflow":"ci.yml"}`)
@@ -55,8 +63,7 @@ func TestThreeDispatchesOnTheTasksBranchNeedNoQuestion(t *testing.T) {
 		VALUES ('q_prod', $1, $2, 'Run prod.yml?', $3::jsonb, 'answered', $4, now(), 'person')`,
 		w.org, task, `["`+approve+`", "`+delivery.DispatchDecline+`"]`, approve)
 	w.dispatched(task, `{"workflow":"prod.yml","questionId":"q_prod"}`)
-	w.refused(task, "run_workflow", `{"workflow":"release.yml"}`, "runs without asking are spent")
-	if n := w.count(`SELECT count(*) FROM workflow_dispatches WHERE task_id = $1 AND state <> 'failed'`, task); n != 6 {
+	if n := w.count(`SELECT count(*) FROM workflow_dispatches WHERE task_id = $1 AND state <> 'failed'`, task); n != 7 {
 		t.Errorf("%d dispatches", n)
 	}
 }
