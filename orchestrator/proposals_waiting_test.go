@@ -1,8 +1,16 @@
 package orchestrator_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/marciomartins/dude/orchestrator/internal/api"
+	"github.com/marciomartins/dude/orchestrator/internal/db"
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
 )
 
@@ -238,5 +246,81 @@ func TestAnAdminOwnedSessionsCardWaitsOnTheAdmin(t *testing.T) {
 	}
 	if w := s.waiting(s.joao, id); w != nil {
 		t.Errorf("a member not in it, no admin: %v", w)
+	}
+}
+
+// The sessions list says which cards wait on you in a number of queries
+// that does not grow with the sessions they are in: Ana, waited on in 1,
+// and Márcio, in 20 (each with an earlier card replaced, a relation card,
+// a filed item and an edit, a comment and a link to decide on), cost the
+// same. No image is read for it.
+func TestTheListReadsWaitingCardsInBoundedQueries(t *testing.T) {
+	s := newSessionWorld(t)
+	counter := &queryCount{}
+	cfg, err := pgxpool.ParseConfig(s.app.Pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(t0(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	srv := httptest.NewServer((&api.Server{DB: &db.DB{Pool: pool}, Lux: s.syncer.Lux, Token: "svc", Log: s.log, Kick: func() {}}).Handler())
+	t.Cleanup(srv.Close)
+	list := func(person string) ([]any, int64) {
+		req, _ := http.NewRequest("GET", srv.URL+"/internal/sessions", nil)
+		for k, v := range map[string]string{"Authorization": "Bearer svc", "X-Dude-Organization": s.org,
+			"X-Dude-Credential-Kind": "person", "X-Dude-Person": person, "X-Dude-Actor": person} {
+			req.Header.Set(k, v)
+		}
+		before := counter.n.Load()
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		if res.StatusCode != 200 {
+			t.Fatalf("list: %d %v", res.StatusCode, out)
+		}
+		proposals, _ := out["proposals"].([]any)
+		return proposals, counter.n.Load() - before
+	}
+	mine, other := s.keyOf(s.taskIn(s.project, "Daily rollup", s.marcio)), s.keyOf(s.taskIn(s.project, "Weekly rollup", s.marcio))
+	for i := 0; i < 20; i++ {
+		id := s.session()
+		if i == 0 {
+			s.join(id, s.ana, "chat")
+		}
+		s.proposal(id, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Old idea", Goal: "Something proposed before"}})
+		card := s.proposal(id, []delivery.ProposalItem{
+			{Kind: "task", Project: "BL", Title: fmt.Sprintf("Meter %d", i), Goal: "Count experiment runs per org per day"},
+			{Kind: "task", Project: "BL", Title: fmt.Sprintf("Dedupe %d", i), Goal: "The meter's 24h key is not enough for retries"},
+			{Kind: "edit", Task: mine, After: &delivery.TaskText{Goal: ptr("A goal long enough to keep, changed")}},
+			{Kind: "comment", Task: mine, Text: "a note"},
+			{Kind: "link_project", Project: "BL", Why: "it reads it"},
+		})
+		s.proposal(id, relation(mine, other))
+		s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": card, "items": []int{0}})
+	}
+	few, one := list(s.ana)
+	many, twenty := list(s.marcio)
+	t.Logf("queries: %d for 1 waiting session, %d for 20", one, twenty)
+	if len(few) != 1 || len(many) != 20 {
+		t.Fatalf("%d waiting for Ana, %d for Márcio", len(few), len(many))
+	}
+	if twenty != one {
+		t.Errorf("the list ran %d queries with 20 waiting sessions, %d with 1: it must not grow with them", twenty, one)
+	}
+	// Márcio: the second task, his edit and the comment (BL is linked already).
+	if w := many[0].(map[string]any); w["count"] != float64(3) {
+		t.Errorf("Márcio's entry: %v", w)
+	}
+	// Ana: the task and the comment; the edit is Márcio's.
+	if w := few[0].(map[string]any); w["count"] != float64(2) {
+		t.Errorf("Ana's entry: %v", w)
 	}
 }
