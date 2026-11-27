@@ -473,7 +473,7 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   says it. Not a `StatusMark` pill: the header's "Needs you · file 2
   tasks" is the screen's single filled pill, and a waiting question takes
   that word (it blocks the agent) while the card keeps its band. With
-  nothing of theirs to file there is no band and the card folds as before.
+  nothing of theirs to file there is no band and the card folds.
   The app holds the waiting card in view (`ChatTranscript keepInView`)
   when no question waits; `?proposal=<id>` (`propose`'s `sessionUrl`,
   Review and file) holds that card, waiting or not. In Waiting on you it

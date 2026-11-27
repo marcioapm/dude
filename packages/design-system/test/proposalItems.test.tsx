@@ -1,7 +1,7 @@
 /**
  * A proposed task is read on its card: its goal clamped to three lines
  * behind Show all (only when it overflows), its acceptance criteria in a
- * closed disclosure under it. Other kinds draw their detail as before.
+ * closed disclosure under it. Other kinds draw their detail whole.
  * Mounted in happy-dom, with layout given by a stubbed ResizeObserver.
  */
 
