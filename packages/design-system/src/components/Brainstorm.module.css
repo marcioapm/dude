@@ -27,6 +27,14 @@
   font-size: var(--ds-text-sm);
   color: var(--ds-color-text-secondary);
 }
+/* The band's head: the attention glyph and words in the attention ink, no fill (the header's Needs you is the filled pill). */
+.waitingMark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-4);
+  color: var(--ds-tone-attention-fg);
+  font-weight: var(--ds-weight-medium);
+}
 .waiting > .card {
   margin-top: var(--ds-space-6);
 }

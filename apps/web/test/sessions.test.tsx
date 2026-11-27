@@ -2409,6 +2409,9 @@ describe("proposed work waiting on you", () => {
     expect(band(page)!.querySelector("[data-testid=proposal-card]")).toBeTruthy();
     expect(mark(page)).toBe("Waiting for you to file 2 tasks");
     expect(header(page)).toBe("Needs you · file 2 tasks");
+    // The header's chip is the one filled pill: the band's head is words and a glyph.
+    const solid = [...page.querySelectorAll("[data-status=awaiting_input]")];
+    expect(solid.map((n) => n.getAttribute("data-testid"))).toEqual(["header-needs-you"]);
   });
 
   test("one task left, one filed: 1 task; a task and an edit: 1 task, 1 edit", async () => {

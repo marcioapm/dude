@@ -470,9 +470,12 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   blocks the agent: nothing reaches the board until they file it, and
   nobody else is told. So `ProposalWaiting` draws it with the question's
   own pattern — the attention wash across the transcript's width and the
-  2px attention bar inset at the left edge, square — with a
-  `StatusMark awaiting_input` "Waiting for you to file 2 tasks" above the
-  card (the words are `toFileWords`, so "1 task, 1 edit"). With nothing
+  2px attention bar inset at the left edge, square — with the attention
+  glyph and "Waiting for you to file 2 tasks" in the attention ink above
+  the card, "Needs you" said to a screen reader beside them as
+  `QuestionCard` says it (the words are `toFileWords`, so "1 task, 1
+  edit"). Not a `StatusMark` pill: the header's "Needs you" is the single
+  filled pill on the screen. With nothing
   of theirs to file (all filed, the rest someone else's, a reader, a
   replaced card) there is no band and the card folds as before. The
   session header says "Needs you · file 2 tasks" while it waits; a waiting
@@ -858,7 +861,9 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   lines with **Show all / Show less** (`ClampedBody`, shared with a
   prompt's clamp in the Chat: measured, so a short goal gets no toggle),
   and its `criteria` sit under it in a closed `Disclosure` titled
-  "Acceptance criteria" with their count, a plain list. An agent's goal
+  "Acceptance criteria" with their count, a plain list: the goal is what
+  you act on, so it shows (clamped, Show all); the criteria are its
+  detail, so they fold. An agent's goal
   after an investigation runs to paragraphs; drawn whole, two of them
   push the card's ticks and File off the screen.
   A reader (`readOnly`) sees the folded line, opens it to read, and files
@@ -3010,7 +3015,8 @@ tabular `meta` ("6 criteria"), over a body at its full length, labelled
 by the title as a region. Uncontrolled (`defaultOpen`) or controlled
 (`open`, `onOpenChange`, said once per change); `lazy` mounts the body only
 while open. No border, no radius: structure is square. For the details
-under a page's summary, never for what someone must see to act.
+under a page's summary, never for what someone must see to act (a
+proposed task's acceptance criteria fold under its goal, which shows).
 `SettingsDisclosure` stays the settings pages' (320px scroll, "Show").
 
 `RunningRow` is one agent at work now, in a `RunningList` named for

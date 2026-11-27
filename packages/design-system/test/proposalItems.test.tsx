@@ -149,4 +149,12 @@ describe("ProposalWaiting", () => {
     expect(band.querySelector('[data-testid="proposal-waiting-mark"]')!.textContent).toBe("Waiting for you to file 2 tasks");
     expect(band.querySelector('[data-testid="proposal-card"]')).toBeTruthy();
   });
+
+  test("its head is the attention glyph and words, Needs you said to a screen reader: never a second filled pill", async () => {
+    const el = await mount(<ProposalWaiting toFile="2 tasks"><Card items={[mine, mine]} /></ProposalWaiting>);
+    const band = el.querySelector('[data-testid="proposal-waiting"]')!;
+    expect(band.querySelector("[data-status]")).toBeNull();
+    expect(band.querySelector('[data-testid="proposal-waiting-mark"] svg')).toBeTruthy();
+    expect([...band.querySelectorAll(".ds-sr-only")].map((n) => n.textContent)).toContain("Needs you.");
+  });
 });

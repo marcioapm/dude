@@ -3,7 +3,7 @@ import type { TaskStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
-import { Icon } from "../icons/index.tsx";
+import { Icon, type IconName } from "../icons/index.tsx";
 import { statusSpec } from "../tokens/status.ts";
 import { firstName } from "../util/format.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
@@ -283,13 +283,22 @@ export interface ProposalWaitingProps extends HTMLAttributes<HTMLElement> {
  * "Waiting for you to file 2 tasks" above the card. The app draws it only
  * while `yoursToFile` has items; otherwise the card stands alone and folds
  * as it does.
+ *
+ * Its head is the attention glyph and the words in the attention ink, "Needs
+ * you" said to a screen reader beside them, as QuestionCard says it: never
+ * a `StatusMark` pill, since the header's Needs you is the single filled
+ * pill on the screen.
  */
 export function ProposalWaiting({ toFile, className, children, ...rest }: ProposalWaitingProps) {
   return (
     <section className={cx(styles["waiting"], className)} aria-label={`Proposed work waiting for you to file: ${toFile}`}
       data-testid="proposal-waiting" {...rest}>
       <div className={styles["waitingHead"]}>
-        <StatusMark status="awaiting_input" size="sm" label={`Waiting for you to file ${toFile}`} data-testid="proposal-waiting-mark" />
+        <span className="ds-sr-only">Needs you.</span>
+        <span className={styles["waitingMark"]} data-testid="proposal-waiting-mark">
+          <Icon name={statusSpec("awaiting_input").glyph as IconName} size={12} strokeWidth={1.75} />
+          {`Waiting for you to file ${toFile}`}
+        </span>
       </div>
       {children}
     </section>
