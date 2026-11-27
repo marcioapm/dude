@@ -108,7 +108,8 @@ func TestRunWorkflowNeedsThePersonsAnswerForAWorkflowThatIsNotCI(t *testing.T) {
 	w.dispatched(task, `{"workflow":"ci.yml"}`)
 
 	approve := delivery.DispatchApproval("deploy.yml", branch)
-	w.refused(task, "run_workflow", `{"workflow":"deploy.yml"}`, "it is not CI this change already runs, and the person decides it. Ask them (ask_person) with the choices \""+approve+"\" and \""+delivery.DispatchDecline+"\"")
+	w.spendFreeDispatches(task)
+	w.refused(task, "run_workflow", `{"workflow":"deploy.yml"}`, "this task's 3 runs without asking are spent, so the person decides this one. Ask them (ask_person) with the choices \""+approve+"\" and \""+delivery.DispatchDecline+"\"")
 	other := w.task()
 	choices := `["` + approve + `", "` + delivery.DispatchDecline + `"]`
 	docs := `["` + delivery.DispatchApproval("deploy-docs.yml", branch) + `", "` + delivery.DispatchDecline + `"]`
@@ -139,7 +140,7 @@ func TestRunWorkflowNeedsThePersonsAnswerForAWorkflowThatIsNotCI(t *testing.T) {
 	w.refused(task, "run_workflow", `{"workflow":"deploy.yml","questionId":"q_deploy","inputs":{"env":"production"}}`, "q_deploy already authorized dispatch "+id)
 
 	w.gh.Set(func(s *fakegithub.Server) {
-		if len(s.Dispatches) != 2 || s.Dispatches[1].Workflow != "deploy.yml" || s.Dispatches[1].Ref != branch || s.Dispatches[1].Inputs["env"] != "staging" {
+		if len(s.Dispatches) != 5 || s.Dispatches[4].Workflow != "deploy.yml" || s.Dispatches[4].Ref != branch || s.Dispatches[4].Inputs["env"] != "staging" {
 			t.Errorf("dispatched %+v", s.Dispatches)
 		}
 	})
@@ -150,10 +151,12 @@ func TestRunWorkflowNeedsThePersonsAnswerForAWorkflowThatIsNotCI(t *testing.T) {
 }
 
 // Free CI is a workflow that runs for this task's own change, dispatched
-// on the task's branch. A deploy on push to main, a release on tags, a
-// schedule, and CI on another ref all need the person.
+// on the task's branch. Once the task's runs without asking are spent, a
+// deploy on push to main, a release on tags, a schedule, and CI on another
+// ref all need the person.
 func TestOnlyTheTasksOwnCIIsFree(t *testing.T) {
 	w, task, branch := dispatchWorld(t)
+	w.spendFreeDispatches(task)
 	for _, wf := range []string{"prod.yml", "release.yml", "nightly.yml"} {
 		w.refused(task, "run_workflow", `{"workflow":"`+wf+`"}`, "it is not CI this change already runs")
 	}
@@ -165,7 +168,7 @@ func TestOnlyTheTasksOwnCIIsFree(t *testing.T) {
 		t.Errorf("ref %q", got)
 	}
 	w.gh.Set(func(s *fakegithub.Server) {
-		if len(s.Dispatches) != 1 || s.Dispatches[0].Ref != branch {
+		if len(s.Dispatches) != 4 || s.Dispatches[3].Ref != branch {
 			t.Errorf("dispatched %+v", s.Dispatches)
 		}
 	})

@@ -29,13 +29,20 @@ import (
 
 // conducting is a world whose conductor has dude's tools, stays warm for
 // the test, and is woken as soon as a reason arrives.
-func conducting(t *testing.T) *world {
+func conducting(t *testing.T, opts ...func(*world)) *world {
 	w := conductorWorld(t)
 	w.withTools()
 	w.syncer.ConductorWarm = time.Hour
 	w.syncer.WakeWindow = 50 * time.Millisecond
+	for _, o := range opts {
+		o(w)
+	}
 	return w
 }
+
+// withoutIdleTurnWake: the world's conductor turns that end idle record no
+// idle-turn wake (phases.Syncer.NoIdleTurnWake).
+func withoutIdleTurnWake(w *world) { w.syncer.NoIdleTurnWake = true }
 
 // talk is Talk it through on a task not started: its conductor, briefed,
 // and the delivery parked on its first decision.
@@ -1019,11 +1026,41 @@ func TestAConductorMidTurnHearsItsReasonsAfter(t *testing.T) {
 	w.wokenWith(task, "while busy")
 }
 
+// In a conducted world the idle-turn backstop is on: the scripted
+// conductor answers dude's decision wake in prose and opens nothing, and is
+// woken once for it.
+func TestAConductorAnsweringADecisionWakeInProseIsWokenOnceForIt(t *testing.T) {
+	w := conducting(t)
+	task := w.task()
+	w.talk(task)
+	ctx := context.Background()
+	if err := w.app.InOrg(ctx, w.org, func(tx pgx.Tx) error {
+		_, err := delivery.RecordWakeTx(ctx, tx, w.org, task, "decision", "test:decide", "the decision waiting")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.wokenWith(task, "the decision waiting")
+	idle := "You ended your turn with nothing that will wake you"
+	w.wokenWith(task, idle)
+	for range 3 {
+		w.pump()
+	}
+	if n := w.count(`SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND kind = $2`, task, delivery.WakeIdleTurn); n != 1 {
+		t.Errorf("%d idle_turn wakes, want 1", n)
+	}
+	if n := w.count(`SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
+		AND strpos(payload->>'text', $2) > 0`, task, idle); n != 1 {
+		t.Errorf("%d idle_turn notes, want 1", n)
+	}
+}
+
 // A wake note lux fails before the conductor read it gives its reasons
 // back: the next sweep tells the conductor again. A note the conductor
 // read is never told twice, even if a failure is reported after.
 func TestAFailedWakeNoteIsToldAgain(t *testing.T) {
-	w := conducting(t)
+	// The scripted conductor answers wakes in prose, and this test counts wake notes.
+	w := conducting(t, withoutIdleTurnWake)
 	task := w.task()
 	conductor := w.talk(task)
 	w.lux.InputGate = make(chan struct{})

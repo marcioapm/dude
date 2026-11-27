@@ -226,7 +226,15 @@ This delivery is quiet now: decide by your defaults, post in Chat only when some
 
 ## voice-chatty
 
-This delivery is chatty now: talk the work through with the person, and ask the pull-request question when dude wakes you before the pull request.
+This delivery is chatty now: talk the work through with the person; anything they must answer, ask with ask_person. Ask the pull-request question when dude wakes you before the pull request.
+
+## idle-turn
+
+You ended your turn with nothing that will wake you: no Run at work, no wait, no open question, no pull request. Your last message: «I'd like one more run with `extra_pytest_args: "--show-logs"`. May I start it? wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww…». If it asks the person something, ask it with ask_person; if you wait on something, say so with wait_for; else take the decision waiting.
+
+## idle-turn-notice
+
+The conductor ended its turn without asking you anything or waiting on anything: read its last message.
 
 ## wait-held
 

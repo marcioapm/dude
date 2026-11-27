@@ -36,9 +36,9 @@ type editing struct {
 	task, cond, branch string
 }
 
-func newEditing(t *testing.T) *editing {
+func newEditing(t *testing.T, opts ...func(*world)) *editing {
 	t.Helper()
-	w := conducting(t)
+	w := conducting(t, opts...)
 	e := &editing{world: w, task: w.task()}
 	e.cond = w.talk(e.task)
 	e.branch = delivery.BranchFor(e.task, 1)
@@ -269,7 +269,8 @@ func TestAKeptCheckoutIsToldInTheWakeNote(t *testing.T) {
 // message) records the line and wakes nobody; the next note carries it,
 // once.
 func TestAnOffBranchCheckoutRidesOnTheNextNote(t *testing.T) {
-	e := newEditing(t)
+	// The scripted conductor answers wakes in prose, and this test counts wake notes.
+	e := newEditing(t, withoutIdleTurnWake)
 	e.wokenWith(e.task, "after implement")
 	offBranch := "your checkout is 1 behind and not on the task branch"
 	notesSaying := `SELECT count(*) FROM events WHERE task_id = $1 AND event_type = 'conductor.woken'
@@ -304,7 +305,8 @@ func TestAnOffBranchCheckoutRidesOnTheNextNote(t *testing.T) {
 }
 
 func TestANewerCheckoutSyncSupersedesOnlyItsOwnRidingWarning(t *testing.T) {
-	e := newEditing(t)
+	// The scripted conductor answers wakes in prose, and this test counts wake notes.
+	e := newEditing(t, withoutIdleTurnWake)
 	e.wokenWith(e.task, "after implement")
 	pending := `SELECT count(*) FROM conductor_wakes WHERE task_id = $1 AND delivered_at IS NULL AND strpos(line, $2) > 0`
 	if status, out := e.chat(e.task, "check the checkout"); status >= 300 {

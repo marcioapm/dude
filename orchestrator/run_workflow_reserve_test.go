@@ -295,6 +295,7 @@ func TestFreeCIIsDecidedAgainstTheChangesBase(t *testing.T) {
 			mustExec(t, w.owner, `UPDATE workflow_runs SET state = jsonb_set(state, '{bases}', $2::jsonb) WHERE task_id = $1`, task, bases)
 			w.gh.CommitFiles(branch, "pr workflows", map[string]string{".github/workflows/free.yml": prOnly(c.free),
 				".github/workflows/other.yml": prOnly(c.notFree)})
+			w.spendFreeDispatches(task)
 			w.refused(task, "run_workflow", `{"workflow":"other.yml"}`, "a pull request into "+c.free+"), or dude cannot tell")
 			id := w.dispatched(task, `{"workflow":"free.yml"}`)
 			if got := w.str(`SELECT COALESCE(question_id, 'free') FROM workflow_dispatches WHERE id = $1`, id); got != "free" {

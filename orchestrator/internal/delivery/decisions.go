@@ -1459,6 +1459,9 @@ func recordWakeTx(ctx context.Context, tx pgx.Tx, org, taskID, kind, key, line s
 	case WakeWorkflow:
 		// A dispatched run's outcome, its link, and a read's error.
 		limit = workflowLineChars
+	case WakeIdleTurn:
+		// The start of the conductor's last message, quoted.
+		limit = idleTurnLineChars
 	}
 	text := clip(oneLine(line), limit)
 	if kind == "escalation" && strings.HasSuffix(key, ":decided") {

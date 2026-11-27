@@ -1,0 +1,1 @@
+You ended your turn with nothing that will wake you: no Run at work, no wait, no open question, no pull request. Your last message: «{{.Message}}». If it asks the person something, ask it with ask_person; if you wait on something, say so with wait_for; else take the decision waiting.

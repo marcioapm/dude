@@ -1922,3 +1922,7 @@ dude does not wait on %s: %s. URL: public addresses only
 
 status %q is not a code (200) or a class (2xx, 5xx)
 
+## refusals/delivery/dispatch/free-spent
+
+%s runs on %s, but %s: it is not CI this change already runs, and this task's %d runs without asking are spent, so the person decides this one. Ask them (ask_person) with the choices %q and %q; once they have picked %q, call run_workflow again with questionId
+
