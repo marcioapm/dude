@@ -145,10 +145,22 @@ export interface SessionQuestionLine {
   title: string | null;
 }
 
+/** A session with a card that has items you can file (its latest proposed card with any, else its latest card of relations with any): `count` of them, by `kinds`, in the card's order. */
+export interface SessionProposalLine {
+  sessionId: string;
+  title: string | null;
+  proposalId: string;
+  count: number;
+  kinds: ProposalItem["kind"][];
+  proposedAt: string;
+}
+
 export interface SessionsList {
   sessions: SessionSummary[];
   invitations: SessionInvitation[];
   questions: SessionQuestionLine[];
+  /** Absent from an older orchestrator. */
+  proposals?: SessionProposalLine[];
   /** Absent from an older orchestrator. */
   mentions?: SessionMentionLine[];
   /** Absent from an older orchestrator. */
@@ -221,9 +233,12 @@ export interface ProposalItemStatus {
    * `blocker_unfiled` is an item that waits on another of the card's items
    * nobody can file. A link_project is the session owner's (`session_owner`),
    * and nobody's once its project is `linked` or the session links the most
-   * projects it can (`limit`).
+   * projects it can (`limit`). An unfiled item of a card a later proposal
+   * replaced is nobody's to file (`replaced`): only a proposed card (one
+   * with an item that is not a relation) replaces, and only an earlier
+   * proposed card; a card of relations only is filed from whatever follows it.
    */
-  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown" | "limit";
+  blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown" | "limit" | "replaced";
   owner?: PersonRef;
 }
 

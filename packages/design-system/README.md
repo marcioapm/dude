@@ -66,7 +66,9 @@ audit tools behind all of these, reached when something looks off.
 5. **`awaiting_input` is the only loud thing.** It is the single state where
    the system is blocked on a person. It alone defaults to a solid fill with a
    slow expanding ring. Nothing else may be promoted to solid; if it were, the
-   signal would be gone.
+   signal would be gone. Work proposed for you to file is such a state — it
+   reaches nobody's board until you file it — so it wears `awaiting_input`
+   and the waiting question's highlight, never a tone of its own.
 6. **Live means alive, not busy.** Running states breathe at 2.4s. Nothing
    spins except the running spinner; nothing flashes except a new row, once.
    Reduced motion turns "live" into "still", never into "invisible".
@@ -458,9 +460,26 @@ size and shade, not weight: body 400, names and labels 500, headings at most
   In the live gallery, Show held question opens an ask with later notices;
   Add later turn demonstrates the hold, manual scrolling releases it, and
   Next question selects a new ask.
-- The question itself is a turn: `QuestionCard`. While it waits it is the
-  one loud turn a transcript is allowed, and it is loud once: the attention
-  wash and 2px bar. In grayscale it is still the only barred, tinted turn.
+- The question itself is a turn: `QuestionCard`. While it waits it is one
+  of the two loud turns a transcript is allowed, and it is loud once: the
+  attention wash and 2px bar. In grayscale it and a card waiting to be
+  filed are the only barred, tinted turns.
+- **The other loud turn is a proposal waiting to be filed** (principle 5).
+  A card with items the person looking can file (`yoursToFile`: `canFile`,
+  not filed, not replaced, not a reader) gets `ProposalWaiting`: the
+  question's wash and square 2px bar, with the attention glyph and
+  "Waiting for you to file 2 tasks" (`toFileWords`) in the attention ink
+  above the card, "Needs you" said to a screen reader as `QuestionCard`
+  says it. Not a `StatusMark` pill: the header's "Needs you · file 2
+  tasks" is the screen's single filled pill, and a waiting question takes
+  that word (it blocks the agent) while the card keeps its band. With
+  nothing of theirs to file there is no band and the card folds.
+  The app holds the waiting card in view (`ChatTranscript keepInView`)
+  when no question waits; `?proposal=<id>` (`propose`'s `sessionUrl`,
+  Review and file) holds that card, waiting or not. In Waiting on you it
+  is a `WaitingRow mine` with the brainstorm's face, "Brainstorm proposed
+  2 tasks for you to file", the session's title and **Review and file**
+  (facet "Proposals").
   With `onSubmit` the turn **is the answer form**, laid on the turn's own
   grid — no card, no box:
   - **One question** (`text` + `options`, or one `items` entry): no tabs.
@@ -829,6 +848,12 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   "Filing as Ana: 2 tasks, 1 edit. Nothing starts." An item only someone
   else may file is dimmed and says whose ("Only Márcio can file this: it's
   his task"); a filed one says who filed it as what ("Ana filed BL-61").
+  A task's goal (`detail`) is clamped to three lines with **Show all /
+  Show less** (`ClampedBody`, shared with a prompt's clamp: measured, so a
+  short goal gets no toggle), and its `criteria` fold under it in a closed
+  `Disclosure`, "Acceptance criteria" with their count: the goal is what
+  you act on, the criteria its detail. An agent's goal runs to
+  paragraphs; drawn whole, two push the ticks and File off the screen.
   A reader (`readOnly`) sees the folded line, opens it to read, and files
   nothing. Nothing on the
   card names the session: the work filed is the person's, as if typed.
@@ -855,6 +880,15 @@ follows these rules (`CredentialCard`, `CredentialWarning`; gallery
   being open is the component's own state. The Chat's `session.filed`
   notice ("Ana filed BILL-1, …") stays where it happened: the line is the
   proposal, the notice the moment it was filed.
+- **Proposing again replaces the card.** A proposed card replaces the
+  proposed card before it (a card of relations only, `relate`'s, neither
+  replaces nor is replaced): the earlier card's unfiled items are `replaced`
+  (the API's `blockedBy: "replaced"`, "Replaced by a later proposal", and
+  filing one is refused `proposal_replaced`). Nothing is left to act on,
+  so they fold the card as filed items do — not blocked for everyone,
+  which would keep a dead card open — and the line says "replaced by a
+  later proposal", or "1 filed · 1 replaced by a later proposal" beside
+  what was filed from it, which stays filed.
 - **An item nobody can file keeps the card open.** One blocked for
   everyone (`blockedFor: "everyone"`, or unset: its task has started, its
   project is no longer linked) is a problem someone may need to act on,
@@ -2969,7 +3003,8 @@ tabular `meta` ("6 criteria"), over a body at its full length, labelled
 by the title as a region. Uncontrolled (`defaultOpen`) or controlled
 (`open`, `onOpenChange`, said once per change); `lazy` mounts the body only
 while open. No border, no radius: structure is square. For the details
-under a page's summary, never for what someone must see to act.
+under a page's summary, never for what someone must see to act (a
+proposed task's acceptance criteria fold under its goal, which shows).
 `SettingsDisclosure` stays the settings pages' (320px scroll, "Show").
 
 `RunningRow` is one agent at work now, in a `RunningList` named for

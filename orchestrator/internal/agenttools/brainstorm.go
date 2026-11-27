@@ -570,16 +570,20 @@ func propose(ctx context.Context, tx pgx.Tx, c Caller, in proposeIn) (proposeOut
 	if err := checkProposalRelations(ctx, tx, linkedIDs, items); err != nil {
 		return proposeOut{}, err
 	}
+	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
+	if err != nil {
+		return proposeOut{}, err
+	}
+	// The link addresses the card: the session page opens on it.
 	var sessionURL string
 	if base := strings.TrimRight(c.env.publicURL, "/"); base != "" {
 		slug, err := orgSlug(ctx, tx, c)
 		if err != nil {
 			return proposeOut{}, err
 		}
-		sessionURL = base + "/#/o/" + url.PathEscape(slug) + "/sessions/" + url.PathEscape(c.SessionID)
+		sessionURL = base + "/#/o/" + url.PathEscape(slug) + "/sessions/" + url.PathEscape(c.SessionID) + "?proposal=" + url.QueryEscape(id)
 	}
-	id, err := delivery.RecordProposal(ctx, tx, c.run(), items)
-	return proposeOut{ProposalID: id, Next: proposedNext, SessionURL: sessionURL}, err
+	return proposeOut{ProposalID: id, Next: proposedNext, SessionURL: sessionURL}, nil
 }
 
 // checkProposalRelations holds a proposal's relations to what filing can

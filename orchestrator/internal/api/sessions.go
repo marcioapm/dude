@@ -374,6 +374,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 	}
 	archived := r.URL.Query().Get("archived") == "1"
 	var sessions, invitations, questions, mentions, organisation json.RawMessage
+	var proposals []waitingProposal
 	err = s.DB.InOrg(r.Context(), org, func(tx pgx.Tx) error {
 		// Yours: those you accepted, and, for an admin, those its admins own
 		// (their owner left). An organisation session you never joined is
@@ -435,18 +436,133 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 			p.Person).Scan(&mentions); err != nil {
 			return err
 		}
-		return tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
+		if err := tx.QueryRow(r.Context(), `SELECT COALESCE(json_agg(x ORDER BY x."askedAt"), '[]') FROM (
 			SELECT q.id, q.prompt, q.options, q.items, q.asked_at AS "askedAt", s.id AS "sessionId", s.title
 			FROM questions q JOIN runs r ON r.id = q.run_id JOIN sessions s ON s.id = r.session_id
 			WHERE q.status = 'open' AND session_role(s.id, $1) IN ('owner', 'chat')
 			  AND (q.to_person = $1 OR (q.to_person IS NULL AND session_role(s.id, $1) = 'owner'))) x`,
-			p.Person).Scan(&questions)
+			p.Person).Scan(&questions); err != nil {
+			return err
+		}
+		proposals, err = waitingProposals(r.Context(), tx, p.Person)
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions, "organisation": organisation})
+	write(w, http.StatusOK, map[string]any{"sessions": sessions, "invitations": invitations, "questions": questions, "mentions": mentions,
+		"organisation": organisation, "proposals": proposals})
 	return nil
+}
+
+// waitingProposal is a session with a card (waitingOn) that has items the caller can
+// file: what Waiting on you lists and counts.
+type waitingProposal struct {
+	SessionID  string   `json:"sessionId"`
+	Title      *string  `json:"title"`
+	ProposalID string   `json:"proposalId"`
+	Count      int      `json:"count"`
+	Kinds      []string `json:"kinds"`
+	ProposedAt any      `json:"proposedAt"`
+}
+
+// waitingProposals is, for person, each session with a card that has items
+// they can file, by cardStatus as the session's page decides it, and the
+// card waitingOn picks. The sessions are those an unaddressed question
+// there waits on them in (session_role owner or chat): theirs, joined and
+// not archived, and, for an admin, those its admins own; an organisation
+// session they never joined is not. A fixed number of queries, whatever
+// the number of sessions. No images: the list names no item.
+func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingProposal, error) {
+	rows, err := tx.Query(ctx, `SELECT s.id, s.title, s.role, sp.id, sp.created_at, sp.items FROM (
+			SELECT c.id, c.title, session_role(c.id, $1) AS role FROM sessions c
+			WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL
+				UNION SELECT a.id FROM sessions a WHERE a.owned_by_admins AND session_role(a.id, $1) = 'owner'
+				  AND NOT EXISTS (SELECT 1 FROM session_people ap WHERE ap.session_id = a.id AND ap.person_id = $1 AND ap.accepted_at IS NOT NULL))) s
+		JOIN session_proposals sp ON sp.session_id = s.id
+		WHERE s.role IN ('owner', 'chat') AND NOT (`+replacedCardSQL("sp")+`)
+		  AND EXISTS (SELECT 1 FROM jsonb_array_elements(sp.items) WITH ORDINALITY AS it(item, n)
+			WHERE NOT EXISTS (SELECT 1 FROM session_filings f WHERE f.proposal_id = sp.id AND f.item = it.n - 1))
+		ORDER BY s.id, sp.created_at, sp.id`, person)
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		id, role string
+		title    *string
+		cards    []proposalCard
+	}
+	var candidates []*candidate
+	var cardIDs []string
+	var sid, role string
+	var title *string
+	var c proposalCard
+	if _, err := pgx.ForEachRow(rows, []any{&sid, &title, &role, &c.ID, &c.CreatedAt, &c.raw}, func() error {
+		if len(candidates) == 0 || candidates[len(candidates)-1].id != sid {
+			candidates = append(candidates, &candidate{id: sid, role: role, title: title})
+		}
+		card := proposalCard{ID: c.ID, CreatedAt: c.CreatedAt}
+		_ = json.Unmarshal(c.raw, &card.Items)
+		at := candidates[len(candidates)-1]
+		at.cards = append(at.cards, card)
+		cardIDs = append(cardIDs, c.ID)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	out := []waitingProposal{}
+	if len(candidates) == 0 {
+		return out, nil
+	}
+	filed := map[string]filing{}
+	rows, err = tx.Query(ctx, `SELECT proposal_id, item FROM session_filings WHERE proposal_id = ANY($1)`, cardIDs)
+	if err != nil {
+		return nil, err
+	}
+	var pid string
+	var item int
+	if _, err := pgx.ForEachRow(rows, []any{&pid, &item}, func() error { filed[filingKey(pid, item)] = filing{}; return nil }); err != nil {
+		return nil, err
+	}
+	open := map[string][]delivery.ProposalItem{}
+	for _, cand := range candidates {
+		open[cand.id] = unfiledItems(cand.cards, nil, filed)
+	}
+	facts, err := readFileFactsIn(ctx, tx, open, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, cand := range candidates {
+		for i := range cand.cards {
+			cand.cards[i].Status = cardStatus(cand.cards[i], false, filed, facts[cand.id], person, cand.role)
+		}
+		if w, ok := waitingOn(cand.cards); ok {
+			w.SessionID, w.Title = cand.id, cand.title
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+// waitingOn is the card of a session's that waits on the member its
+// statuses were decided for, with the items they can file: the latest
+// propose card with any, else the latest relation card with any (the
+// web's waitingCard picks the same). Not ok when no card has any.
+func waitingOn(cards []proposalCard) (best waitingProposal, ok bool) {
+	bestPropose := false
+	for _, c := range cards {
+		w := waitingProposal{ProposalID: c.ID, ProposedAt: c.CreatedAt, Kinds: []string{}}
+		for n, st := range c.Status {
+			if st["canFile"] == true {
+				w.Count++
+				w.Kinds = append(w.Kinds, c.Items[n].Kind)
+			}
+		}
+		if propose := isProposeCard(c.Items); w.Count > 0 && (!ok || propose || !bestPropose) {
+			best, ok, bestPropose = w, true, propose
+		}
+	}
+	return best, ok
 }
 
 // sessionProjectsJSON (SQL, over sessions s): its linked projects, each
@@ -551,13 +667,55 @@ type proposalCard struct {
 	raw         json.RawMessage
 }
 
+// replacedWhy is what an earlier card's unfiled item says: proposing again
+// replaces the propose card before it (replacedCards).
+const replacedWhy = "Replaced by a later proposal"
+
+// A propose card is one with an item that is not a relation; a card of
+// relations only (relate's) is not. Only a propose card replaces, and only
+// an earlier propose card is replaced: a relation card is fileable for as
+// long as it has items, whatever is proposed after it. replacedCardSQL
+// says it in SQL; cards are ordered by (created_at, id), as proposalsFor
+// reads them.
+func isProposeCard(items []delivery.ProposalItem) bool {
+	for _, it := range items {
+		if it.Kind != "relation" {
+			return true
+		}
+	}
+	return false
+}
+
+// replacedCardSQL is replacedCards in SQL, over the session_proposals row
+// alias: a propose card with a later propose card in its session.
+func replacedCardSQL(alias string) string {
+	propose := func(a string) string {
+		return `EXISTS (SELECT 1 FROM jsonb_array_elements(` + a + `.items) AS pk(item) WHERE pk.item->>'kind' IS DISTINCT FROM 'relation')`
+	}
+	return propose(alias) + ` AND EXISTS (SELECT 1 FROM session_proposals later WHERE later.session_id = ` + alias + `.session_id
+		AND (later.created_at, later.id) > (` + alias + `.created_at, ` + alias + `.id) AND ` + propose("later") + `)`
+}
+
+// replacedCards says, of cards in (created_at, id) order, which a later
+// propose card replaced.
+func replacedCards(cards []proposalCard) []bool {
+	out := make([]bool, len(cards))
+	later := false
+	for i := len(cards) - 1; i >= 0; i-- {
+		propose := isProposeCard(cards[i].Items)
+		out[i] = propose && later
+		later = later || propose
+	}
+	return out
+}
+
 // proposalsFor reads the session's cards for one member. Every card it ever
 // had is read in a fixed number of queries, whatever their number: their
 // filings in one, and what deciding who may file each item needs
 // (fileFacts) in a few more.
 func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string) ([]proposalCard, error) {
 	rows, err := tx.Query(ctx, `SELECT id, COALESCE(run_id, ''), created_at, items FROM session_proposals
-		WHERE session_id = $1 ORDER BY created_at`, sessionID)
+		WHERE session_id = $1 ORDER BY created_at, id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +732,6 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	type filing struct{ by, key string }
 	filed := map[string]filing{}
 	rows, err = tx.Query(ctx, `SELECT f.proposal_id, f.item, COALESCE(p.name, ''), f.key
 		FROM session_filings f LEFT JOIN people p ON p.id = f.filed_by WHERE f.session_id = $1`, sessionID)
@@ -584,20 +741,13 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	var pid, by, key string
 	var item int
 	if _, err := pgx.ForEachRow(rows, []any{&pid, &item, &by, &key}, func() error {
-		filed[fmt.Sprintf("%s/%d", pid, item)] = filing{by, key}
+		filed[filingKey(pid, item)] = filing{by, key}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	var open []delivery.ProposalItem
-	for _, c := range cards {
-		for n, it := range c.Items {
-			if _, done := filed[fmt.Sprintf("%s/%d", c.ID, n)]; !done {
-				open = append(open, it)
-			}
-		}
-	}
-	facts, err := readFileFacts(ctx, tx, sessionID, open, false)
+	replaced := replacedCards(cards)
+	facts, err := readFileFacts(ctx, tx, sessionID, unfiledItems(cards, replaced, filed), false)
 	if err != nil {
 		return nil, err
 	}
@@ -619,37 +769,69 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 		}
 	}
 	for i := range cards {
-		c := &cards[i]
-		c.Status = make([]map[string]any, len(c.Items))
-		isFiled := func(n int) bool { _, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; return ok }
-		for n := range c.Items {
-			st := map[string]any{}
-			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
-				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
-			} else {
-				no := facts.cannotFileIn(c.Items, n, isFiled, person, role)
-				st["canFile"] = no.why == ""
-				if no.why != "" {
-					st["why"], st["blockedBy"] = no.why, no.by
-					if no.owner != nil {
-						st["owner"] = no.owner
-					}
-				}
-				// The unfiled items it waits on, filed with it.
-				if with := withBlockers(c.Items, []int{n}, isFiled); len(with) > 1 {
-					var others []int
-					for _, b := range with {
-						if b != n {
-							others = append(others, b)
-						}
-					}
-					st["filesWith"] = others
-				}
-			}
-			c.Status[n] = st
-		}
+		cards[i].Status = cardStatus(cards[i], replaced[i], filed, facts, person, role)
 	}
 	return cards, nil
+}
+
+// filing is who filed a card's item and the key it became, by filingKey.
+type filing struct{ by, key string }
+
+func filingKey(proposal string, item int) string { return fmt.Sprintf("%s/%d", proposal, item) }
+
+// unfiledItems is the unfiled items of the cards not replaced: what
+// deciding who may file them reads facts for.
+func unfiledItems(cards []proposalCard, replaced []bool, filed map[string]filing) []delivery.ProposalItem {
+	var open []delivery.ProposalItem
+	for i, c := range cards {
+		if replaced != nil && replaced[i] {
+			continue
+		}
+		for n, it := range c.Items {
+			if _, done := filed[filingKey(c.ID, n)]; !done {
+				open = append(open, it)
+			}
+		}
+	}
+	return open
+}
+
+// cardStatus is what each of a card's items says to one member: filed (by
+// whom, as what), replaced (replacedWhy), or whether they can file it and
+// if not why, from facts read for its unfiled items. The session's detail
+// and the list's waiting count both decide by it.
+func cardStatus(c proposalCard, replaced bool, filed map[string]filing, facts fileFacts, person, role string) []map[string]any {
+	status := make([]map[string]any, len(c.Items))
+	isFiled := func(n int) bool { _, ok := filed[filingKey(c.ID, n)]; return ok }
+	for n := range c.Items {
+		st := map[string]any{}
+		if f, ok := filed[filingKey(c.ID, n)]; ok {
+			st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
+		} else if replaced {
+			st["canFile"], st["why"], st["blockedBy"] = false, replacedWhy, "replaced"
+		} else {
+			no := facts.cannotFileIn(c.Items, n, isFiled, person, role)
+			st["canFile"] = no.why == ""
+			if no.why != "" {
+				st["why"], st["blockedBy"] = no.why, no.by
+				if no.owner != nil {
+					st["owner"] = no.owner
+				}
+			}
+			// The unfiled items it waits on, filed with it.
+			if with := withBlockers(c.Items, []int{n}, isFiled); len(with) > 1 {
+				var others []int
+				for _, b := range with {
+					if b != n {
+						others = append(others, b)
+					}
+				}
+				st["filesWith"] = others
+			}
+		}
+		status[n] = st
+	}
+	return status
 }
 
 func linkedProjectIDs(ctx context.Context, tx pgx.Tx, sessionID string) ([]string, error) {
@@ -692,56 +874,65 @@ type taskFacts struct {
 // named tasks' rows FOR NO KEY UPDATE, so no other writer changes one
 // before filing edits it; inserts referencing them (KEY SHARE) go on.
 func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []delivery.ProposalItem, lock bool) (fileFacts, error) {
-	f := fileFacts{projects: map[string]bool{}, orgProjects: map[string]string{}, tasks: map[string]taskFacts{}}
+	facts, err := readFileFactsIn(ctx, tx, map[string][]delivery.ProposalItem{sessionID: items}, lock)
+	return facts[sessionID], err
+}
+
+// readFileFactsIn is readFileFacts for several sessions at once, by
+// session: the same three queries, whatever their number.
+func readFileFactsIn(ctx context.Context, tx pgx.Tx, items map[string][]delivery.ProposalItem, lock bool) (map[string]fileFacts, error) {
+	out := map[string]fileFacts{}
+	sessions := make([]string, 0, len(items))
+	orgProjects := map[string]string{}
+	for id := range items {
+		sessions = append(sessions, id)
+		out[id] = fileFacts{projects: map[string]bool{}, orgProjects: orgProjects, tasks: map[string]taskFacts{}}
+	}
 	// A project hidden from the chat the session came from is not one its
 	// cards may be filed into, though it was linked before it was hidden.
-	rows, err := tx.Query(ctx, `SELECT upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
-		WHERE sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id"), sessionID)
+	rows, err := tx.Query(ctx, `SELECT sp.session_id, upper(p.key_prefix) FROM session_projects sp JOIN projects p ON p.id = sp.project_id
+		WHERE sp.session_id = ANY($1) AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id"), sessions)
 	if err != nil {
-		return f, err
+		return out, err
 	}
-	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return f, err
-	}
-	for _, k := range keys {
-		f.projects[k] = true
+	var sid, k string
+	if _, err := pgx.ForEachRow(rows, []any{&sid, &k}, func() error { out[sid].projects[k] = true; return nil }); err != nil {
+		return out, err
 	}
 	var linking []string
-	for _, it := range items {
-		if it.Kind == "link_project" {
-			linking = append(linking, strings.ToUpper(strings.TrimSpace(it.Project)))
+	var keySessions, prefixes []string
+	var numbers []int32
+	for id, its := range items {
+		for _, it := range its {
+			keys := []string{}
+			switch it.Kind {
+			case "link_project":
+				linking = append(linking, strings.ToUpper(strings.TrimSpace(it.Project)))
+			case "edit", "comment":
+				keys = append(keys, it.Task)
+			case "relation":
+				keys = append(keys, it.From, it.To)
+			}
+			for _, k := range keys {
+				if prefix, n, ok := keyParts(k); ok {
+					keySessions, prefixes, numbers = append(keySessions, id), append(prefixes, prefix), append(numbers, n)
+				}
+			}
 		}
 	}
 	if len(linking) > 0 {
 		// Row security keeps the read to the caller's organisation.
 		rows, err := tx.Query(ctx, `SELECT upper(key_prefix), id FROM projects WHERE upper(key_prefix) = ANY($1)`, linking)
 		if err != nil {
-			return f, err
+			return out, err
 		}
-		var k, id string
-		if _, err := pgx.ForEachRow(rows, []any{&k, &id}, func() error { f.orgProjects[k] = id; return nil }); err != nil {
-			return f, err
-		}
-	}
-	var prefixes []string
-	var numbers []int32
-	for _, it := range items {
-		keys := []string{}
-		switch it.Kind {
-		case "edit", "comment":
-			keys = append(keys, it.Task)
-		case "relation":
-			keys = append(keys, it.From, it.To)
-		}
-		for _, k := range keys {
-			if prefix, n, ok := keyParts(k); ok {
-				prefixes, numbers = append(prefixes, prefix), append(numbers, n)
-			}
+		var id string
+		if _, err := pgx.ForEachRow(rows, []any{&k, &id}, func() error { orgProjects[k] = id; return nil }); err != nil {
+			return out, err
 		}
 	}
 	if len(prefixes) == 0 {
-		return f, nil
+		return out, nil
 	}
 	lockClause := ""
 	if lock {
@@ -749,26 +940,25 @@ func readFileFacts(ctx context.Context, tx pgx.Tx, sessionID string, items []del
 	}
 	// Matched on the key's parts, so each is an index probe on
 	// tasks (project_id, number) rather than a scan of the projects' tasks.
-	rows, err = tx.Query(ctx, `SELECT upper(p.key_prefix) || '-' || t.number, t.id, t.project_id,
+	rows, err = tx.Query(ctx, `SELECT k.session_id, upper(p.key_prefix) || '-' || t.number, t.id, t.project_id,
 			COALESCE(o.id, ''), COALESCE(o.name, ''), o.ref, t.status::text,
 			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.task_id = t.id) AND t.status NOT IN ('aborted', 'failed')
-		FROM unnest($2::text[], $3::int[]) AS k(prefix, number)
+		FROM unnest($1::text[], $2::text[], $3::int[]) AS k(session_id, prefix, number)
 		JOIN projects p ON upper(p.key_prefix) = k.prefix
-		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = $1 AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id")+`
+		JOIN session_projects sp ON sp.project_id = p.id AND sp.session_id = k.session_id AND NOT `+delivery.SessionHidesSQL("sp.session_id", "p.id")+`
 		JOIN tasks t ON t.project_id = p.id AND t.number = k.number
 		LEFT JOIN LATERAL (SELECT pe.id, pe.name, person_ref(pe) AS ref FROM task_people tp JOIN people pe ON pe.id = tp.person_id
 			WHERE tp.task_id = t.id AND pe.removed_at IS NULL ORDER BY tp.position, tp.person_id LIMIT 1) o ON true
-		ORDER BY t.id`+lockClause, sessionID, prefixes, numbers)
+		ORDER BY t.id`+lockClause, keySessions, prefixes, numbers)
 	if err != nil {
-		return f, err
+		return out, err
 	}
-	var k string
 	var t taskFacts
-	_, err = pgx.ForEachRow(rows, []any{&k, &t.ID, &t.ProjectID, &t.OwnerID, &t.OwnerName, &t.Owner, &t.Status, &t.Started}, func() error {
-		f.tasks[k] = t
+	_, err = pgx.ForEachRow(rows, []any{&sid, &k, &t.ID, &t.ProjectID, &t.OwnerID, &t.OwnerName, &t.Owner, &t.Status, &t.Started}, func() error {
+		out[sid].tasks[k] = t
 		return nil
 	})
-	return f, err
+	return out, err
 }
 
 // keyParts splits a task key into its upper-cased prefix and number; not
@@ -991,6 +1181,16 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 				return fail(http.StatusNotFound, "not_found", "proposal %s not found", body.ProposalID)
 			}
 			return err
+		}
+		// In the filing's transaction: a card proposed after this read is
+		// later than the filing, which stays filed as any filed item does.
+		var replaced bool
+		if err := tx.QueryRow(r.Context(), `SELECT `+replacedCardSQL("sp")+` FROM session_proposals sp WHERE sp.id = $1`,
+			body.ProposalID).Scan(&replaced); err != nil {
+			return err
+		}
+		if replaced {
+			return fail(http.StatusConflict, "proposal_replaced", "proposal %s was replaced by a later proposal: file from the later card", body.ProposalID)
 		}
 		var items []delivery.ProposalItem
 		_ = json.Unmarshal(raw, &items)

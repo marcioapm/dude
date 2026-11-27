@@ -10,7 +10,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { attentionItems, taskOwner, toMs, useNow, waitingSplit, waitingWords, type AttentionItem, type NavProject, type NavRef } from "@dude/design-system";
-import { Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, SharedMark, WaitingList, WaitingRow } from "@dude/design-system/components";
+import { AgentAvatar, Duration, PersonAvatar, ProjectAvatar, ScreenHeader, PageWithRail, PageRail, PageRailBlock, FacetList, SharedMark, WaitingList, WaitingRow, proposalSummary } from "@dude/design-system/components";
 import { Button, EmptyState, Tabs, TabList, Tab, TabPanel, useToast } from "@dude/design-system/primitives";
 import { sessionTitle, severalLine, type SessionsList } from "@dude/domain";
 import type { ApiClient } from "../api/client.ts";
@@ -25,10 +25,11 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   onTabChange?: ((tab: "you" | "others") => void) | undefined;
   client: ApiClient;
   projects: ReadonlyArray<NavProject>;
-  /** Session invitations and questions put to you; null until read. */
+  /** Session invitations, questions put to you and proposals for you to file; null until read. */
   sessions?: SessionsList | null | undefined;
   onSelect: (ref: NavRef) => void;
-  onOpenSession?: ((id: string) => void) | undefined;
+  /** Open a session; at a proposal's card when one is named. */
+  onOpenSession?: ((id: string, proposal?: string) => void) | undefined;
   /** Something was taken over: the tree re-reads. */
   onChanged: () => void;
 }) {
@@ -50,8 +51,9 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   const invitations = sessions?.invitations ?? [];
   const questions = sessions?.questions ?? [];
   const mentions = sessions?.mentions ?? [];
+  const proposals = sessions?.proposals ?? [];
   const org = useAccount()?.current.name ?? "the organisation";
-  const openSession = (id: string) => onOpenSession?.(id);
+  const openSession = (id: string, proposal?: string) => (proposal ? onOpenSession?.(id, proposal) : onOpenSession?.(id));
 
   const decline = async (id: string) => {
     setTaking(id);
@@ -138,6 +140,23 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
         />
       );
     }),
+    // Work a brainstorm proposed that you can file: Review and file opens the session at its card.
+    ...proposals.map((p) => {
+      const since = toMs(p.proposedAt);
+      return (
+        <WaitingRow key={`p-${p.proposalId}`} mine data-testid="session-proposal" data-session={p.sessionId}
+          onOpen={() => openSession(p.sessionId, p.proposalId)}
+          face={<AgentAvatar role="brainstorm" size="md" />}
+          ask={<>Brainstorm proposed {proposalSummary(p.kinds)} for you to file</>}
+          where={sessionTitle(p)}
+          age={since !== null ? <Duration ms={Math.max(0, now - since)} format="age" tone="muted" /> : null}
+          action={<Button size="sm" variant="primary" onClick={(e) => {
+            e.stopPropagation();
+            openSession(p.sessionId, p.proposalId);
+          }} data-testid="proposal-review">Review and file</Button>}
+        />
+      );
+    }),
   ];
   const mineCount = yours.length + sessionRows.length;
 
@@ -206,6 +225,11 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
       const summary = sessions?.sessions.find((s) => s.id === m.sessionId);
       return { id: `m-${m.id}`, label: "A session", projects: summary ? summary.projects.map((p) => p.id) : ["unknown"], kind: "mentions", person: "", since: toMs(m.createdAt), node: sessionRows[invitations.length + questions.length + i] as ReactNode };
     }),
+    ...proposals.map((p, i) => {
+      const summary = sessions?.sessions.find((s) => s.id === p.sessionId);
+      return { id: `p-${p.proposalId}`, label: "A session", projects: summary ? summary.projects.map((x) => x.id) : ["unknown"], kind: "proposals", person: "", since: toMs(p.proposedAt),
+        node: sessionRows[invitations.length + questions.length + mentions.length + i] as ReactNode };
+    }),
     ...yours.map((it) => taskEntry(it, true)),
   ];
   const base = selectedTab === "you" ? mineEntries : others.map((it) => taskEntry(it, false));
@@ -221,7 +245,7 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
   for (const s of sessions?.sessions ?? []) for (const p of s.projects) projectNames.set(p.id, p.name);
   const projectIds = [...new Set([...base.flatMap((e) => e.projects.length ? e.projects : ["unlinked"]), ...selected.projects])];
   const personNames = new Map(others.map((it) => { const owner = taskOwner(it.task); return [owner?.id ?? owner?.name ?? "", owner?.name ?? "Unknown person"]; }));
-  const facets = selectedTab === "you" ? ["questions", "decisions", "invitations", ...(mentions.length > 0 ? ["mentions"] : [])] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
+  const facets = selectedTab === "you" ? ["questions", "decisions", "invitations", ...(mentions.length > 0 ? ["mentions"] : []), ...(proposals.length > 0 ? ["proposals"] : [])] : [...new Set([...base.map((e) => e.person), ...selected.facets])];
   const oldest = visible.filter((e) => e.since !== null).reduce<Entry | null>((a, b) => !a || b.since! < a.since! ? b : a, null);
   const rail = <PageRail aria-label="Waiting filters">
     <PageRailBlock label="Projects">
@@ -233,7 +257,7 @@ export function InboxScreen({ client, projects, sessions, tab, onTabChange, onSe
     <PageRailBlock label={facetLabel}>
       <Button size="sm" variant="quiet" onClick={() => filter("facets", [])} aria-pressed={!selected.facets.length}>All · {base.length}</Button>
       <FacetList label={facetLabel} value={selected.facets} onValueChange={(v) => filter("facets", v)} empty="Nobody else is waiting"
-        options={withCounts(facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations", mentions: "Mentions" }[value] ?? value) : personNames.get(value) ?? value })),
+        options={withCounts(facets.map((value) => ({ value, label: selectedTab === "you" ? ({ questions: "Questions", decisions: "Decisions", invitations: "Invitations", mentions: "Mentions", proposals: "Proposals" }[value] ?? value) : personNames.get(value) ?? value })),
           base, facetOf)} />
     </PageRailBlock>
     <PageRailBlock label="Oldest">

@@ -14,8 +14,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { firstName, type NavProject } from "@dude/design-system";
 import {
-  AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, PublishedFiles,
-  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation,
+  AdminOwned, AttachDropZone, Capabilities, ChatAside, ChatMessage, ChatNotice, ChatTranscript, CostDisplay, ImageViewer, LinkedProjects, Markdown, MentionShareConfirm, ModelPicker, ProposalCard, ProposalWaiting, PublishedFiles,
+  ScreenHeader, Segmented, SessionFacts, SessionPeople, SessionRail, SessionRailBlock, SessionTitle, SharedMark, StatusMark, ToolUsage, type MentionItem, type ModelChoice, type ProposalCardItem, type ProposalRelation, toFileWords,
 } from "@dude/design-system/components";
 import { Badge, Button, Callout, Spinner } from "@dude/design-system/primitives";
 import { EventTypes, HARNESS_LABEL, UNTITLED_SESSION, harnessSchema, type AttachmentInfo, type Harness, type PersistedEvent, type Proposal, type ProposalItem, type RunStatus, type SessionDetail, type SessionMemberView, type TaskStatus } from "@dude/domain";
@@ -73,9 +73,11 @@ export function withOpen(detail: SessionDetail, personId: string, open: boolean)
   return { ...detail, session: { ...detail.session, people: people.map((m) => (m.person.id === personId ? { ...m, open } : m)) } };
 }
 
-export function SessionScreen({ client, sessionId, projects, onBack, onChanged, onArchived }: {
+export function SessionScreen({ client, sessionId, proposal: asked, projects, onBack, onChanged, onArchived }: {
   client: ApiClient;
   sessionId: string;
+  /** Opened at this proposal's card (`?proposal=`): it is scrolled to and held in view. */
+  proposal?: string | undefined;
   projects: readonly NavProject[];
   onBack: () => void;
   /** Its people or title changed for you (handed over, left): the sidebar's list re-reads. */
@@ -340,6 +342,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
   // A question for you: answered in its turn, the composer steps back. One for someone else: anyone may still write, after their answer.
   const yours = question?.yours && !reader ? question : null;
   const others = question && !question.yours ? question : null;
+  const waiting = waitingCard(detail.proposals ?? [], reader, linkedKeys, you.id);
+  // The card asked for (a link, Review and file) is held in view, else the one waiting on you; a question waiting on you comes first.
+  const held = asked && detail.proposals?.some((p) => p.id === asked) ? asked : waiting?.id ?? null;
   const shared = session.people.filter((m) => m.accepted).length > 1;
   const access = session.access ?? "private";
   const everyone = access === "organisation";
@@ -373,6 +378,9 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           {session.origin ? <OriginLine origin={session.origin} compact testId="session-origin-fact" /> : null}
           <span data-testid="session-header-model">Brainstorm{headerModel(detail)}</span>
           {headerStart ? <StartHeaderChip start={headerStart} /> : null}
+          {/* A question waiting on you blocks the agent: its state is the header's; the card keeps its band. */}
+          {yours ? <StatusMark status="awaiting_input" size="sm" label="Needs you · answer the question" data-testid="header-needs-you" />
+            : waiting ? <StatusMark status="awaiting_input" size="sm" label={`Needs you · file ${waiting.words}`} data-testid="header-needs-you" /> : null}
           {you.archived ? <Badge size="sm" icon="archive" data-testid="session-archived">Archived</Badge> : null}
         </>}
         actions={<>
@@ -400,7 +408,7 @@ export function SessionScreen({ client, sessionId, projects, onBack, onChanged, 
           <div className="runChat">
             <ChatTranscript
               fill
-              keepInView={yours ? questionTurnSelector(yours.id) : undefined}
+              keepInView={yours ? questionTurnSelector(yours.id) : held ? proposalSelector(held) : undefined}
               live={live}
               revision={events.length + (detail.proposals?.length ?? 0)}
               turns={conversation.turns.length}
@@ -672,6 +680,27 @@ function tierName(tier: unknown): string | null {
   return typeof name === "string" ? name : null;
 }
 
+/** A proposal's card in the transcript, as ChatTranscript keepInView names it. */
+export const proposalSelector = (id: string) => `[data-proposal="${CSS.escape(id)}"]`;
+
+/**
+ * The card waiting on the person looking, if any: the latest proposed
+ * card (one with an item that is not a relation) with items yours to file
+ * (`toFileWords`, the card's band), else the latest card of relations with
+ * any. The list's proposals entry picks the same card.
+ */
+function waitingCard(proposals: ReadonlyArray<Proposal>, readOnly: boolean, linked: ReadonlyMap<string, { key: string; name: string }>,
+  you: string): { id: string; words: string } | null {
+  let relations: { id: string; words: string } | null = null;
+  for (const p of [...proposals].reverse()) {
+    const words = toFileWords(p.items.map((item, i) => cardItem(item, p.status[i] ?? {}, linked, new Set(), you)), readOnly);
+    if (!words) continue;
+    if (p.items.some((item) => item.kind !== "relation")) return { id: p.id, words };
+    relations ??= { id: p.id, words };
+  }
+  return relations;
+}
+
 /** One proposal's card: what the person looking can file, ticked, and filing it. */
 function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly, filingAs, you, images, onOpenImage, onFiled }: {
   client: ApiClient;
@@ -719,19 +748,23 @@ function ProposalBlock({ client, sessionId, proposal, linked, statusOf, readOnly
       setBusy(false);
     }
   };
+  const card = (
+    <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()} order={order}
+      onToggle={(i) => setSelected((s) => {
+        const n = new Set(s);
+        if (n.has(i)) n.delete(i);
+        else {
+          // What it waits on is filed with it: ticked too.
+          n.add(i);
+          for (const b of proposal.status[i]?.filesWith ?? []) n.add(b);
+        }
+        return n;
+      })} />
+  );
+  const toFile = toFileWords(items, readOnly);
   return (
     <div data-testid="proposal" data-proposal={proposal.id}>
-      <ProposalCard items={items} selected={selected} filingAs={filingAs} busy={busy} readOnly={readOnly} onFile={() => void file()} order={order}
-        onToggle={(i) => setSelected((s) => {
-          const n = new Set(s);
-          if (n.has(i)) n.delete(i);
-          else {
-            // What it waits on is filed with it: ticked too.
-            n.add(i);
-            for (const b of proposal.status[i]?.filesWith ?? []) n.add(b);
-          }
-          return n;
-        })} />
+      {toFile ? <ProposalWaiting toFile={toFile}>{card}</ProposalWaiting> : card}
       {/* Filed as you, you own what it files: warned now if its pull requests would wait on your GitHub. */}
       {!readOnly && fileable.length > 0 ? <OwnerGithubWarning client={client} owner={people.byId.get(you) ?? null} people={people} /> : null}
       {problem ? <Callout tone="danger" data-testid="proposal-problem">{problem}</Callout> : null}
@@ -748,7 +781,7 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
   const blockedFor: ProposalCardItem["blockedFor"] = theirs ? "you" : "everyone";
   const common = {
     canFile: Boolean(status.canFile),
-    ...(status.canFile ? {} : { blockedFor }),
+    ...(status.blockedBy === "replaced" ? { replaced: true } : status.canFile ? {} : { blockedFor }),
     ...(status.why ? { why: status.why } : {}),
     ...(status.filed ? { filed: { by: status.filedBy ?? "Someone", key: status.key ?? "" } } : {}),
   };
@@ -757,7 +790,8 @@ function cardItem(item: ProposalItem, status: Proposal["status"][number], linked
       return { kind: "epic", title: item.title ?? "", detail: item.description ?? item.goal, project, ...common,
         ...(item.notes?.length ? { notes: item.notes } : {}) };
     case "task":
-      return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common };
+      return { kind: "task", title: item.title ?? "", detail: item.goal, project, child: epics.has(item.epic), ...common,
+        ...(item.acceptanceCriteria?.length ? { criteria: item.acceptanceCriteria } : {}) };
     case "edit":
       return { kind: "edit", title: `Edit ${item.task ?? ""}`, taskKey: item.task,
         before: textOf(item.before), after: textOf(item.after), ...common };

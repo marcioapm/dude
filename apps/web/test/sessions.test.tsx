@@ -1878,6 +1878,11 @@ describe("a session's URL", () => {
     expect(formatPlace({ view: "sessions" })).toBe("#/sessions");
     expect(parsePlace("#/session/ses_1")).toEqual({ view: "tree", ref: { kind: "session", id: "ses_1" } });
   });
+
+  test("a session at one of its cards: ?proposal= reads back, as the propose tool's link writes it", () => {
+    expect(parsePlace("#/o/acme/sessions/ssn_1?proposal=prp_9")).toEqual({ view: "brainstorm", id: "ssn_1", proposal: "prp_9" });
+    expect(formatPlace({ view: "brainstorm", id: "ssn_1", proposal: "prp_9" })).toBe("#/sessions/ssn_1?proposal=prp_9");
+  });
 });
 
 describe("a session's agent starting", () => {
@@ -2352,5 +2357,248 @@ describe("the Link dialog", () => {
     await settle();
     expect(ticked(page, "web")).toBe(true);
     expect(ticked(page, "api")).toBe(true);
+  });
+});
+
+describe("proposed work on the session page", () => {
+  const LONG = "The nightly's coverage step fails before any test runs. ".repeat(12).trim();
+  const task = (title: string, over: Record<string, unknown> = {}) =>
+    ({ kind: "task" as const, project: "BL", title, goal: LONG, acceptanceCriteria: ["Clone with the defaults.", "The nightly gets past setup."], ...over });
+
+  test("a task item is drawn with its goal clamped and its acceptance criteria folded under it", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [task("Clone with defaults")], status: [{ canFile: true }] }],
+    })));
+    const card = await until(() => page.querySelector("[data-testid=proposal-card]"), "the card");
+    expect(card.querySelector("[data-testid=item-goal]")!.textContent).toBe(LONG);
+    const criteria = card.querySelector<HTMLDetailsElement>("[data-testid=item-criteria]")!;
+    expect(criteria.open).toBe(false);
+    expect([...criteria.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Clone with the defaults.", "The nightly gets past setup."]);
+  });
+});
+
+describe("a card a later proposal replaced", () => {
+  test("folds to its line, saying so; the latest card stays open to file", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [
+        { id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "Meter runs", goal: "g" }, { kind: "task", project: "BL", title: "Dedupe", goal: "g" }],
+          status: [{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }, { canFile: false, blockedBy: "replaced", why: "Replaced by a later proposal" }] },
+        { id: "prp_2", runId: RUN, createdAt: at(40), items: [{ kind: "task", project: "BL", title: "Dedupe on run id", goal: "g" }], status: [{ canFile: true }] },
+      ],
+    })));
+    const earlier = await until(() => page.querySelector("[data-proposal=prp_1] [data-testid=proposal-fold]"), "the earlier card's line");
+    expect(earlier.textContent).toBe("Proposed work · 2 tasks · 1 filed · 1 replaced by a later proposal");
+    expect(page.querySelector("[data-proposal=prp_2] [data-testid=file-proposal]")).toBeTruthy();
+    expect(page.querySelectorAll("[data-testid=file-proposal]").length).toBe(1);
+  });
+});
+
+describe("proposed work waiting on you", () => {
+  const task = (title: string) => ({ kind: "task" as const, project: "BL", title, goal: "g" });
+  const edit = { kind: "edit" as const, task: "BL-58", after: { goal: "new" } };
+  const card = (items: ProposalItemStatus[], kinds: Array<"task" | "edit"> = items.map(() => "task")) => ({
+    id: "prp_1", runId: RUN, createdAt: at(30), items: kinds.map((k, i) => (k === "edit" ? edit : task(`T${i}`))), status: items,
+  });
+  const band = (page: HTMLElement) => page.querySelector("[data-testid=proposal-waiting]");
+  const mark = (page: HTMLElement) => page.querySelector("[data-testid=proposal-waiting-mark]")?.textContent ?? null;
+  const header = (page: HTMLElement) => page.querySelector("[data-testid=header-needs-you]")?.textContent ?? null;
+
+  test("two tasks to file: the band around the card says so, and the header says Needs you", async () => {
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }])] })));
+    await until(() => band(page), "the band");
+    expect(band(page)!.querySelector("[data-testid=proposal-card]")).toBeTruthy();
+    expect(mark(page)).toBe("Waiting for you to file 2 tasks");
+    expect(header(page)).toBe("Needs you · file 2 tasks");
+    // The header's chip is the one filled pill: the band's head is words and a glyph.
+    const solid = [...page.querySelectorAll("[data-status=awaiting_input]")];
+    expect(solid.map((n) => n.getAttribute("data-testid"))).toEqual(["header-needs-you"]);
+  });
+
+  test("one task left, one filed: 1 task; a task and an edit: 1 task, 1 edit", async () => {
+    const one = await sessionPage(new SessionClient(detail("owner", {
+      proposals: [card([{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }, { canFile: true }])] })));
+    await until(() => band(one), "the band");
+    expect(mark(one)).toBe("Waiting for you to file 1 task");
+    expect(header(one)).toBe("Needs you · file 1 task");
+    for (const unmount of mounted.splice(0)) await unmount();
+    const mixed = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }], ["task", "edit"])] })));
+    await until(() => band(mixed), "the band");
+    expect(mark(mixed)).toBe("Waiting for you to file 1 task, 1 edit");
+    expect(header(mixed)).toBe("Needs you · file 1 task, 1 edit");
+  });
+
+  test("no band and no header chip when all is filed, when what is left is someone else's, or for a reader", async () => {
+    const cases: SessionDetail[] = [
+      detail("owner", { proposals: [card([{ filed: true, filedBy: "Márcio Martins", key: "BL-61" }])] }),
+      detail("chat", { proposals: [card([{ filed: true, filedBy: "Ana Nunes", key: "BL-61" },
+        { canFile: false, blockedBy: "owner", owner: ref(ANA), why: "Only Ana can file this: it's their task" }], ["task", "edit"])] }),
+      detail("read", { proposals: [card([{ canFile: false, blockedBy: "reader", why: "readers can't file" }])] }),
+      // A reader files nothing, whatever an item's status says.
+      detail("read", { proposals: [card([{ canFile: true }])] }),
+    ];
+    for (const d of cases) {
+      const page = await sessionPage(new SessionClient(d));
+      await until(() => page.querySelector("[data-testid=proposal-fold]"), "the folded line");
+      expect(band(page)).toBeNull();
+      expect(header(page)).toBeNull();
+      for (const unmount of mounted.splice(0)) await unmount();
+    }
+  });
+
+  test("a question waiting on you wins the header; the card keeps its band", async () => {
+    const asked = { id: "q_1", prompt: "Grow the window?", options: ["Yes", "No"], askedAt: at(40), to: null, yours: true };
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }])], question: asked })));
+    await until(() => band(page), "the band");
+    expect(header(page)).toBe("Needs you · answer the question");
+    expect(mark(page)).toBe("Waiting for you to file 1 task");
+  });
+
+  test("a relation card after the tasks card: the header names the tasks card; each card keeps its band", async () => {
+    const relation = { id: "prp_2", runId: RUN, createdAt: at(40), items: [{ kind: "relation" as const, from: "BL-41", to: "BL-42", relationKind: "blocks" as const }],
+      status: [{ canFile: true }] };
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }]), relation] })));
+    await until(() => page.querySelector("[data-proposal=prp_2] [data-testid=proposal-waiting]"), "the relation card's band");
+    expect(page.querySelector("[data-proposal=prp_1] [data-testid=proposal-waiting]")).toBeTruthy();
+    expect(header(page)).toBe("Needs you · file 2 tasks");
+  });
+});
+
+describe("proposals in Waiting on you", () => {
+  class ProposalsClient extends SessionClient {
+    list: SessionsList = {
+      sessions: [{ id: SESSION, title: "Warehouse nightlies", role: "owner", createdAt: at(0), owner: ref(ME), shared: false, projects: [],
+        runStatus: null, dudePause: null, filed: 0, lastActivityAt: at(30), archived: false }],
+      invitations: [], questions: [],
+      proposals: [{ sessionId: SESSION, title: "Warehouse nightlies", proposalId: "prp_1", count: 2, kinds: ["task", "task"], proposedAt: at(30) }],
+    };
+    override sessions(): Promise<SessionsList> {
+      return Promise.resolve(this.list);
+    }
+  }
+
+  test("a card with items you can file is a row: the brainstorm's face, what it proposed, the session, and Review and file to its card", async () => {
+    const client = new ProposalsClient(detail("owner", {
+      proposals: [{ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task", project: "BL", title: "A", goal: "g" }, { kind: "task", project: "BL", title: "B", goal: "g" }],
+        status: [{ canFile: true }, { canFile: true }] }],
+    }));
+    const page = await shell("#/waiting", client);
+    const row = await until(() => page.querySelector("[data-testid=session-proposal]"), "the proposal row");
+    expect(row.textContent).toContain("Brainstorm proposed 2 tasks for you to file");
+    expect(row.textContent).toContain("Warehouse nightlies");
+    expect(row.querySelector("[role=img][data-role=brainstorm]")).toBeTruthy();
+    const facets = [...page.querySelectorAll("[data-testid=inbox] *")].map((n) => n.textContent ?? "");
+    expect(facets.some((t) => t.startsWith("Proposals"))).toBe(true);
+    // The sidebar's count has it.
+    const count = await until(() => page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)?.[0], "the count");
+    expect(count).toBe("1");
+    await click(row.querySelector("[data-testid=proposal-review]")!);
+    await until(() => window.location.hash.includes(`sessions/${SESSION}`) || null, "the session");
+    expect(window.location.hash).toContain(`sessions/${SESSION}?proposal=prp_1`);
+    await until(() => page.querySelector("[data-testid=session-screen] [data-proposal=prp_1] [data-testid=proposal-waiting]"), "the card waiting");
+  });
+
+  test("a card proposed, then filed elsewhere, re-reads the list: the sidebar's count follows", async () => {
+    const client = new ProposalsClient(detail("owner"));
+    const entry = client.list.proposals!;
+    client.list = { ...client.list, proposals: [] };
+    const page = await shell("#/waiting", client);
+    await until(() => page.querySelector("[data-testid=inbox]"), "the inbox");
+    await settle(500);
+    const count = () => page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)?.[0] ?? null;
+    expect(count()).toBeNull();
+    const event = (eventType: string) => act(async () => emit({ eventType, occurredAt: new Date().toISOString(), organizationId: "org_1",
+      projectId: null as unknown as string, taskId: null as unknown as string, runId: RUN, sessionId: SESSION, workflowRunId: null,
+      actor: { type: "system", id: "dude" }, source: "orchestrator", correlationId: null, causationId: null, payload: { proposalId: "prp_1" } }));
+    client.list = { ...client.list, proposals: entry };
+    await event("session.proposed");
+    await until(() => count() === "1" || null, "the count after session.proposed");
+    client.list = { ...client.list, proposals: [] };
+    await event("session.filed");
+    await until(() => count() === null || null, "no count after session.filed");
+  });
+
+  test("no entry, no row and no count once there is nothing of yours to file", async () => {
+    const client = new ProposalsClient(detail("owner"));
+    client.list = { ...client.list, proposals: [] };
+    const page = await shell("#/waiting", client);
+    await until(() => page.querySelector("[data-testid=inbox]"), "the inbox");
+    await settle();
+    expect(page.querySelector("[data-testid=session-proposal]")).toBeNull();
+    expect(page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)).toBeNull();
+  });
+});
+
+describe("a session opened at its card", () => {
+  /** Lays the transcript out: the card 1200px down a 5000px log; records where it scrolls. */
+  async function laidOut(run: (tops: number[]) => Promise<void>) {
+    const tops: number[] = [];
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    const scrollTo = HTMLElement.prototype.scrollTo;
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      return { top: this.matches("[data-proposal=prp_1]") ? 1200 : 0, bottom: 0 } as DOMRect;
+    };
+    HTMLElement.prototype.scrollTo = function (this: HTMLElement, o?: ScrollToOptions | number) {
+      if (typeof o === "object" && this.getAttribute("role") === "log") tops.push(o.top ?? 0);
+    } as typeof HTMLElement.prototype.scrollTo;
+    Object.defineProperty(Element.prototype, "scrollHeight", { configurable: true, get: () => 5000 });
+    // A browser lays the log out once it mounts, and the transcript follows (or holds) as it does.
+    const observer = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe() {
+        queueMicrotask(() => this.callback([], this as unknown as ResizeObserver));
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      await run(tops);
+    } finally {
+      globalThis.ResizeObserver = observer;
+      HTMLElement.prototype.getBoundingClientRect = rect;
+      HTMLElement.prototype.scrollTo = scrollTo;
+      if (height) Object.defineProperty(Element.prototype, "scrollHeight", height);
+      else delete (Element.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  }
+  const card = (status: ProposalItemStatus) => ({ id: "prp_1", runId: RUN, createdAt: at(30), items: [{ kind: "task" as const, project: "BL", title: "A", goal: "g" }], status: [status] });
+  const later = { id: "prp_2", runId: RUN, createdAt: at(50), items: [{ kind: "task" as const, project: "BL", title: "B", goal: "g" }], status: [{ filed: true, filedBy: "Ana Nunes", key: "BL-70" }] };
+
+  async function open(d: SessionDetail, proposal?: string) {
+    const client = new SessionClient(d);
+    const { container, unmount } = await mount(
+      <PeopleProvider client={client}>
+        <ToastProvider>
+          <SessionScreen client={client} sessionId={SESSION} proposal={proposal} projects={[]} onBack={() => {}} onChanged={() => {}} onArchived={() => {}} />
+        </ToastProvider>
+      </PeopleProvider>,
+    );
+    mounted.push(unmount);
+    await until(() => container.querySelector("[data-proposal=prp_1]"), "the card");
+    await settle();
+    return container;
+  }
+
+  test("?proposal= scrolls to the card and holds it, though nothing on it is yours to file", async () => {
+    await laidOut(async (tops) => {
+      await open(detail("read", { proposals: [card({ canFile: false, blockedBy: "reader", why: "readers can't file" }), later] }), "prp_1");
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 1188)).toBe(true);
+    });
+  });
+
+  test("without it, the card waiting on you is held in view on opening; with nothing waiting, the log follows its end", async () => {
+    await laidOut(async (tops) => {
+      await open(detail("owner", { proposals: [card({ canFile: true })] }));
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 1188)).toBe(true);
+    });
+    for (const unmount of mounted.splice(0)) await unmount();
+    await laidOut(async (tops) => {
+      await open(detail("read", { proposals: [card({ canFile: false, blockedBy: "reader", why: "readers can't file" }), later] }));
+      expect(tops.length).toBeGreaterThan(0);
+      expect(tops.every((t) => t === 5000)).toBe(true);
+    });
   });
 });

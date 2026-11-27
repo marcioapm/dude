@@ -112,7 +112,7 @@ The card is in the session. A member files what they keep, as themselves; you ar
 
 ## propose-json-with-session-url
 
-{"proposalId":"prp_example","next":"The card is in the session. A member files what they keep, as themselves; you are not told unless they say so.","sessionUrl":"https://dude.example/#/o/acme/sessions/ssn_example"}
+{"proposalId":"prp_example","next":"The card is in the session. A member files what they keep, as themselves; you are not told unless they say so.","sessionUrl":"https://dude.example/#/o/acme/sessions/ssn_example?proposal=prp_example"}
 
 ## relate
 

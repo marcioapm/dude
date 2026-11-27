@@ -54,6 +54,7 @@ export type { ThinkingBlockProps } from "./ThinkingBlock.tsx";
 export { AgentPlan, PlanMeter, planProgress } from "./AgentPlan.tsx";
 export type { AgentPlanProps, PlanItem, PlanMeterProps } from "./AgentPlan.tsx";
 export { ChatAside, ChatMessage } from "./ChatMessage.tsx";
+export { ClampedBody } from "./ClampedBody.tsx";
 export type { ChatMessageProps, ChatMessageKind, HumanIntent } from "./ChatMessage.tsx";
 export { ChatThread } from "./ChatThread.tsx";
 export type { ChatThreadProps } from "./ChatThread.tsx";
@@ -207,8 +208,8 @@ export { CanRunContainersBadge, ImagePicker, ImageMark, ImageStatusBadge } from 
 export type { ImagePickerProps, ImageChoiceView } from "./ImagePicker.tsx";
 export { BuildQueueStrip, BuildStages, ImageState, ImageHistory } from "./Images.tsx";
 export type { BuildQueueStripProps, BuildStage, BuildStageState, ImageStateKind, ImageHistoryProps, ImageHistoryVersion } from "./Images.tsx";
-export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, proposalSummary } from "./Brainstorm.tsx";
-export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
+export { Capabilities, LinkedProjects, ProposalCard, SESSION_ROLE_WORD, SessionPeople, SessionRow, SessionTitle, SharedMark, ProposalWaiting, proposalSummary, toFileWords, yoursToFile } from "./Brainstorm.tsx";
+export type { LinkedProject, ProposalCardItem, ProposalCardProps, ProposalWaitingProps, ProposalKind, ProposalRelation, SessionMember, SessionRole, SessionRowProps, SessionTitleProps } from "./Brainstorm.tsx";
 export { OrgFace } from "./OrgFace.tsx";
 export type { OrgFaceProps, Organisation } from "./OrgFace.tsx";
 export { OrgSwitcher, ProfileMenu, profileItems, roleWord, switcherItems } from "./OrgSwitcher.tsx";

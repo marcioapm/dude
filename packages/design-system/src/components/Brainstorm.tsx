@@ -3,7 +3,7 @@ import type { TaskStatus } from "@dude/domain";
 import { cx } from "../util/cx.ts";
 import { Checkbox } from "../primitives/Checkbox.tsx";
 import { Button } from "../primitives/Button.tsx";
-import { Icon } from "../icons/index.tsx";
+import { Icon, type IconName } from "../icons/index.tsx";
 import { statusSpec } from "../tokens/status.ts";
 import { firstName } from "../util/format.ts";
 import { PersonAvatar, type Person } from "./PersonAvatar.tsx";
@@ -11,6 +11,8 @@ import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { RefLead } from "./RefLead.tsx";
 import { StatusMark } from "./StatusMark.tsx";
+import { ClampedBody } from "./ClampedBody.tsx";
+import { Disclosure } from "./Disclosure.tsx";
 import styles from "./Brainstorm.module.css";
 
 /*
@@ -131,8 +133,10 @@ export interface ProposalCardItem {
   readonly kind: ProposalKind;
   /** The title: a new epic's or task's, or what an edit, comment or note is on ("Edit BL-58 · Daily rollup", "Note on Usage"). */
   readonly title: ReactNode;
-  /** One line under it: a task's goal, an epic's description, the comment's words. */
+  /** Under it: a task's goal (clamped to three lines behind Show all), an epic's description, the comment's words. */
   readonly detail?: ReactNode;
+  /** A task's acceptance criteria, listed under its goal in a closed "Acceptance criteria" disclosure. */
+  readonly criteria?: ReadonlyArray<string> | undefined;
   /** A task item's images, filed with it as the task's own: the app's rendering of them (thumbnails), under its detail. */
   readonly images?: ReactNode;
   /** A proposed epic's notes, pinned for its agents when it is filed: Markdown, in order. */
@@ -157,6 +161,11 @@ export interface ProposalCardItem {
    * rather than fold a problem away.
    */
   readonly blockedFor?: "you" | "everyone" | undefined;
+  /**
+   * On a card a later proposal replaced, unfiled: nobody files it now, and
+   * nothing is left to act on, so it folds the card as a filed item does.
+   */
+  readonly replaced?: boolean | undefined;
   /** Why not, said on the item ("Only Márcio can file this: it's his task"). */
   readonly why?: string | undefined;
   /** Filed already: by whom, as what ("Ana filed BL-61"). */
@@ -202,33 +211,50 @@ export function proposalSummary(kinds: ReadonlyArray<ProposalKind>): string {
     .join(", ");
 }
 
+/** A task's goal on the card: this many lines, then Show all. */
+const GOAL_LINES = 3;
+
 /** How many filed items the folded line names before "+N more". */
 const FOLDED_NAMES = 4;
 
 /** Unfiled, and someone else's to file: not the person looking's, yet not blocked for everyone. */
 function othersToFile(item: ProposalCardItem, readOnly?: boolean): boolean {
-  if (item.filed) return false;
+  if (item.filed || item.replaced) return false;
   return item.canFile ? Boolean(readOnly) : item.blockedFor === "you";
 }
 
 /**
  * Nothing on the card is left for the person looking to file: each item is
- * filed, or someone else's to file. An item nobody can file keeps it open.
+ * filed, replaced by a later proposal, or someone else's to file. An item
+ * nobody can file for another reason keeps it open.
  */
 export function nothingLeftToFile(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): boolean {
-  return items.length > 0 && items.every((item) => item.filed || othersToFile(item, readOnly));
+  return items.length > 0 && items.every((item) => item.filed || item.replaced || othersToFile(item, readOnly));
+}
+
+/** The items the person looking can file now: what the card waits on them for. */
+export function yoursToFile(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): ProposalCardItem[] {
+  return readOnly ? [] : items.filter((item) => item.canFile && !item.filed && !item.replaced);
 }
 
 /**
  * The folded card's words after "Proposed work · 2 epics, 3 tasks": all
  * filed, what they became (an epic, which has no key, by its title) and who
- * filed them; otherwise how many are filed and how many wait for others.
+ * filed them; otherwise how many are filed, how many wait for others, and
+ * how many a later proposal replaced ("replaced by a later proposal" when
+ * it replaced them all).
  */
 export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): string[] {
   const filed = items.flatMap((item) => (item.filed ? [{ item, filed: item.filed }] : []));
   if (filed.length < items.length) {
-    const others = `${items.filter((item) => othersToFile(item, readOnly)).length} for others to file`;
-    return filed.length > 0 ? [`${filed.length} filed`, others] : [others];
+    const others = items.filter((item) => othersToFile(item, readOnly)).length;
+    const replaced = items.filter((item) => !item.filed && item.replaced).length;
+    if (replaced === items.length) return ["replaced by a later proposal"];
+    return [
+      ...(filed.length > 0 ? [`${filed.length} filed`] : []),
+      ...(others > 0 || replaced === 0 ? [`${others} for others to file`] : []),
+      ...(replaced > 0 ? [`${replaced} replaced by a later proposal`] : []),
+    ];
   }
   const names = filed.map(({ item, filed: f }) =>
     (item.kind === "epic" || !f.key) && typeof item.title === "string" ? item.title : f.key || "an item");
@@ -236,6 +262,47 @@ export function foldedWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: b
   const by = [...new Set(filed.map(({ filed: f }) => firstName(f.by)))];
   const who = by.length > 1 ? `${by.slice(0, -1).join(", ")} and ${by.at(-1)}` : by[0];
   return [`all filed: ${shown.join(", ")}`, ...(who ? [`by ${who}`] : [])];
+}
+
+/** "2 tasks, 1 edit": what the person looking has to file on the card, by kind. */
+export function toFileWords(items: ReadonlyArray<ProposalCardItem>, readOnly?: boolean): string {
+  return proposalSummary(yoursToFile(items, readOnly).map((i) => i.kind));
+}
+
+export interface ProposalWaitingProps extends HTMLAttributes<HTMLElement> {
+  /** What waits on the person looking: "2 tasks", "1 task, 1 edit" (`toFileWords`). */
+  readonly toFile: string;
+  /** The card. */
+  readonly children: ReactNode;
+}
+
+/**
+ * A card with items the person looking can file, drawn as the waiting
+ * question is: QuestionCard's highlight (the attention wash across the
+ * transcript and the 2px attention bar at its left edge, square), with
+ * "Waiting for you to file 2 tasks" above the card. The app draws it only
+ * while `yoursToFile` has items; otherwise the card stands alone and folds
+ * as it does.
+ *
+ * Its head is the attention glyph and the words in the attention ink, "Needs
+ * you" said to a screen reader beside them, as QuestionCard says it: never
+ * a `StatusMark` pill, since the header's Needs you is the single filled
+ * pill on the screen.
+ */
+export function ProposalWaiting({ toFile, className, children, ...rest }: ProposalWaitingProps) {
+  return (
+    <section className={cx(styles["waiting"], className)} aria-label={`Proposed work waiting for you to file: ${toFile}`}
+      data-testid="proposal-waiting" {...rest}>
+      <div className={styles["waitingHead"]}>
+        <span className="ds-sr-only">Needs you.</span>
+        <span className={styles["waitingMark"]} data-testid="proposal-waiting-mark">
+          <Icon name={statusSpec("awaiting_input").glyph as IconName} size={12} strokeWidth={1.75} />
+          {`Waiting for you to file ${toFile}`}
+        </span>
+      </div>
+      {children}
+    </section>
+  );
 }
 
 /**
@@ -392,7 +459,14 @@ function OpenCard({ items, selected, onToggle, onFile, filingAs, busy, readOnly,
                   {item.title}
                   {item.tag ? <span className={styles["tag"]}>{item.tag}</span> : null}
                 </div>
-                {item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.detail && item.kind === "task" ? (
+                  <ClampedBody lines={GOAL_LINES}><div className={styles["itemDetail"]} data-testid="item-goal">{item.detail}</div></ClampedBody>
+                ) : item.detail ? <div className={styles["itemDetail"]}>{item.detail}</div> : null}
+                {item.kind === "task" && item.criteria?.length ? (
+                  <Disclosure className={styles["criteria"]} title="Acceptance criteria" meta={`${item.criteria.length}`} data-testid="item-criteria">
+                    <ul className={styles["criteriaList"]}>{item.criteria.map((c, n) => <li key={n}>{c}</li>)}</ul>
+                  </Disclosure>
+                ) : null}
                 {item.images ? <div data-testid="proposal-images">{item.images}</div> : null}
                 {item.notes && item.notes.length > 0 ? <ProposedNotes notes={item.notes} /> : null}
                 {item.relations?.length ? <ItemRelations relations={item.relations} /> : null}

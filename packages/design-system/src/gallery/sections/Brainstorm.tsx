@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Block, Col, Label, Panes, Row, Section, States, type PaneMode } from "../Frame.tsx";
 import { AgentAvatar } from "../../components/AgentAvatar.tsx";
 import { StatusMark } from "../../components/StatusMark.tsx";
-import { AdminOwned, Capabilities, LinkedProjects, ProposalCard, SessionPeople, SessionRow, SessionTitle, SharedMark, type ProposalCardItem } from "../../components/Brainstorm.tsx";
+import { AdminOwned, Capabilities, LinkedProjects, ProposalCard, ProposalWaiting, SessionPeople, SessionRow, SessionTitle, SharedMark, toFileWords, type ProposalCardItem } from "../../components/Brainstorm.tsx";
 import { GeneralAccessRow, MentionChip, MentionMenu, MentionShareConfirm, type MentionItem } from "../../components/SessionAccess.tsx";
 import { PersonAvatar } from "../../components/PersonAvatar.tsx";
 import { WaitingList, WaitingRow } from "../../components/WaitingList.tsx";
@@ -119,6 +119,23 @@ const NOTES: ProposalCardItem[] = [
     before: "Exports are CSV only.", after: "Exports are CSV and Parquet; Parquet for more than 100k rows." },
 ];
 
+/** Tasks as a brainstorm writes them after an investigation: a long goal and its acceptance criteria. */
+const READABLE: ProposalCardItem[] = [
+  { kind: "task", title: "Warehouse nightly: clone the goals table with its defaults", project: { key: "AN", name: "Analytics" }, canFile: true,
+    detail: "The warehouse nightly's coverage step fails before any test runs: setUpClass inserts a goal into the external analytics table, and the "
+      + "warehouse refuses it with \"Cannot insert a NULL value into column copy_index\". The table is cloned with LIKE, which keeps NOT NULL but drops "
+      + "the source's DEFAULT 0, so a row inserted without copy_index is refused. Clone it with the source table's defaults, then dispatch the "
+      + "nightly on the fix branch to show the step gets past setup.",
+    criteria: ["The test creates analytics_unit_goals with the source table's column defaults (LIKE … INCLUDING DEFAULTS).",
+      "The nightly, dispatched on the fix branch, gets past setUpClass with no copy_index error; the run link is in the pull request.",
+      "No change to the production unit_goals schema."] },
+  { kind: "task", title: "Cache nightly: find why the unsegmented query re-exported", project: { key: "AN", name: "Analytics" }, canFile: true,
+    detail: "The unsegmented query wrote a fresh cache file instead of reusing the covering one. Find which fallback rejected it and fix it where it lives.",
+    criteria: ["Re-run only that test and read the engine log to see which fallback ran.", "The cause is fixed where it lives, with a regression test."] },
+];
+
+const WAITING_ONE: ProposalCardItem[] = [{ ...READABLE[0]!, filed: filedBy("Ana Ribeiro", "AN-123") }, READABLE[1]!, ITEMS[3]!];
+
 function NothingTicked() {
   return <ProposalCard items={FRESH} selected={new Set()} filingAs="Ana" onToggle={() => undefined} onFile={() => undefined} />;
 }
@@ -202,19 +219,28 @@ export function BrainstormSection({ mode }: { readonly mode: PaneMode }) {
         </Panes>
       </Block>
       <Block id="bs-proposal" title="ProposalCard"
-        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. With nothing ticked, File stays, disabled, beside “Tick what to file.” With nothing left for the person looking to file, the card folds to one line where it was proposed, in the Chat's margin grammar; the line opens the whole card, read only. An item nobody can file now (its task started, its project unlinked) keeps the card open with its reason. Nothing on it names the session.">
+        note="Filing acts as the person who presses File. An item only someone else may file is dimmed and says who; one filed says who filed it as what. While the card has items the person looking can file it sits in the waiting question's highlight — the attention wash and the 2px attention bar, square — under “Waiting for you to file 2 tasks”; with nothing of theirs to file, no band. A task's goal shows three lines, then Show all; its acceptance criteria are folded under it, closed. With nothing ticked, File stays, disabled, beside “Tick what to file.” With nothing left for the person looking to file, the card folds to one line where it was proposed, in the Chat's margin grammar; the line opens the whole card, read only. An item nobody can file now (its task started, its project unlinked) keeps the card open with its reason. Nothing on it names the session.">
         <Panes mode={mode} surface>
           <Col>
             <Label>open: Ana, who can chat, before anything is filed</Label>
             <Card items={FRESH} />
             <Label>partly filed, some still Ana's to file</Label>
             <Card />
+            <Label>waiting on Ana: the band around the card while it has items she can file, the words from what she can file</Label>
+            <ProposalWaiting toFile={toFileWords(READABLE)}><Card items={READABLE} /></ProposalWaiting>
+            <Label>waiting on Ana, one filed and an edit that is Márcio's: only her task counts</Label>
+            <ProposalWaiting toFile={toFileWords(WAITING_ONE)}><Card items={WAITING_ONE} /></ProposalWaiting>
+            <Label>tasks: a long goal clamped to three lines behind Show all, a short one whole; the acceptance criteria folded under each</Label>
+            <Card items={READABLE} />
             <Label>nothing ticked: File disabled, the footer says to tick</Label>
             <NothingTicked />
             <Label>folded: all filed</Label>
             <Card items={ALL_FILED} />
             <Label>folded: nothing left for Ana, one for Márcio</Label>
             <Card items={LEFT_FOR_OTHERS} />
+            <Label>folded: replaced by a later proposal, one item filed from it before</Label>
+            <Card items={[{ ...READABLE[0]!, filed: filedBy("Ana Ribeiro", "AN-123") },
+              { ...READABLE[1]!, canFile: false, replaced: true, why: "Replaced by a later proposal" }]} />
             <Label>blocked for everyone: stays open, saying why</Label>
             <Card items={BLOCKED_FOR_EVERYONE} />
             <Label>opened from folded</Label>

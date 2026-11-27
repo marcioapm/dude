@@ -124,9 +124,14 @@ def test_a_session_reads_two_projects_proposes_and_files_as_the_person_with_no_t
     assert all(s["canFile"] for s in card["status"])
     assert query(owner_dsn, "SELECT count(*) AS n FROM tasks WHERE project_id = ANY(%s)", ([billing["id"], web["id"]],))[0]["n"] == 0
 
+    # It waits on its owner in Waiting on you until it is filed.
+    waiting = [p for p in client.get("/v1/brainstorms").json().get("proposals", []) if p["sessionId"] == session]
+    assert [(p["proposalId"], p["count"], p["kinds"]) for p in waiting] == [(card["id"], 3, ["epic", "task", "task"])], waiting
+
     # File: the epic first, its task under it, as the person who pressed File.
     filed = client.post(f"/v1/brainstorms/{session}/file", {"proposalId": card["id"], "items": [0, 1, 2]}).json()["results"]
     assert [r["status"] for r in filed] == ["filed"] * 3, filed
+    assert not [p for p in client.get("/v1/brainstorms").json()["proposals"] if p["sessionId"] == session]
     me = client.get("/v1/me").json()["person"]["id"]
     tasks = query(owner_dsn, """SELECT t.id, t.title, t.goal, e.title AS epic, t.created_by_run_id,
         (SELECT person_id FROM task_people tp WHERE tp.task_id = t.id AND position = 0) AS owner
