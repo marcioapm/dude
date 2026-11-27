@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { ChatMessage } from "../src/components/ChatMessage.tsx";
 import { ProposalCard, ProposalWaiting, foldedWords, nothingLeftToFile, toFileWords, yoursToFile, type ProposalCardItem } from "../src/components/Brainstorm.tsx";
 
 let root: Root | null = null;
@@ -26,15 +27,15 @@ async function mount(el: React.ReactElement): Promise<HTMLElement> {
   return host;
 }
 
-/** Layout as a browser would give it: 20px lines; a text past 300 characters is 8 lines tall. */
-async function withLayout(run: (measure: () => Promise<void>) => Promise<void>) {
+/** Layout as a browser would give it: 20px lines; a text past 300 characters is `tall` px (8 lines) tall. */
+async function withLayout(run: (measure: () => Promise<void>) => Promise<void>, tall = 160) {
   const original = globalThis.ResizeObserver;
   const measures: Array<() => void> = [];
   globalThis.ResizeObserver = class {
     constructor(private callback: ResizeObserverCallback) {}
     observe(target: Element) {
       for (const el of [target, target.firstElementChild]) if (el) (el as HTMLElement).style.lineHeight = "20px";
-      Object.defineProperty(target, "scrollHeight", { configurable: true, get: () => ((target.textContent?.length ?? 0) > 300 ? 160 : 40) });
+      Object.defineProperty(target, "scrollHeight", { configurable: true, get: () => ((target.textContent?.length ?? 0) > 300 ? tall : 40) });
       measures.push(() => this.callback([], this as unknown as ResizeObserver));
     }
     unobserve() {}
@@ -156,5 +157,25 @@ describe("ProposalWaiting", () => {
     expect(band.querySelector("[data-status]")).toBeNull();
     expect(band.querySelector('[data-testid="proposal-waiting-mark"] svg')).toBeTruthy();
     expect([...band.querySelectorAll(".ds-sr-only")].map((n) => n.textContent)).toContain("Needs you.");
+  });
+});
+
+describe("a prompt in the Chat, through ClampedBody", () => {
+  test("a long prompt is clamped with Show all; a short one has no toggle", async () => {
+    await withLayout(async (measure) => {
+      const el = await mount(<ChatMessage role="human" intent="prompt" name="Ana" content={LONG_GOAL} />);
+      await measure();
+      expect(el.querySelector("[data-clamped=true]")).toBeTruthy();
+      expect(button(el, "Show all")!.getAttribute("aria-expanded")).toBe("false");
+    }, 400);
+    await act(async () => root?.unmount());
+    host?.remove();
+    await withLayout(async (measure) => {
+      const el = await mount(<ChatMessage role="human" intent="prompt" name="Ana" content="Find which fallback ran." />);
+      await measure();
+      expect(el.textContent).toContain("Find which fallback ran.");
+      expect(button(el, "Show all")).toBeUndefined();
+      expect(el.querySelector("[data-clamped=true]")).toBeNull();
+    });
   });
 });

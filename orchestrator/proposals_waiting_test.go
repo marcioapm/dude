@@ -116,6 +116,15 @@ func TestTheListSaysWhichCardsWaitOnYou(t *testing.T) {
 	if w := s.waiting(s.marcio, id); w != nil {
 		t.Errorf("all filed, the earlier card replaced (%s): %v", early, w)
 	}
+
+	// An earlier card filed whole, a later one with items to file: the later one waits.
+	again := s.session()
+	done := s.proposal(again, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Filed idea", Goal: "Something proposed and filed"}})
+	s.ok(s.marcio, "POST", "/internal/sessions/"+again+"/file", map[string]any{"proposalId": done, "items": []int{0}})
+	next := s.proposal(again, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Next idea", Goal: "Something proposed after it"}})
+	if w := s.waiting(s.marcio, again); w == nil || w["proposalId"] != next || w["count"] != float64(1) {
+		t.Errorf("an earlier card filed, the later one waiting: %v, want %s", w, next)
+	}
 }
 
 // relation is the card relate records: one relation between tasks.

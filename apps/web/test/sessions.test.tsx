@@ -2493,7 +2493,28 @@ describe("proposals in Waiting on you", () => {
     expect(count).toBe("1");
     await click(row.querySelector("[data-testid=proposal-review]")!);
     await until(() => window.location.hash.includes(`sessions/${SESSION}`) || null, "the session");
+    expect(window.location.hash).toContain(`sessions/${SESSION}?proposal=prp_1`);
     await until(() => page.querySelector("[data-testid=session-screen] [data-proposal=prp_1] [data-testid=proposal-waiting]"), "the card waiting");
+  });
+
+  test("a card proposed, then filed elsewhere, re-reads the list: the sidebar's count follows", async () => {
+    const client = new ProposalsClient(detail("owner"));
+    const entry = client.list.proposals!;
+    client.list = { ...client.list, proposals: [] };
+    const page = await shell("#/waiting", client);
+    await until(() => page.querySelector("[data-testid=inbox]"), "the inbox");
+    await settle(500);
+    const count = () => page.querySelector("[data-testid=waiting-on-you]")?.textContent?.match(/\d+/)?.[0] ?? null;
+    expect(count()).toBeNull();
+    const event = (eventType: string) => act(async () => emit({ eventType, occurredAt: new Date().toISOString(), organizationId: "org_1",
+      projectId: null as unknown as string, taskId: null as unknown as string, runId: RUN, sessionId: SESSION, workflowRunId: null,
+      actor: { type: "system", id: "dude" }, source: "orchestrator", correlationId: null, causationId: null, payload: { proposalId: "prp_1" } }));
+    client.list = { ...client.list, proposals: entry };
+    await event("session.proposed");
+    await until(() => count() === "1" || null, "the count after session.proposed");
+    client.list = { ...client.list, proposals: [] };
+    await event("session.filed");
+    await until(() => count() === null || null, "no count after session.filed");
   });
 
   test("no entry, no row and no count once there is nothing of yours to file", async () => {
