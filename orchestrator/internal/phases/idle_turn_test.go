@@ -138,10 +138,18 @@ func TestAConductorTurnWithSomethingPendingIsNotWoken(t *testing.T) {
 		"phase run":  `UPDATE runs SET status = 'running', phase = 'implement' WHERE id = 'other_'||$1`,
 		"dispatch": `INSERT INTO workflow_dispatches (id, organization_id, task_id, repository_id, workflow, ref, state)
 			VALUES ('wfd_'||$1, $1, 'wi_'||$1, (SELECT id FROM repositories WHERE organization_id = $1 LIMIT 1), 'ci.yml', 'b', 'bound')`,
+		"pull request": `INSERT INTO pull_requests (id, organization_id, project_id, task_id, repository_id, number, url, head_branch, base_branch, head_sha, title, state)
+			VALUES ('pr_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 'rep_'||$1, 7, 'https://github.com/o/api/pull/7', 'dude/t', 'main', 'abc', 'T', 'draft')`,
+		"pending wake": `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line)
+			VALUES ('cwk_'||$1, $1, 'wi_'||$1, 'decision', 'decision:1', 'The checks passed.')`,
+		"decision taken": `UPDATE workflow_runs SET state = jsonb_set(state, '{decision,taken}', '{"action":"open_pr"}') WHERE task_id = 'wi_'||$1`,
+		"delivery running": `UPDATE workflow_runs SET status = 'running' WHERE task_id = 'wi_'||$1`,
+		"unsent message": `INSERT INTO directives (id, organization_id, task_id, run_id, text)
+			VALUES ('dir_2', $1, 'wi_'||$1, 'run_'||$1, 'Your checks passed.')`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newIdleWorld(t, delivery.VoiceChatty)
-			if name == "dispatch" {
+			if name == "dispatch" || name == "pull request" {
 				w.exec(`INSERT INTO repositories (id, organization_id, project_id, name, url) VALUES ('rep_'||$1, $1, 'prj_'||$1, 'api', 'https://github.com/o/api')`)
 			}
 			w.said("I'd like one more run. May I start it?")
@@ -225,6 +233,13 @@ func TestAnIdleTurnOfAnEndedTaskOrNotTheConductorWakesNobody(t *testing.T) {
 	w.turnEnds()
 	if got := w.idleWakes(); len(got) != 0 {
 		t.Errorf("a phase Run's turn woke the conductor: %q", got)
+	}
+
+	w = newIdleWorld(t, delivery.VoiceChatty)
+	w.exec(`UPDATE workflow_runs SET state = state || '{"halt":{}}' WHERE task_id = 'wi_'||$1`)
+	w.turnEnds()
+	if got := w.idleWakes(); len(got) != 0 {
+		t.Errorf("a halted delivery's conductor woken: %q", got)
 	}
 }
 
@@ -316,6 +331,19 @@ func TestAConductorTurnStartedByDudesWordsIsWoken(t *testing.T) {
 				t.Errorf("%d idle wakes, want 1: %q", len(got), got)
 			}
 		})
+	}
+}
+
+// The conductor's own Chat message (its reply on a pull request thread is
+// recorded as one, with no directive) is not a person's words: its turn
+// ending in a prose question with nothing pending is woken once.
+func TestAConductorTurnWithItsOwnChatMessageIsWoken(t *testing.T) {
+	w := newIdleWorld(t, delivery.VoiceChatty)
+	w.heard(delivery.EvChatMessage, "agent", map[string]any{"text": "Replied on the pull request."}, false)
+	w.said("Shall I open another round for the review comment?")
+	w.turnEnds()
+	if got := w.idleWakes(); len(got) != 1 {
+		t.Errorf("%d idle wakes, want 1: %q", len(got), got)
 	}
 }
 
