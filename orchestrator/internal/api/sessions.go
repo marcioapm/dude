@@ -455,7 +455,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, org string
 	return nil
 }
 
-// waitingProposal is a session whose latest card has items the caller can
+// waitingProposal is a session with a card (waitingOn) that has items the caller can
 // file: what Waiting on you lists and counts.
 type waitingProposal struct {
 	SessionID  string   `json:"sessionId"`
@@ -467,17 +467,17 @@ type waitingProposal struct {
 }
 
 // waitingProposals is, for person, each session (theirs, not archived,
-// where they can chat) whose latest card still has an unfiled item, kept
-// when proposalsFor says some of them are theirs to file: the card's own
-// rule, so the count is the one the session's page shows.
+// where they can chat) with a card not replaced that still has an unfiled
+// item, kept when proposalsFor says some of them are theirs to file: the
+// card's own rule, so the count is the one the session's page shows.
 func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingProposal, error) {
 	rows, err := tx.Query(ctx, `SELECT s.id, s.title, s.role FROM (
 			SELECT c.id, c.title, session_role(c.id, $1) AS role FROM sessions c
 			WHERE c.id IN (SELECT session_id FROM session_people WHERE person_id = $1 AND accepted_at IS NOT NULL AND archived_at IS NULL)) s
-		JOIN LATERAL (`+strings.Replace(latestProposalSQL, "$1", "s.id", 1)+`) p ON true
 		WHERE s.role IN ('owner', 'chat')
 		  AND EXISTS (SELECT 1 FROM session_proposals sp, jsonb_array_elements(sp.items) WITH ORDINALITY AS it(item, n)
-			WHERE sp.id = p.id AND NOT EXISTS (SELECT 1 FROM session_filings f WHERE f.proposal_id = sp.id AND f.item = it.n - 1))`, person)
+			WHERE sp.session_id = s.id AND NOT (`+replacedCardSQL("sp")+`)
+			  AND NOT EXISTS (SELECT 1 FROM session_filings f WHERE f.proposal_id = sp.id AND f.item = it.n - 1))`, person)
 	if err != nil {
 		return nil, err
 	}
@@ -496,22 +496,41 @@ func waitingProposals(ctx context.Context, tx pgx.Tx, person string) ([]waitingP
 		if err != nil {
 			return nil, err
 		}
-		if len(cards) == 0 {
-			continue
-		}
-		latest := cards[len(cards)-1]
-		w := waitingProposal{SessionID: c.id, Title: c.title, ProposalID: latest.ID, ProposedAt: latest.CreatedAt, Kinds: []string{}}
-		for n, st := range latest.Status {
-			if st["canFile"] == true {
-				w.Count++
-				w.Kinds = append(w.Kinds, latest.Items[n].Kind)
-			}
-		}
-		if w.Count > 0 {
+		if w, ok := waitingOn(cards); ok {
+			w.SessionID, w.Title = c.id, c.title
 			out = append(out, w)
 		}
 	}
 	return out, nil
+}
+
+// waitingOn is the card of a session's that waits on the member its
+// statuses were decided for, with the items they can file: the latest
+// propose card with any, else the latest relation card with any (the
+// web's waitingCard picks the same). Not ok when no card has any.
+func waitingOn(cards []proposalCard) (waitingProposal, bool) {
+	var best *proposalCard
+	for i := range cards {
+		c := &cards[i]
+		can := false
+		for _, st := range c.Status {
+			can = can || st["canFile"] == true
+		}
+		if can && (best == nil || isProposeCard(c.Items) || !isProposeCard(best.Items)) {
+			best = c
+		}
+	}
+	if best == nil {
+		return waitingProposal{}, false
+	}
+	w := waitingProposal{ProposalID: best.ID, ProposedAt: best.CreatedAt, Kinds: []string{}}
+	for n, st := range best.Status {
+		if st["canFile"] == true {
+			w.Count++
+			w.Kinds = append(w.Kinds, best.Items[n].Kind)
+		}
+	}
+	return w, true
 }
 
 // sessionProjectsJSON (SQL, over sessions s): its linked projects, each
@@ -617,12 +636,48 @@ type proposalCard struct {
 }
 
 // replacedWhy is what an earlier card's unfiled item says: proposing again
-// replaces the card, so only the session's latest proposal is filed from.
+// replaces the propose card before it (replacedCards).
 const replacedWhy = "Replaced by a later proposal"
 
-// latestProposalSQL (SQL, $1 the session): the session's latest proposal's
-// id, in the order proposalsFor reads the cards.
-const latestProposalSQL = `SELECT id FROM session_proposals WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`
+// A propose card is one with an item that is not a relation; a card of
+// relations only (relate's) is not. Only a propose card replaces, and only
+// an earlier propose card is replaced: a relation card is fileable for as
+// long as it has items, whatever is proposed after it. isProposeCard and
+// proposeCardSQL are the one rule, in Go and in SQL; cards are ordered by
+// (created_at, id), as proposalsFor reads them.
+func isProposeCard(items []delivery.ProposalItem) bool {
+	for _, it := range items {
+		if it.Kind != "relation" {
+			return true
+		}
+	}
+	return false
+}
+
+// proposeCardSQL is isProposeCard over the session_proposals row alias.
+func proposeCardSQL(alias string) string {
+	return `EXISTS (SELECT 1 FROM jsonb_array_elements(` + alias + `.items) AS pk(item) WHERE pk.item->>'kind' IS DISTINCT FROM 'relation')`
+}
+
+// replacedCardSQL (SQL, over the session_proposals row alias): a propose
+// card with a later propose card in its session.
+func replacedCardSQL(alias string) string {
+	return proposeCardSQL(alias) + ` AND EXISTS (SELECT 1 FROM session_proposals later WHERE later.session_id = ` + alias + `.session_id
+		AND (later.created_at, later.id) > (` + alias + `.created_at, ` + alias + `.id) AND ` + proposeCardSQL("later") + `)`
+}
+
+// replacedCards says, of cards in (created_at, id) order, which a later
+// propose card replaced: replacedCardSQL's rule.
+func replacedCards(cards []proposalCard) []bool {
+	out := make([]bool, len(cards))
+	later := false
+	for i := len(cards) - 1; i >= 0; i-- {
+		propose := isProposeCard(cards[i].Items)
+		out[i] = propose && later
+		later = later || propose
+	}
+	return out
+}
 
 // proposalsFor reads the session's cards for one member. Every card it ever
 // had is read in a fixed number of queries, whatever their number: their
@@ -662,10 +717,11 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 	}); err != nil {
 		return nil, err
 	}
-	// Only the latest card's unfiled items are anyone's to file (replacedWhy).
+	// A replaced card's unfiled items are nobody's to file (replacedWhy).
+	replaced := replacedCards(cards)
 	var open []delivery.ProposalItem
 	for i, c := range cards {
-		if i < len(cards)-1 {
+		if replaced[i] {
 			continue
 		}
 		for n, it := range c.Items {
@@ -703,7 +759,7 @@ func proposalsFor(ctx context.Context, tx pgx.Tx, sessionID, person, role string
 			st := map[string]any{}
 			if f, ok := filed[fmt.Sprintf("%s/%d", c.ID, n)]; ok {
 				st["filed"], st["filedBy"], st["key"] = true, f.by, f.key
-			} else if i < len(cards)-1 {
+			} else if replaced[i] {
 				st["canFile"], st["why"], st["blockedBy"] = false, replacedWhy, "replaced"
 			} else {
 				no := facts.cannotFileIn(c.Items, n, isFiled, person, role)
@@ -1073,12 +1129,13 @@ func (s *Server) fileProposal(w http.ResponseWriter, r *http.Request, org string
 		}
 		// In the filing's transaction: a card proposed after this read is
 		// later than the filing, which stays filed as any filed item does.
-		var latest string
-		if err := tx.QueryRow(r.Context(), latestProposalSQL, id).Scan(&latest); err != nil {
+		var replaced bool
+		if err := tx.QueryRow(r.Context(), `SELECT `+replacedCardSQL("sp")+` FROM session_proposals sp WHERE sp.id = $1`,
+			body.ProposalID).Scan(&replaced); err != nil {
 			return err
 		}
-		if latest != body.ProposalID {
-			return fail(http.StatusConflict, "proposal_replaced", "proposal %s was replaced by a later proposal: file from the latest card", body.ProposalID)
+		if replaced {
+			return fail(http.StatusConflict, "proposal_replaced", "proposal %s was replaced by a later proposal: file from the later card", body.ProposalID)
 		}
 		var items []delivery.ProposalItem
 		_ = json.Unmarshal(raw, &items)

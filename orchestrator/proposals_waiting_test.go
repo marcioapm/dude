@@ -109,3 +109,94 @@ func TestTheListSaysWhichCardsWaitOnYou(t *testing.T) {
 		t.Errorf("all filed, the earlier card replaced (%s): %v", early, w)
 	}
 }
+
+// relation is the card relate records: one relation between tasks.
+func relation(from, to string) []delivery.ProposalItem {
+	return []delivery.ProposalItem{{Kind: "relation", From: from, To: to, RelationKind: "blocks"}}
+}
+
+// statusOf is item n's status on the card, for person, in the session's detail.
+func (s *sessionWorld) statusOf(person, session, card string, n int) map[string]any {
+	s.t.Helper()
+	for _, c := range s.ok(person, "GET", "/internal/sessions/"+session, nil)["proposals"].([]any) {
+		if m := c.(map[string]any); m["id"] == card {
+			return m["status"].([]any)[n].(map[string]any)
+		}
+	}
+	s.t.Fatalf("no card %s", card)
+	return nil
+}
+
+// Only a propose card replaces, and only an earlier propose card is
+// replaced: a relate after a propose leaves the propose card fileable and
+// the one Waiting on you names, the relation card fileable too; proposing
+// again replaces the first propose card only; two relates in a row both
+// stay fileable.
+func TestARelateDoesNotReplaceTheCard(t *testing.T) {
+	s := newSessionWorld(t)
+	a, b, c := s.keyOf(s.taskIn(s.project, "Meter A", s.marcio)), s.keyOf(s.taskIn(s.project, "Meter B", s.marcio)), s.keyOf(s.taskIn(s.project, "Meter C", s.marcio))
+	id := s.session()
+	tasks := s.proposal(id, []delivery.ProposalItem{
+		{Kind: "task", Project: "BL", Title: "Meter runs", Goal: "Count experiment runs per org per day"},
+		{Kind: "task", Project: "BL", Title: "Dedupe runs", Goal: "The meter's 24h key is not enough for retries"},
+	})
+	rel := s.proposal(id, relation(a, b))
+
+	if st := s.statusOf(s.marcio, id, tasks, 0); st["canFile"] != true {
+		t.Errorf("the tasks card after a relate: %v", st)
+	}
+	if st := s.statusOf(s.marcio, id, rel, 0); st["canFile"] != true {
+		t.Errorf("the relation card: %v", st)
+	}
+	if w := s.waiting(s.marcio, id); w == nil || w["proposalId"] != tasks || w["count"] != float64(2) {
+		t.Errorf("Waiting on you after a relate names %v, want the tasks card %s", w, tasks)
+	}
+	if r := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": tasks, "items": []int{0}})["results"].([]any)[0].(map[string]any); r["status"] != "filed" {
+		t.Errorf("filing from the tasks card after a relate: %v", r)
+	}
+	again := s.proposal(id, []delivery.ProposalItem{{Kind: "task", Project: "BL", Title: "Dedupe on run id", Goal: "The meter's 24h key is not enough for retries"}})
+	if st := s.statusOf(s.marcio, id, tasks, 1); st["blockedBy"] != "replaced" {
+		t.Errorf("the first propose card after proposing again: %v", st)
+	}
+	if status, out := s.as(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": tasks, "items": []int{1}}); status != 409 {
+		t.Errorf("filing from the replaced propose card: %d %v", status, out)
+	}
+	if st := s.statusOf(s.marcio, id, rel, 0); st["canFile"] != true {
+		t.Errorf("the relation card after proposing again: %v", st)
+	}
+	if w := s.waiting(s.marcio, id); w == nil || w["proposalId"] != again {
+		t.Errorf("Waiting on you names %v, want the latest propose card %s", w, again)
+	}
+	rel2 := s.proposal(id, relation(b, c))
+	for _, card := range []string{rel, rel2} {
+		if st := s.statusOf(s.marcio, id, card, 0); st["canFile"] != true {
+			t.Errorf("relation card %s after another relate: %v", card, st)
+		}
+	}
+	for _, card := range []string{rel, rel2} {
+		if r := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": card, "items": []int{0}})["results"].([]any)[0].(map[string]any); r["status"] != "filed" {
+			t.Errorf("filing relation card %s: %v", card, r)
+		}
+	}
+}
+
+// Two relates and nothing proposed: both cards stay fileable, and Waiting
+// on you names the latest of them.
+func TestRelationCardsAloneWaitOnYou(t *testing.T) {
+	s := newSessionWorld(t)
+	a, b, c := s.keyOf(s.taskIn(s.project, "Meter A", s.marcio)), s.keyOf(s.taskIn(s.project, "Meter B", s.marcio)), s.keyOf(s.taskIn(s.project, "Meter C", s.marcio))
+	id := s.session()
+	first := s.proposal(id, relation(a, b))
+	second := s.proposal(id, relation(b, c))
+	for _, card := range []string{first, second} {
+		if st := s.statusOf(s.marcio, id, card, 0); st["canFile"] != true {
+			t.Errorf("relation card %s: %v", card, st)
+		}
+	}
+	if w := s.waiting(s.marcio, id); w == nil || w["proposalId"] != second || w["count"] != float64(1) {
+		t.Errorf("Waiting on you: %v, want the latest relation card %s", w, second)
+	}
+	if r := s.ok(s.marcio, "POST", "/internal/sessions/"+id+"/file", map[string]any{"proposalId": first, "items": []int{0}})["results"].([]any)[0].(map[string]any); r["status"] != "filed" {
+		t.Errorf("filing the first relation card: %v", r)
+	}
+}

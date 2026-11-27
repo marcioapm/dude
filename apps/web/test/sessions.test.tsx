@@ -2449,6 +2449,15 @@ describe("proposed work waiting on you", () => {
     expect(header(page)).toBe("Needs you · answer the question");
     expect(mark(page)).toBe("Waiting for you to file 1 task");
   });
+
+  test("a relation card after the tasks card: the header names the tasks card; each card keeps its band", async () => {
+    const relation = { id: "prp_2", runId: RUN, createdAt: at(40), items: [{ kind: "relation" as const, from: "BL-41", to: "BL-42", relationKind: "blocks" as const }],
+      status: [{ canFile: true }] };
+    const page = await sessionPage(new SessionClient(detail("owner", { proposals: [card([{ canFile: true }, { canFile: true }]), relation] })));
+    await until(() => page.querySelector("[data-proposal=prp_2] [data-testid=proposal-waiting]"), "the relation card's band");
+    expect(page.querySelector("[data-proposal=prp_1] [data-testid=proposal-waiting]")).toBeTruthy();
+    expect(header(page)).toBe("Needs you · file 2 tasks");
+  });
 });
 
 describe("proposals in Waiting on you", () => {

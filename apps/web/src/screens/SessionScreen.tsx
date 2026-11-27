@@ -684,19 +684,24 @@ function tierName(tier: unknown): string | null {
 export const proposalSelector = (id: string) => `[data-proposal="${CSS.escape(id)}"]`;
 
 /**
- * The card waiting on the person looking, if any: the latest with items
- * the API says they can file (a reader's card files nothing), with what
- * they are in words ("2 tasks", "1 task, 1 edit").
+ * The card waiting on the person looking, if any: the latest proposed
+ * card (one with an item that is not a relation) with items the API says
+ * they can file, else the latest card of relations with any (a reader's
+ * card files nothing), with what they are in words ("2 tasks", "1 task,
+ * 1 edit"). The list's proposals entry picks the same card.
  */
 export function waitingCard(proposals: ReadonlyArray<Proposal>): { id: string; words: string } | null {
+  let relations: { id: string; words: string } | null = null;
   for (const p of [...proposals].reverse()) {
     const kinds = p.items.flatMap((item, i) => {
       const st = p.status[i];
       return st?.canFile && !st.filed && st.blockedBy !== "replaced" ? [item.kind] : [];
     });
-    if (kinds.length > 0) return { id: p.id, words: proposalSummary(kinds) };
+    if (kinds.length === 0) continue;
+    if (p.items.some((item) => item.kind !== "relation")) return { id: p.id, words: proposalSummary(kinds) };
+    relations ??= { id: p.id, words: proposalSummary(kinds) };
   }
-  return null;
+  return relations;
 }
 
 /** One proposal's card: what the person looking can file, ticked, and filing it. */

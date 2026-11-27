@@ -145,7 +145,7 @@ export interface SessionQuestionLine {
   title: string | null;
 }
 
-/** A session whose latest proposal has items you can file: `count` of them, by `kinds`, in the card's order. */
+/** A session with a card that has items you can file (its latest proposed card with any, else its latest card of relations with any): `count` of them, by `kinds`, in the card's order. */
 export interface SessionProposalLine {
   sessionId: string;
   title: string | null;
@@ -234,8 +234,9 @@ export interface ProposalItemStatus {
    * nobody can file. A link_project is the session owner's (`session_owner`),
    * and nobody's once its project is `linked` or the session links the most
    * projects it can (`limit`). An unfiled item of a card a later proposal
-   * replaced is nobody's to file (`replaced`): only the session's latest
-   * card is filed from.
+   * replaced is nobody's to file (`replaced`): only a proposed card (one
+   * with an item that is not a relation) replaces, and only an earlier
+   * proposed card; a card of relations only is filed from whatever follows it.
    */
   blockedBy?: "owner" | "reader" | "started" | "unlinked" | "not_a_task" | "blocker_unfiled" | "session_owner" | "linked" | "unknown" | "limit" | "replaced";
   owner?: PersonRef;
