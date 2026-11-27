@@ -29,7 +29,8 @@ func (w *world) noLiveConductor(task string) {
 // pending again, and the next conductor is told them. One that heard its
 // briefing is not told again.
 func TestAWakeBriefingNeverHeardIsToldAgain(t *testing.T) {
-	w := conducting(t)
+	// The scripted conductor answers wakes in prose, and this test counts wake notes.
+	w := conducting(t, withoutIdleTurnWake)
 	task := w.task()
 	first := w.talk(task)
 	w.noLiveConductor(task)

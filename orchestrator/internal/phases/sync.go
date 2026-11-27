@@ -97,6 +97,9 @@ type Syncer struct {
 	// For tests: the budget of a sweep's stall reports for asking lux;
 	// zero is stallLuxBudget.
 	StallLuxBudget time.Duration
+	// For tests: a conductor's turn that ends idle records no idle-turn
+	// wake (delivery.IdleTurnTx). False outside tests.
+	NoIdleTurnWake bool
 	// How long an aborted or failed Run's lux Run is kept for a resume
 	// (DUDE_KEEP_STOPPED).
 	KeepFor time.Duration

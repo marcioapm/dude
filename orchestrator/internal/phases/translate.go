@@ -1182,7 +1182,7 @@ func (t *translator) turnDone(ctx context.Context, tx pgx.Tx, s *Syncer, settlin
 		return err
 	}
 	payload := map[string]any{"reason": "turn_complete"}
-	if t.run.conductor() && t.run.TaskID != "" {
+	if t.run.conductor() && t.run.TaskID != "" && !s.NoIdleTurnWake {
 		// Seen in this transaction: a wait or question the turn opened
 		// holds it.
 		idle, err := delivery.IdleTurnTx(ctx, tx, t.run.ref())
