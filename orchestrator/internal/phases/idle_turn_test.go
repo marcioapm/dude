@@ -206,3 +206,74 @@ func TestAnIdleTurnOfAnEndedTaskOrNotTheConductorWakesNobody(t *testing.T) {
 		t.Errorf("a phase Run's turn woke the conductor: %q", got)
 	}
 }
+
+// heard records what started the conductor's turn: actor's typ event
+// carrying directive dir_1 and, when delivered, dir_1's delivery to the
+// Run, as the API and the translator record them.
+func (w *wakeWorld) heard(typ, actor string, payload map[string]any, delivered bool) {
+	w.t.Helper()
+	if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+		if err := w.s.event(context.Background(), tx, w.tr.run, typ, actor, payload); err != nil {
+			return err
+		}
+		if !delivered {
+			return nil
+		}
+		return w.s.event(context.Background(), tx, w.tr.run, evDirectiveDelivered, "system", map[string]any{"directiveId": "dir_1", "read": true})
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+// A turn that answers a person (their Chat message, the message Talk it
+// through started the conductor with, their steer) is conversation: it
+// ends in prose with nothing pending and is not woken nor told in Chat.
+// The next turn, started by nothing a person said, is.
+func TestAConductorTurnAnsweringAPersonIsNotWoken(t *testing.T) {
+	for name, heard := range map[string]struct {
+		typ, actor string
+		payload    map[string]any
+		delivered  bool
+	}{
+		"chat message":                  {delivery.EvChatMessage, "person", map[string]any{"text": "What do you think?", "directiveId": "dir_1"}, true},
+		"chat message by a key":         {delivery.EvChatMessage, "human", map[string]any{"text": "What do you think?", "directiveId": "dir_1"}, true},
+		"talk it through":               {delivery.EvChatMessage, "person", map[string]any{"text": "Let's talk about the login page."}, false},
+		"talk it through, no principal": {delivery.EvChatMessage, "system", map[string]any{"text": ""}, false},
+		"steer":                         {delivery.EvRunSteered, "person", map[string]any{"text": "Keep it small.", "directiveId": "dir_1", "scope": "run"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newIdleWorld(t, delivery.VoiceChatty)
+			w.heard(heard.typ, heard.actor, heard.payload, heard.delivered)
+			w.said("I think one run is enough; the change is a single file.")
+			w.turnEnds()
+			if n := w.turnsDone(); n != 1 {
+				t.Fatalf("%d turn ends", n)
+			}
+			if got, n := w.idleWakes(), w.idleNotices(); len(got) != 0 || n != 0 {
+				t.Fatalf("a turn answering a person: %d wakes %q, %d notices", len(got), got, n)
+			}
+			w.nextTurn()
+			w.said("Done thinking.")
+			w.turnEnds()
+			if got := w.idleWakes(); len(got) != 1 {
+				t.Errorf("the next turn, started by nobody's words: %d idle wakes, want 1", len(got))
+			}
+		})
+	}
+}
+
+// A person's answer to the conductor's ask_person is a choice, not a
+// conversation: a turn it started that ends with nothing pending is woken
+// once.
+func TestAConductorTurnStartedByAnAnswerIsWoken(t *testing.T) {
+	w := newIdleWorld(t, delivery.VoiceChatty)
+	w.heard("question.answered", "person", map[string]any{"questionId": "q_1", "directiveId": "dir_1"}, true)
+	w.said("Thanks, I will go with three runs.")
+	w.turnEnds()
+	if got := w.idleWakes(); len(got) != 1 {
+		t.Fatalf("%d idle wakes, want 1: %q", len(got), got)
+	}
+	if n := w.idleNotices(); n != 0 {
+		t.Errorf("%d notices", n)
+	}
+}

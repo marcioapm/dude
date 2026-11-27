@@ -64,11 +64,26 @@ var idleTurnPending = `(` + HoldsTurn + `
 const idleTurnResets = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.cursor > $2
 	AND e.event_type IN ('` + EvQuestionAsked + `', '` + EvConductorWaiting + `', '` + EvWorkflowDispatched + `'))`
 
+// personSaid (SQL, $1 the conductor's Run, $2 the cursor of its previous
+// turn end, 0 for none): a person's words reached it since: the message it
+// was started with, or a Chat message or steer of theirs it was delivered.
+// Such a turn answers the person, who reads Chat and replies; it is not
+// backstopped. Every chat.message not the agent's is a writer's
+// (ChatEvent), whatever principal the API saw. A person's answer to its
+// question (question.answered) is a choice, not a conversation, and does
+// not count; nor does a conductor's steer (conductorRunId).
+const personSaid = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.cursor > $2 AND (
+	e.event_type = '` + EvChatMessage + `' AND e.actor_type <> 'agent' AND NOT e.payload ? 'directiveId'
+	OR e.event_type = 'run.directive.delivered' AND EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1
+		AND p.event_type IN ('` + EvChatMessage + `', '` + EvRunSteered + `') AND p.actor_type <> 'agent'
+		AND p.payload->>'directiveId' = e.payload->>'directiveId' AND NOT p.payload ? 'conductorRunId')))`
+
 // IdleTurnTx is the end of a conductor's turn, in the transaction that
-// marks it done: when the task is conducted, live and not ended, and
-// nothing will wake its conductor (idleTurnPending), the stretch's first
-// idle end records an idle-turn wake, its second a notice in Chat. Returns
-// what the turn end's event carries, nil when the turn did not end idle.
+// marks it done: when the task is conducted, live and not ended, the turn
+// did not answer a person (personSaid), and nothing will wake its conductor
+// (idleTurnPending), the stretch's first idle end records an idle-turn
+// wake, its second a notice in Chat. Returns what the turn end's event
+// carries, nil when the turn did not end idle.
 func IdleTurnTx(ctx context.Context, tx pgx.Tx, ref RunRef) (map[string]any, error) {
 	d, err := ReadDelivery(ctx, tx, ref.TaskID)
 	if err != nil || !d.Conducted() || Ended(d.TaskStatus) {
@@ -77,13 +92,8 @@ func IdleTurnTx(ctx context.Context, tx pgx.Tx, ref RunRef) (map[string]any, err
 	if halted, err := HaltedTx(ctx, tx, ref.TaskID); err != nil || halted {
 		return nil, err
 	}
-	var pending bool
-	if err := tx.QueryRow(ctx, `SELECT `+idleTurnPending+` FROM tasks t JOIN runs r ON r.id = $2 WHERE t.id = $1`,
-		ref.TaskID, ref.RunID).Scan(&pending); err != nil || pending {
-		return nil, err
-	}
-	// The stretch: the last turn end of this Run, if it ended idle and
-	// nothing since ended the stretch.
+	// The last turn end of this Run: what came since is this turn's input,
+	// and the stretch is its, if it ended idle and nothing since ended it.
 	var prevCursor int64
 	var key string
 	var count int
@@ -91,6 +101,15 @@ func IdleTurnTx(ctx context.Context, tx pgx.Tx, ref RunRef) (map[string]any, err
 		FROM events WHERE run_id = $1 AND event_type = 'agent.session.stopped' AND payload->>'reason' = 'turn_complete'
 		ORDER BY cursor DESC LIMIT 1`, ref.RunID).Scan(&prevCursor, &key, &count)
 	if err != nil && !db.IsNotFound(err) {
+		return nil, err
+	}
+	var said bool
+	if err := tx.QueryRow(ctx, `SELECT `+personSaid, ref.RunID, prevCursor).Scan(&said); err != nil || said {
+		return nil, err
+	}
+	var pending bool
+	if err := tx.QueryRow(ctx, `SELECT `+idleTurnPending+` FROM tasks t JOIN runs r ON r.id = $2 WHERE t.id = $1`,
+		ref.TaskID, ref.RunID).Scan(&pending); err != nil || pending {
 		return nil, err
 	}
 	if key != "" {
