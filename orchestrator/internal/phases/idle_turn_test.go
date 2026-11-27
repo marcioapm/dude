@@ -218,6 +218,23 @@ func TestASecondIdleTurnIsToldInChatNotWokenAgain(t *testing.T) {
 	}
 }
 
+// A conductor woken for an idle turn that then asks, and hears the
+// person's answer within the same turn (read at its next step), started a
+// new stretch: its idle end is woken again, not told in Chat.
+func TestAnIdleTurnAfterAQuestionAnsweredWithinItIsWokenAgain(t *testing.T) {
+	w := newIdleWorld(t, delivery.VoiceChatty)
+	w.said("Shall I run it?")
+	w.turnEnds()
+	w.nextTurn()
+	w.heard(delivery.EvQuestionAsked, "agent", map[string]any{"questionId": "q_1", "prompt": "Run it?"}, false)
+	w.heard("question.answered", "person", map[string]any{"questionId": "q_1", "directiveId": "dir_1"}, true)
+	w.said("Thanks, done thinking about it.")
+	w.turnEnds()
+	if got, n := w.idleWakes(), w.idleNotices(); len(got) != 2 || n != 0 {
+		t.Errorf("%d idle wakes (want 2), %d notices (want 0)", len(got), n)
+	}
+}
+
 // A task that ended, and a Run that is not its conductor, are not woken.
 func TestAnIdleTurnOfAnEndedTaskOrNotTheConductorWakesNobody(t *testing.T) {
 	w := newIdleWorld(t, delivery.VoiceChatty)
