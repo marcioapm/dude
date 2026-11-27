@@ -29,6 +29,7 @@ import { CONDUCTOR_RUN, PEER_NOTES, PEER_STATES, PEER_THREADS, conductorEvents, 
 import type { OpenSessionsList } from "@dude/domain";
 import type { ChatProvider, ChatRequestRow } from "@dude/domain";
 import { ORG_SESSIONS, openSessionsList, orgSessionEvents, orgSessionsList } from "./orgSessions.ts";
+import { PROPOSALS_SESSION, proposalsCase, proposalsEvents, proposalsList, proposalsSession } from "./proposals.ts";
 import type { ServerLogLine } from "@dude/design-system";
 import { ApiClient, ApiError, READY_FOR_REVIEW_WAITING, type Artifact, type AttachmentLimits, type DeliveryFilter, type MeAnswer, type Member, type ProjectDetail, type RecoverAction, type RecoveryOptions, type ReviewerCandidate, type ReviewQuestion, type Run, type RunDetail, type StopRequest, type StopResult, type TaskDetail, type TaskMetrics, type TaskRelations, type Verification } from "../api/client.ts";
 import { EPIC, FINDINGS, REVIEW_QUESTIONS, MACHINE_SIZES, METRICS, MODEL_TIERS, ORG, PEOPLE, PROJECT, PULL_REQUEST, RESTART, RESTARTED_ARTIFACTS, RESTARTED_FINDINGS, RESTARTED_PULL_REQUESTS, RESTARTED_RUNS, REVIEWERS, RUN_ID, RUN_IMPLEMENT, REFUSED, SETTINGS, STALLED_TEXT, TASK_ID, YOU, OVERVIEW_VIEWS, conductorMove, eventsFor, logsFor, overviewEvents, overviewMetrics, overviewPullRequests, overviewRuns, navigationFor, raisedMove, refusedMove, restartedMetrics, runDetailFor, serversFor, sessionMove, startOverRaise, taskFor, withViewerAsks, type OverviewView, type RefusedMachineView } from "./data.ts";
@@ -297,6 +298,8 @@ export class FixtureClient extends ApiClient {
 
   override getSession(id: string): Promise<SessionDetail> {
     if (localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[id]) return Promise.resolve(ORG_SESSIONS[id]);
+    const proposals = proposalsCase(localStorage.getItem(RUN_KEY));
+    if (proposals && id === PROPOSALS_SESSION) return Promise.resolve(proposalsSession(proposals));
     return this.#session && id === this.#session.session.id ? Promise.resolve(this.#session)
       : Promise.reject(new ApiError(404, "not_found", "No such session."));
   }
@@ -689,6 +692,7 @@ export class FixtureClient extends ApiClient {
     if (sessionId && localStorage.getItem(RUN_KEY) === "org-sessions" && ORG_SESSIONS[sessionId]) {
       return orgSessionEvents().filter((e) => e.sessionId === sessionId && e.cursor > after);
     }
+    if (sessionId === PROPOSALS_SESSION && proposalsCase(localStorage.getItem(RUN_KEY))) return proposalsEvents().filter((e) => e.cursor > after);
     return this.#events.filter((e) => e.cursor > after && (!runId || e.runId === runId) && (!taskId || e.taskId === taskId)
       && (!sessionId || e.sessionId === sessionId));
   }
@@ -735,6 +739,8 @@ export class FixtureClient extends ApiClient {
   // The mockups' world has no brainstorm sessions; a test's client adds its own.
   override sessions(): Promise<SessionsList> {
     if (localStorage.getItem(RUN_KEY) === "org-sessions") return Promise.resolve(orgSessionsList());
+    const proposals = proposalsCase(localStorage.getItem(RUN_KEY));
+    if (proposals) return Promise.resolve(proposalsList(proposals));
     return Promise.resolve({ sessions: [], invitations: [], questions: [] });
   }
   // `dude.fixtures.run` = org-sessions: the sessions open to everyone (fixtures/orgSessions.ts); none otherwise.
