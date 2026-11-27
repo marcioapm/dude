@@ -2,8 +2,10 @@ package phases
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/marciomartins/dude/orchestrator/internal/lux"
 )
@@ -110,5 +112,106 @@ func TestATalkersTurnLuxMovesIsCarriedOnNotParked(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// parkedTalkerLuxMoved is a talker parked between turns (dude_pause
+// conductor or session, its lux Run asked to stop) whose placement lux had
+// already begun moving: lux placed it again itself, in epoch 2, and runs
+// it. control is the Run's control: none, or a person's resume.
+func parkedTalkerLuxMoved(t *testing.T, role, control string) (*harnessWorld, *sentLux) {
+	w := talkerWorld(t, role)
+	mustOwner(t, w, `UPDATE runs SET status = 'paused', control = $2, dude_pause = $3, lux_stop_reason = 'pause',
+		lux_state = 'running', turn_done_at = NULL, agent_session_epoch = 1,
+		harness_state = '{"luxStop": {"reason": "preempt", "epoch": 1}}'::jsonb WHERE id = $1`, w.run.ID, control, w.run.parkKind())
+	fake := &sentLux{eventsLux: &eventsLux{run: &lux.Run{ID: "lrun_1", State: "running", Epoch: 2,
+		Placements: []lux.Placement{{Epoch: 1, State: "exited"}, {Epoch: 2, State: "running"}}}}}
+	w.s.Lux = fake
+	t.Cleanup(w.s.Stop)
+	return w, fake
+}
+
+// queue is a message for the talker, as Chat queues one.
+func (w *harnessWorld) queue(text string) {
+	w.t.Helper()
+	mustOwner(w.t, w, `INSERT INTO directives (id, organization_id, task_id, run_id, text, created_at)
+		VALUES ('dir_'||$1||'_'||md5($3), $1, NULLIF($2, ''), $4, $3, now() - interval '1 minute')`, w.run.Org, w.run.TaskID, text, w.run.ID)
+}
+
+// sweeps advances the Run as n sweeps would.
+func (w *harnessWorld) sweeps(n int) {
+	w.t.Helper()
+	for range n {
+		runs, err := w.s.due(context.Background())
+		if err != nil {
+			w.t.Fatal(err)
+		}
+		for _, r := range runs {
+			if r.ID == w.run.ID {
+				if _, err := w.s.advance(context.Background(), r); err != nil {
+					w.t.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+// A parked talker lux placed again itself after a move is taken back up as
+// lux runs it, and what was queued for it is delivered within two sweeps,
+// in order, without lux being asked to stop or resume it: for a message
+// (the talker's parked → resumed path) and for a person's Resume. With
+// nothing queued and no Resume it stays parked, as any parked talker.
+func TestAParkedTalkerLuxPlacedAgainHearsWhatIsQueued(t *testing.T) {
+	for _, role := range []string{"conductor", "brainstorm"} {
+		for _, control := range []string{"none", "resume"} {
+			t.Run(role+"/control "+control, func(t *testing.T) {
+				w, fake := parkedTalkerLuxMoved(t, role, control)
+				w.queue("first")
+				w.queue("second")
+				w.sweeps(2)
+				if got := fake.said(); len(got) != 2 || got[0] != "first" || got[1] != "second" {
+					t.Errorf("sent %q, want first and second", got)
+				}
+				if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'running' AND control = 'none'
+					AND dude_pause IS NULL AND lux_stop_reason IS NULL`, w.run.ID); n != 1 {
+					t.Errorf("not taken back up running")
+				}
+				fake.mu.Lock()
+				stops := fake.stops
+				fake.mu.Unlock()
+				if stops != 0 {
+					t.Errorf("lux asked to stop %d times, want none", stops)
+				}
+			})
+		}
+		t.Run(role+"/nothing queued", func(t *testing.T) {
+			w, fake := parkedTalkerLuxMoved(t, role, "none")
+			w.sweeps(2)
+			if n := w.count(`SELECT count(*) FROM runs WHERE id = $1 AND status = 'paused' AND dude_pause = $2`, w.run.ID, w.run.parkKind()); n != 1 {
+				t.Errorf("a parked talker with nothing for it was taken up")
+			}
+			if got := fake.said(); len(got) != 0 {
+				t.Errorf("sent %q", got)
+			}
+		})
+	}
+}
+
+// A conductor parked in that state is woken as any parked conductor: the
+// wake's note is queued (WakeConductorTx) and reaches the agent.
+func TestAWakeReachesAParkedConductorLuxPlacedAgain(t *testing.T) {
+	w, fake := parkedTalkerLuxMoved(t, "conductor", "none")
+	w.s.WakeWindow = time.Second
+	mustOwner(t, w, `INSERT INTO conductor_wakes (id, organization_id, task_id, kind, key, line, created_at)
+		VALUES ('cwk_1', $1, $2, 'decision', 'k', 'the owner waived it', now() - interval '1 minute')`, w.run.Org, w.run.TaskID)
+	if err := w.s.wakeConductors(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM directives WHERE run_id = $1 AND strpos(text, 'the owner waived it') > 0`, w.run.ID); n != 1 {
+		t.Fatalf("%d wake notes queued, want 1", n)
+	}
+	w.sweeps(2)
+	if got := fake.said(); len(got) != 1 || !strings.Contains(got[0], "the owner waived it") {
+		t.Errorf("sent %q, want the wake's note", got)
 	}
 }
