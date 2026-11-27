@@ -68,15 +68,25 @@ const idleTurnResets = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e
 // turn end, 0 for none): a person's words reached it since: the message it
 // was started with, or a Chat message or steer of theirs it was delivered.
 // Such a turn answers the person, who reads Chat and replies; it is not
-// backstopped. Every chat.message not the agent's is a writer's
-// (ChatEvent), whatever principal the API saw. A person's answer to its
-// question (question.answered) is a choice, not a conversation, and does
-// not count; nor does a conductor's steer (conductorRunId).
-const personSaid = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.cursor > $2 AND (
-	e.event_type = '` + EvChatMessage + `' AND e.actor_type <> 'agent' AND NOT e.payload ? 'directiveId'
+// backstopped. Every chat.message not the agent's nor dude's (personWords)
+// is a writer's (ChatEvent), whatever principal the API saw. A person's
+// answer to its question (question.answered) is a choice, not a
+// conversation, and does not count; nor does a conductor's steer
+// (conductorRunId).
+var personSaid = `EXISTS (SELECT 1 FROM events e WHERE e.run_id = $1 AND e.cursor > $2 AND (
+	e.event_type = '` + EvChatMessage + `' AND ` + personWords("e") + ` AND NOT e.payload ? 'directiveId'
 	OR e.event_type = 'run.directive.delivered' AND EXISTS (SELECT 1 FROM events p WHERE p.run_id = $1
-		AND p.event_type IN ('` + EvChatMessage + `', '` + EvRunSteered + `') AND p.actor_type <> 'agent'
+		AND p.event_type IN ('` + EvChatMessage + `', '` + EvRunSteered + `') AND ` + personWords("p") + `
 		AND p.payload->>'directiveId' = e.payload->>'directiveId' AND NOT p.payload ? 'conductorRunId')))`
+
+// personWords (SQL, over events alias): an event not written by an agent
+// nor by dude itself. dude's words are system's as "dude" (a pick-up's
+// briefing, an auto-start's message) or as "" (handTo: a message of dude's
+// handed on from an ended conductor has no writer's event). A Chat message
+// the API took with no principal is system's as "unknown": a person's.
+func personWords(alias string) string {
+	return alias + `.actor_type <> 'agent' AND NOT (` + alias + `.actor_type = 'system' AND ` + alias + `.actor_id IN ('dude', ''))`
+}
 
 // IdleTurnTx is the end of a conductor's turn, in the transaction that
 // marks it done: when the task is conducted, live and not ended, the turn

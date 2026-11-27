@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/marciomartins/dude/orchestrator/internal/delivery"
+	"github.com/marciomartins/dude/orchestrator/internal/ledger"
 )
 
 // idleWorld is a receipt world whose Run is a conducted task's conductor,
@@ -277,6 +278,42 @@ func TestAConductorTurnAnsweringAPersonIsNotWoken(t *testing.T) {
 			w.turnEnds()
 			if got := w.idleWakes(); len(got) != 1 {
 				t.Errorf("the next turn, started by nobody's words: %d idle wakes, want 1", len(got))
+			}
+		})
+	}
+}
+
+// A conductor started or told by dude's own words (a pick-up's briefing, an
+// auto-start's Talk it through, a message of dude's handed on from an
+// ended conductor) did not hear a person: its idle turn is woken once.
+func TestAConductorTurnStartedByDudesWordsIsWoken(t *testing.T) {
+	for name, c := range map[string]struct {
+		actor     string
+		payload   map[string]any
+		delivered bool
+	}{
+		"picked up":                {"dude", map[string]any{"text": "A person picked this task back up."}, false},
+		"dude's message handed on": {"", map[string]any{"text": "Sync your branch.", "supersedes": "dir_0"}, false},
+		"dude's message queued on": {"", map[string]any{"text": "Sync your branch.", "supersedes": "dir_0", "directiveId": "dir_1"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newIdleWorld(t, delivery.VoiceChatty)
+			if err := w.s.DB.InOrg(context.Background(), w.org, func(tx pgx.Tx) error {
+				if err := delivery.ChatEvent(context.Background(), tx, w.tr.run.ref(),
+					delivery.Writer{ActorType: ledger.ActorSystem, ActorID: c.actor}, c.payload); err != nil {
+					return err
+				}
+				if !c.delivered {
+					return nil
+				}
+				return w.s.event(context.Background(), tx, w.tr.run, evDirectiveDelivered, "system", map[string]any{"directiveId": "dir_1", "read": true})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			w.said("I have read the task. Shall I start over?")
+			w.turnEnds()
+			if got := w.idleWakes(); len(got) != 1 {
+				t.Errorf("%d idle wakes, want 1: %q", len(got), got)
 			}
 		})
 	}
