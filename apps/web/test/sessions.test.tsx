@@ -2430,6 +2430,8 @@ describe("proposed work waiting on you", () => {
       detail("chat", { proposals: [card([{ filed: true, filedBy: "Ana Nunes", key: "BL-61" },
         { canFile: false, blockedBy: "owner", owner: ref(ANA), why: "Only Ana can file this: it's their task" }], ["task", "edit"])] }),
       detail("read", { proposals: [card([{ canFile: false, blockedBy: "reader", why: "readers can't file" }])] }),
+      // A reader files nothing, whatever an item's status says.
+      detail("read", { proposals: [card([{ canFile: true }])] }),
     ];
     for (const d of cases) {
       const page = await sessionPage(new SessionClient(d));
