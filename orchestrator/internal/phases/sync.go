@@ -512,14 +512,9 @@ var stallDue = `(r.stall_left_at IS NULL AND (r.stall_reported_at IS NULL OR lc.
 // between settleMachine's commit and whilePaused's UPDATE stays
 // paused/person in dude until the peer replies or a person resumes it.
 const resumable = `(r.status = 'paused' AND (r.control = 'resume' OR r.dude_pause IN ('repository', 'machine')
-	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + unsentDirective + `)))
+	OR (r.dude_pause = 'person' AND (NOT ask.open OR (NOT ` + delivery.PersonAsk + ` AND ` + delivery.UnsentDirective + `)))
 	OR (r.dude_pause = 'person' AND NOT ` + delivery.PersonAsk + ` AND ` + delivery.MoveUnsettled + `)
-	OR (r.dude_pause IN ('conductor', 'session') AND ` + unsentDirective + `)))`
-
-// unsentDirective (SQL, over runs r): something is queued for the agent
-// that lux does not have yet, and is not held for an answer (HeldBack).
-const unsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
-	AND NOT ` + delivery.HeldBack + `)`
+	OR (r.dude_pause IN ('conductor', 'session') AND ` + delivery.UnsentDirective + `)))`
 
 // unheardNews (SQL, over runs r and lim.park_secs, the Run's grace before
 // a person park, in seconds): dude has something for an agent waiting on a
@@ -764,7 +759,7 @@ const sweepBatch = 1000
 // conductor waits for a person, and a thousand of them, or of phase Runs
 // waiting for a base, must not keep a newer pending Run out of the batch.
 const actionable = `(r.status = 'pending' OR r.control <> 'none' OR ` + resumable + `
-	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT ` + baseWaiting + `) OR ` + unsentDirective + `
+	OR (r.turn_done_at IS NOT NULL AND ((r.phase IS NOT NULL AND NOT ` + baseWaiting + `) OR ` + delivery.UnsentDirective + `
 		OR (r.phase IS NULL AND r.turn_done_at < now() - make_interval(secs => lim.warm_secs))
 		OR r.lux_state IN ('stopped', 'succeeded', 'failed', 'cancelled', 'terminated', 'lost'))))`
 
@@ -3837,7 +3832,7 @@ func (s *Syncer) requestPause(ctx context.Context, r phaseRun, kind, why string)
 			  AND ($6 <> 'person' OR (r.waiting_since IS NOT NULL AND `+delivery.OpenAsk+` AND NOT `+pauseUnheardNews+`))
 			  AND ($6 <> 'idle' OR (r.turn_done_at IS NULL AND r.waiting_since IS NULL
 			       AND cardinality(r.open_tool_calls) = 0 AND `+quietSince+` = $7))
-			  AND ($6 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+unsentDirective+`))
+			  AND ($6 NOT IN ('conductor', 'session') OR (r.turn_done_at IS NOT NULL AND NOT `+delivery.UnsentDirective+`))
 			RETURNING r.control_requested_at, r.control_reason`, append(s.limits(), r.ID, why, kind, r.QuietSince, parkedForPeer)...).Scan(&parkedAt, &why)
 		if db.IsNotFound(err) {
 			return nil

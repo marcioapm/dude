@@ -37,8 +37,9 @@ var (
 	idleTurnNoticeTmpl = mustTemplate("notices/idle-turn")
 )
 
-// UnsentDirective (SQL, over runs r): a message for the Run not yet sent
-// to it and not held back: it starts another turn.
+// UnsentDirective (SQL, over runs r): something is queued for the agent
+// that lux does not have yet, and is not held for an answer (HeldBack):
+// it starts another turn.
 const UnsentDirective = `EXISTS (SELECT 1 FROM directives d WHERE d.run_id = r.id AND d.delivered_at IS NULL AND d.sent_at IS NULL AND d.failed_at IS NULL
 	AND NOT ` + HeldBack + `)`
 
