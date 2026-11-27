@@ -49,7 +49,7 @@ var idleTurnPending = `(` + HoldsTurn + `
 	OR ` + ConductorRetrying + `
 	OR ` + UnsentDirective + `
 	OR EXISTS (SELECT 1 FROM conductor_waits cw WHERE cw.task_id = t.id AND cw.ended_at IS NULL)
-	OR EXISTS (SELECT 1 FROM runs o WHERE o.task_id = t.id AND o.id <> r.id
+	OR EXISTS (SELECT 1 FROM runs o WHERE o.task_id = t.id AND o.id <> r.id AND o.kind = 'agent'
 		AND o.status IN ('pending', 'scheduled', 'starting', 'running', 'paused'))
 	OR EXISTS (SELECT 1 FROM workflow_dispatches wd WHERE wd.task_id = t.id
 		AND (wd.state IN ('` + DispatchDispatching + `', '` + DispatchBound + `') OR wd.outcome IS DISTINCT FROM wd.woken_outcome AND wd.outcome IS NOT NULL))

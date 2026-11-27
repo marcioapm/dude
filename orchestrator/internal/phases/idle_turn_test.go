@@ -102,6 +102,26 @@ func TestAnIdleConductorTurnIsWokenOnce(t *testing.T) {
 	}
 }
 
+// A task's preview is a Run that never wakes the conductor, running or
+// parked unused for the whole task: it does not hold an idle turn.
+func TestAnIdleTurnBesideATasksPreviewIsWokenOnce(t *testing.T) {
+	for name, status := range map[string]string{
+		"running":       `'running', NULL`,
+		"paused unused": `'paused', 'unused'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newIdleWorld(t, delivery.VoiceChatty)
+			w.exec(`INSERT INTO runs (id, organization_id, project_id, task_id, attempt, kind, status, dude_pause)
+				VALUES ('prv_'||$1, $1, 'prj_'||$1, 'wi_'||$1, 1, 'preview', ` + status + `)`)
+			w.said("The preview is up. Shall I open the pull request?")
+			w.turnEnds()
+			if got := w.idleWakes(); len(got) != 1 {
+				t.Errorf("%d idle wakes, want 1: %q", len(got), got)
+			}
+		})
+	}
+}
+
 // What the turn itself opened holds it, seen in the transaction that ends
 // it: a wait_for, an ask_person; and so does a phase Run at work or a
 // workflow dude follows.
