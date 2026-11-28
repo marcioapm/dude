@@ -97,6 +97,11 @@ func TestGitHubCheckLogSearchParametersAreChecked(t *testing.T) {
 	if w.requests() != before {
 		t.Fatal("invalid search reached GitHub")
 	}
+	// Each bound itself is accepted: context 5, and a match of exactly
+	// 200 characters.
+	for _, extra := range []string{`,"match":"PASSED","context":5`, `,"match":"` + strings.Repeat("x", 200) + `"`} {
+		w.must(task, "github_check_log", fmt.Sprintf(`{"repo":"acme/target","checkId":50000000077%s}`, extra))
+	}
 }
 
 // A search with more matches than one read shows is cut by the tool's
