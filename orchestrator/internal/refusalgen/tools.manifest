@@ -91,6 +91,7 @@ rFilesAtMostPathsAtOnce                refusals/tools/github/files-at-most-paths
 rCheckIdCheckRunFrom1                   refusals/tools/github/check-id-check-run-from-1
 rCheckLogMatch                          refusals/tools/github/check-log-match
 rCheckLogMatchInvalid                   refusals/tools/github/check-log-match-invalid
+rCheckLogMatchCostly                    refusals/tools/github/check-log-match-costly
 rCheckLogContext                        refusals/tools/github/check-log-context
 rSayWhatRanOutCommandIts               refusals/tools/machines/say-what-ran-out-command-its
 rYouAreBeingMovedNowAsk                refusals/tools/machines/you-are-being-moved-now-ask

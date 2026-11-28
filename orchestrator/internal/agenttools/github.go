@@ -401,6 +401,10 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 		return githubRead{}, refuse(rCheckLogMatch, checkLogMatchMax)
 	}
 	if _, err := checkLogPattern(in.Match); err != nil {
+		var costly *costlyPattern
+		if errors.As(err, &costly) {
+			return githubRead{}, refuse(rCheckLogMatchCostly, costly.Cause, checkLogRepeatMax)
+		}
 		return githubRead{}, refuse(rCheckLogMatchInvalid, err)
 	}
 	read.Match, read.Context = in.Match, checkLogContextDefault
@@ -414,18 +418,77 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 }
 
 // checkLogPattern is a github_check_log match as it is searched for: an
-// RE2 regular expression, case-insensitive.
+// RE2 regular expression, case-insensitive, cheap enough to try on each
+// line of a whole log (checkLogCost). A *costlyPattern says why not.
 func checkLogPattern(match string) (*regexp.Regexp, error) {
 	// Checked alone, so a refusal names the agent's own expression.
 	if _, err := regexp.Compile(match); err != nil {
-		var e *syntax.Error
-		if errors.As(err, &e) {
-			// Its code and the part it names, never Go's whole message.
-			return nil, fmt.Errorf("%s: %q", e.Code, e.Expr)
-		}
+		return nil, patternError(err)
+	}
+	re, err := regexp.Compile("(?i)" + match)
+	if err != nil {
+		return nil, patternError(err)
+	}
+	if err := checkLogCost("(?i)" + match); err != nil {
 		return nil, err
 	}
-	return regexp.Compile("(?i)" + match)
+	return re, nil
+}
+
+// patternError is a compile error as a refusal names it: its code and the
+// part it names, never Go's whole message.
+func patternError(err error) error {
+	var e *syntax.Error
+	if errors.As(err, &e) {
+		return fmt.Errorf("%s: %q", e.Code, e.Expr)
+	}
+	return err
+}
+
+// A match's counted repeat is at most checkLogRepeatMax, and its program
+// at most checkLogProgramMax instructions: past them, a 16 MiB log of long
+// lines takes longer to search than GitHub's read is given, and the agent
+// would be told GitHub was unreachable.
+const (
+	checkLogRepeatMax  = 50
+	checkLogProgramMax = 1000
+)
+
+// costlyPattern is a valid match refused for what searching with it costs;
+// Cause says what, in dude's words.
+type costlyPattern struct{ Cause string }
+
+func (e *costlyPattern) Error() string { return e.Cause }
+
+// checkLogCost refuses a pattern (already compiled) whose search of a
+// whole log would outlast the read.
+func checkLogCost(pattern string) error {
+	tree, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return patternError(err)
+	}
+	var repeat func(*syntax.Regexp) int
+	repeat = func(re *syntax.Regexp) int {
+		n := 0
+		if re.Op == syntax.OpRepeat {
+			n = max(re.Min, re.Max)
+		}
+		for _, sub := range re.Sub {
+			n = max(n, repeat(sub))
+		}
+		return n
+	}
+	if n := repeat(tree); n > checkLogRepeatMax {
+		return &costlyPattern{fmt.Sprintf("it repeats a part %d times", n)}
+	}
+	prog, err := syntax.Compile(tree.Simplify())
+	if err != nil {
+		return patternError(err)
+	}
+	if n := len(prog.Inst); n > checkLogProgramMax {
+		return &costlyPattern{fmt.Sprintf("it is %d steps to try on each line, more than %d", n, checkLogProgramMax)}
+	}
+	return nil
 }
 
 // readGitHubRunJobs takes a run's id, or its link: a link names its own

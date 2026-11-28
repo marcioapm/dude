@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
+	"regexp/syntax"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -588,5 +590,39 @@ func TestGitHubCheckLogPattern(t *testing.T) {
 	}
 	if _, err := checkLogPattern(`test_goal(`); err == nil || err.Error() != "missing closing ): \"test_goal(\"" {
 		t.Fatalf("invalid: %v", err)
+	}
+}
+
+// A match that compiles but would outlast the read on a 16 MiB log of
+// long lines is refused saying why, not sent to time out as "unreachable";
+// the matches a proof is looked for with are accepted.
+func TestGitHubCheckLogPatternCost(t *testing.T) {
+	for _, ok := range []string{`PASSED`, `\d+ passed`, `test_goal_with_nul.*PASSED`, `passed|failed`, `.*PASSED.*`,
+		`test_goal.*nul.*PASSED|\d+ passed, \d+ skipped`, `x{50}`, `(?:.{10}){10}q`, strings.Repeat("x", 200), strings.Repeat("[a-z]{50}", 19)} {
+		if _, err := checkLogPattern(ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, tc := range []struct{ match, cause string }{
+		{`(?:.{100}){10}q`, "it repeats a part 100 times"},
+		{`[a-z]{200}q`, "it repeats a part 200 times"},
+		{`x{51}`, "it repeats a part 51 times"},
+		{`x{51,}`, "it repeats a part 51 times"},
+		{strings.Repeat("[a-z]{50}", 21), "it is 1052 steps to try on each line, more than 1000"},
+	} {
+		_, err := checkLogPattern(tc.match)
+		var costly *costlyPattern
+		if !errors.As(err, &costly) || costly.Cause != tc.cause {
+			t.Errorf("%s: %v, want %q", tc.match, err, tc.cause)
+		}
+	}
+}
+
+// Both compiles' errors are named the same way: code and part, never Go's
+// whole message.
+func TestGitHubCheckLogPatternErrorIsNamed(t *testing.T) {
+	err := patternError(fmt.Errorf("compiling: %w", &syntax.Error{Code: syntax.ErrMissingParen, Expr: "(?i)test_goal("}))
+	if err == nil || err.Error() != "missing closing ): \"(?i)test_goal(\"" {
+		t.Fatalf("%v", err)
 	}
 }

@@ -95,6 +95,7 @@ const (
 	rCheckIdCheckRunFrom1                  = "checkId is the check run's id, from 1"
 	rCheckLogMatch                         = "match: a regular expression (RE2, case-insensitive) of 1 to %d characters to find in the log"
 	rCheckLogMatchInvalid                  = "match is not a valid regular expression (RE2): %s. Escape characters like ( [ . * + ? with \\ to match them as written"
+	rCheckLogMatchCostly                   = "match would take too long to search a whole log: %s. Repeat a part at most %d times ({n} or {n,m}), or put .* between the parts you look for"
 	rCheckLogContext                       = "context: %d to %d lines around each match, given only with match"
 	rSayWhatRanOutCommandIts               = "say what ran out: the command, its error or exit code (at most 2000 characters)"
 	rYouAreBeingMovedNowAsk                = "you are being moved to %s now; ask again once you are there, if it is still too small"

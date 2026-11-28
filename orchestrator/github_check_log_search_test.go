@@ -91,6 +91,7 @@ func TestGitHubCheckLogSearchParametersAreChecked(t *testing.T) {
 		{`,"match":"PASSED","context":-1`, "context: 0 to 5 lines"},
 		{`,"match":"PASSED","context":6`, "context: 0 to 5 lines"},
 		{`,"context":0`, "given only with match"},
+		{`,"match":"[a-z]{200}q"`, "match would take too long to search a whole log: it repeats a part 200 times. Repeat a part at most 50 times"},
 	} {
 		w.refused(task, "github_check_log", fmt.Sprintf(`{"repo":"acme/target","checkId":50000000077%s}`, tc.extra), tc.want)
 	}

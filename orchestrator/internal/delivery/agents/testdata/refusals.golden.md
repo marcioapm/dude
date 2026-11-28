@@ -758,6 +758,10 @@ match: a regular expression (RE2, case-insensitive) of 1 to %d characters to fin
 
 match is not a valid regular expression (RE2): %s. Escape characters like ( [ . * + ? with \ to match them as written
 
+## refusals/tools/github/check-log-match-costly
+
+match would take too long to search a whole log: %s. Repeat a part at most %d times ({n} or {n,m}), or put .* between the parts you look for
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
