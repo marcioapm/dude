@@ -140,6 +140,9 @@ type CheckLogRead struct {
 	// Unread is why an Actions job's log, or the check run itself, could
 	// not be read, in dude's words (UnreadReason); "" when it was.
 	Unread string
+	// Search is a search of the whole log (SearchCheckLog), whose lines
+	// Text is; nil for a failure excerpt.
+	Search *LogMatches
 }
 
 // Cut uses the same failure selection as log reads and delivery recuts.
@@ -451,21 +454,33 @@ func logGone(err error) bool {
 // sites, nearby context, a rolling tail, and the final observed exit.
 // GitHub's short-lived download redirect is followed without the token.
 func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit int) (string, error) {
+	var text string
+	err := g.readJobLog(ctx, slug, jobID, func(body io.Reader) (err error) {
+		text, err = collectFailure(body, limit)
+		return err
+	})
+	return text, err
+}
+
+// readJobLog downloads a GitHub Actions job's log once and hands its body
+// to read, which scans it (under logReadMax). A refusal is GitHub's; a
+// failure of the download or of read is Unreachable.
+func (g *GitHub) readJobLog(ctx context.Context, slug string, jobID int64, read func(io.Reader) error) error {
 	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", slug, jobID)
 	target := g.cred.APIBaseURL + path
 	token, err := g.Token(ctx, slug)
 	if err != nil {
-		return "", err
+		return err
 	}
 	authorization := "Bearer " + token
 	if isAgentRead(ctx) {
 		if err := reserveAgentRequest(target, authorization, "core"); err != nil {
-			return "", err
+			return err
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return "", err
+		return err
 	}
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -487,7 +502,7 @@ func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		return "", &Unreachable{err}
+		return &Unreachable{err}
 	}
 	defer res.Body.Close()
 	if res.Request != nil && res.Request.URL.Host == req.URL.Host {
@@ -504,13 +519,12 @@ func (g *GitHub) JobLogTail(ctx context.Context, slug string, jobID int64, limit
 		}
 		refusal := &Error{Status: res.StatusCode, Message: e.Message}
 		markRateLimit(refusal, res.Header, "rate limit: ")
-		return "", refusal
+		return refusal
 	}
-	text, err := collectFailure(res.Body, limit)
-	if err != nil {
-		return "", &Unreachable{err}
+	if err := read(res.Body); err != nil {
+		return &Unreachable{err}
 	}
-	return text, nil
+	return nil
 }
 
 // cleanLogLine is one line of a job's log as a person reads it.
