@@ -560,6 +560,14 @@ func TestGitHubCheckLogSearchResult(t *testing.T) {
 		out["capped"] != "the read stopped at 16 MiB of the log: lines past it were not searched" {
 		t.Fatalf("shown of total: %v", out)
 	}
+	// Matches none of which fit are found, not "no match": the found text
+	// keys on Total, never on Shown.
+	unshown := &forge.LogMatches{Total: 3, Shown: 0, Lines: 10}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Search: unshown})
+	if out["found"] != "3 lines of 10 matched; the first 0 are shown, with their context, within the read's 10 KiB: narrow match to see the rest. "+
+		"Each shown line starts with its line number; \"… [lines omitted]\" marks lines between groups that are left out" || out["matches"] != 3 || out["shown"] != 0 {
+		t.Fatalf("none shown: %v", out)
+	}
 	none := &forge.LogMatches{Lines: 2396}
 	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Search: none})
 	if _, ok := out["log"]; ok || out["found"] != "no line of the 2396 read matched" || out["matches"] != 0 {

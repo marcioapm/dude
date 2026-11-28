@@ -87,13 +87,7 @@ func (s *logSearcher) add(text string) {
 				group = append(group, b)
 			}
 		}
-		shown := s.write(append(group, line)...) || s.write(line)
-		if !shown && s.last == 0 {
-			// A first match longer than the whole budget: its start.
-			cut := excerptLine{line.n, utf8Prefix(line.text, s.limit-len(fmt.Sprintf("%d: ", line.n))-len(lineCapMarker)) + lineCapMarker}
-			shown = s.write(cut)
-		}
-		if !shown {
+		if !s.write(append(group, line)...) && !s.write(line) {
 			s.full = true
 			break
 		}
