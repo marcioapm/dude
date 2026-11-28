@@ -449,6 +449,8 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 		"A behaviour that needs an environment this Run is not given (named credentials absent, a hosted warehouse) is not a derived criterion",
 		"name it under a short \"not checked here\" line with the reason, and it does not make the report `blocked`.",
 		"The task's own criteria keep the rule above: one you did not check is `blocked`.",
+		"That is for a configuration or backend this Run cannot reach while the application runs here (another warehouse, absent credentials for one integration); an application that cannot start here at all is the test environment rule below, `blocked`.",
+		"Like CI's results, its evidence reaches dude without you.",
 		"CI's results reach dude without you", "Whether CI's jobs pass is for CI to show, not you: do not run them to see."} {
 		if !strings.Contains(testerContract, want) {
 			t.Errorf("the tester's contract lacks %q", want)
