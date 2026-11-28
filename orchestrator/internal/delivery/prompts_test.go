@@ -166,7 +166,7 @@ func TestTheConductorIsToldWhenToEditAndWhenToDelegate(t *testing.T) {
 			"Commit in your checkout, then publish (`dude publish --message M`)", "never build, install or run tests",
 			"the pull-request gate refuses an unreviewed commit of yours",
 			"Evidence from CI or a workflow run is yours to read (`github_run_jobs` and `github_check_log` with `match`)",
-			"never brief a tester, reviewer or writer to read GitHub, Actions or CI logs: they have no access.",
+			"never brief another Run you start (tester, investigator, reviewer or writer) to read GitHub, Actions or CI logs: they have no access.",
 			"On test_blocked, read why. Retry only with something changed: a new input, an environment the blocked Run lacked, or a corrected instruction.",
 			"A retry that asks the same Run kind for the same unreachable thing is refused by you, not tried.",
 			"say exactly what you read (run id, job id, head, the matched lines), then put the decision to the owner in one question with that evidence."} {
