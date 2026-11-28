@@ -180,9 +180,9 @@ type githubRead struct {
 	// not read again (forge.WithKnownChecks).
 	Known []forge.Check
 	// What github_check_log searches its job's whole log for, when it was
-	// given a match, and the lines of context around each.
-	Match   string
-	Context int
+	// given a match: Match as given, Search as compiled from it.
+	Match  string
+	Search forge.LogSearch
 }
 
 // readableRepos are the GitHub repositories (owner/name) the caller may
@@ -400,19 +400,20 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 	if strings.TrimSpace(in.Match) == "" || utf8.RuneCountInString(in.Match) > checkLogMatchMax {
 		return githubRead{}, refuse(rCheckLogMatch, checkLogMatchMax)
 	}
-	if _, err := checkLogPattern(in.Match); err != nil {
+	pattern, err := checkLogPattern(in.Match)
+	if err != nil {
 		var costly *costlyPattern
 		if errors.As(err, &costly) {
 			return githubRead{}, refuse(rCheckLogMatchCostly, costly.Cause, checkLogRepeatMax)
 		}
 		return githubRead{}, refuse(rCheckLogMatchInvalid, err)
 	}
-	read.Match, read.Context = in.Match, checkLogContextDefault
+	read.Match, read.Search = in.Match, forge.LogSearch{Pattern: pattern, Context: checkLogContextDefault}
 	if in.Context != nil {
 		if *in.Context < 0 || *in.Context > checkLogContextMax {
 			return githubRead{}, refuse(rCheckLogContext, 0, checkLogContextMax)
 		}
-		read.Context = *in.Context
+		read.Search.Context = *in.Context
 	}
 	return checkGitHubRead(ctx, tx, c, read)
 }
@@ -421,24 +422,16 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 // RE2 regular expression, case-insensitive, cheap enough to try on each
 // line of a whole log (checkLogCost). A *costlyPattern says why not.
 func checkLogPattern(match string) (*regexp.Regexp, error) {
-	// Checked alone, so a refusal names the agent's own expression; both
-	// compiles' errors are named the same way (compilePattern).
-	if _, err := compilePattern(match); err != nil {
-		return nil, err
-	}
-	re, err := compilePattern("(?i)" + match)
+	// FoldCase is what "(?i)" sets; parsed without the prefix, a refusal
+	// names the agent's own expression.
+	tree, err := syntax.Parse(match, syntax.Perl|syntax.FoldCase)
 	if err != nil {
+		return nil, patternError(err)
+	}
+	if err := checkLogCost(tree); err != nil {
 		return nil, err
 	}
-	if err := checkLogCost("(?i)" + match); err != nil {
-		return nil, err
-	}
-	return re, nil
-}
-
-// compilePattern compiles expr, its error as patternError names it.
-func compilePattern(expr string) (*regexp.Regexp, error) {
-	re, err := regexp.Compile(expr)
+	re, err := regexp.Compile("(?i)" + match)
 	if err != nil {
 		return nil, patternError(err)
 	}
@@ -470,13 +463,9 @@ type costlyPattern struct{ Cause string }
 
 func (e *costlyPattern) Error() string { return e.Cause }
 
-// checkLogCost refuses a pattern (already compiled) whose search of a
-// whole log would outlast the read.
-func checkLogCost(pattern string) error {
-	tree, err := syntax.Parse(pattern, syntax.Perl)
-	if err != nil {
-		return patternError(err)
-	}
+// checkLogCost refuses a parsed pattern whose search of a whole log would
+// outlast the read.
+func checkLogCost(tree *syntax.Regexp) error {
 	var repeat func(*syntax.Regexp) int
 	repeat = func(re *syntax.Regexp) int {
 		n := 0
@@ -601,11 +590,7 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		out = w.pullRequest(pr, read.Files)
 	case "github_check_log":
 		if read.Match != "" {
-			pattern, err := checkLogPattern(read.Match)
-			if err != nil {
-				return nil, err
-			}
-			log, err := gh.SearchCheckLog(ctx, read.Slug, read.CheckID, forge.LogSearch{Pattern: pattern, Context: read.Context}, checkLogBudget)
+			log, err := gh.SearchCheckLog(ctx, read.Slug, read.CheckID, read.Search, checkLogBudget)
 			if err != nil {
 				return nil, githubRefusal(read, err)
 			}
@@ -779,7 +764,7 @@ func readPayload(read githubRead) map[string]any {
 		payload["files"] = read.Files
 	}
 	if read.Match != "" {
-		payload["match"], payload["context"] = read.Match, read.Context
+		payload["match"], payload["context"] = read.Match, read.Search.Context
 	}
 	return payload
 }
