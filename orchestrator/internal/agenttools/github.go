@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
@@ -67,7 +68,8 @@ var githubTexts = func() map[string]delivery.Text {
 	out := map[string]delivery.Text{}
 	for _, name := range []string{"refused", "whose-task", "whose-session", "cut", "search-more", "issue-pull-request",
 		"comments-cut", "comments-newest-cut", "no-diff", "checks-cut", "reviews-cut", "threads-unknown", "files-cut", "budget-cut", "text-cut",
-		"run-jobs-next", "run-jobs-cut", "branch-runs-next", "branch-runs-jobs-unread"} {
+		"run-jobs-next", "run-jobs-cut", "branch-runs-next", "branch-runs-jobs-unread",
+		"check-log-found", "check-log-no-match", "check-log-capped", "check-log-not-searched"} {
 		out[name] = delivery.MustText("results/github/" + name)
 	}
 	return out
@@ -94,7 +96,18 @@ type githubPullRequestIn struct {
 type githubCheckLogIn struct {
 	Repo    string `json:"repo"`
 	CheckID int64  `json:"checkId"`
+	Match   string `json:"match,omitempty"`
+	Context *int   `json:"context,omitempty"`
 }
+
+// A github_check_log match is at most checkLogMatchMax characters; each
+// match is shown with context lines (checkLogContextDefault when not
+// given) before and after it.
+const (
+	checkLogMatchMax       = 200
+	checkLogContextMax     = 5
+	checkLogContextDefault = 2
+)
 
 type githubRunJobsIn struct {
 	Repo string `json:"repo,omitempty"`
@@ -166,6 +179,10 @@ type githubRead struct {
 	// reads, when it tracks it: a cancelled Actions run's verdict there is
 	// not read again (forge.WithKnownChecks).
 	Known []forge.Check
+	// What github_check_log searches its job's whole log for, when it was
+	// given a match: Match as given, Search as compiled from it.
+	Match  string
+	Search forge.LogSearch
 }
 
 // readableRepos are the GitHub repositories (owner/name) the caller may
@@ -373,7 +390,104 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 	if in.CheckID <= 0 {
 		return githubRead{}, refuse(rCheckIdCheckRunFrom1)
 	}
-	return checkGitHubRead(ctx, tx, c, githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID})
+	read := githubRead{Tool: "github_check_log", Slug: in.Repo, CheckID: in.CheckID}
+	if in.Match == "" {
+		if in.Context != nil {
+			return githubRead{}, refuse(rCheckLogContext, 0, checkLogContextMax)
+		}
+		return checkGitHubRead(ctx, tx, c, read)
+	}
+	if strings.TrimSpace(in.Match) == "" || utf8.RuneCountInString(in.Match) > checkLogMatchMax {
+		return githubRead{}, refuse(rCheckLogMatch, checkLogMatchMax)
+	}
+	pattern, err := checkLogPattern(in.Match)
+	if err != nil {
+		var costly *costlyPattern
+		if errors.As(err, &costly) {
+			return githubRead{}, refuse(rCheckLogMatchCostly, costly.Cause, checkLogRepeatMax)
+		}
+		return githubRead{}, refuse(rCheckLogMatchInvalid, err)
+	}
+	read.Match, read.Search = in.Match, forge.LogSearch{Pattern: pattern, Context: checkLogContextDefault}
+	if in.Context != nil {
+		if *in.Context < 0 || *in.Context > checkLogContextMax {
+			return githubRead{}, refuse(rCheckLogContext, 0, checkLogContextMax)
+		}
+		read.Search.Context = *in.Context
+	}
+	return checkGitHubRead(ctx, tx, c, read)
+}
+
+// checkLogPattern is a github_check_log match as it is searched for: an
+// RE2 regular expression, case-insensitive, cheap enough to try on each
+// line of a whole log (checkLogCost). A *costlyPattern says why not.
+func checkLogPattern(match string) (*regexp.Regexp, error) {
+	// FoldCase is what "(?i)" sets; parsed without the prefix, a refusal
+	// names the agent's own expression.
+	tree, err := syntax.Parse(match, syntax.Perl|syntax.FoldCase)
+	if err != nil {
+		return nil, patternError(err)
+	}
+	if err := checkLogCost(tree); err != nil {
+		return nil, err
+	}
+	re, err := regexp.Compile("(?i)" + match)
+	if err != nil {
+		return nil, patternError(err)
+	}
+	return re, nil
+}
+
+// patternError is a compile error as a refusal names it: its code and the
+// part it names, never Go's whole message.
+func patternError(err error) error {
+	var e *syntax.Error
+	if errors.As(err, &e) {
+		return fmt.Errorf("%s: %q", e.Code, e.Expr)
+	}
+	return err
+}
+
+// A match's counted repeat is at most checkLogRepeatMax, and its program
+// at most checkLogProgramMax instructions: past them, a 16 MiB log of long
+// lines takes longer to search than GitHub's read is given, and the agent
+// would be told GitHub was unreachable.
+const (
+	checkLogRepeatMax  = 50
+	checkLogProgramMax = 1000
+)
+
+// costlyPattern is a valid match refused for what searching with it costs;
+// Cause says what, in dude's words.
+type costlyPattern struct{ Cause string }
+
+func (e *costlyPattern) Error() string { return e.Cause }
+
+// checkLogCost refuses a parsed pattern whose search of a whole log would
+// outlast the read.
+func checkLogCost(tree *syntax.Regexp) error {
+	var repeat func(*syntax.Regexp) int
+	repeat = func(re *syntax.Regexp) int {
+		n := 0
+		if re.Op == syntax.OpRepeat {
+			n = max(re.Min, re.Max)
+		}
+		for _, sub := range re.Sub {
+			n = max(n, repeat(sub))
+		}
+		return n
+	}
+	if n := repeat(tree); n > checkLogRepeatMax {
+		return &costlyPattern{fmt.Sprintf("it repeats a part %d times", n)}
+	}
+	prog, err := syntax.Compile(tree.Simplify())
+	if err != nil {
+		return patternError(err)
+	}
+	if n := len(prog.Inst); n > checkLogProgramMax {
+		return &costlyPattern{fmt.Sprintf("it is %d steps to try on each line, more than %d", n, checkLogProgramMax)}
+	}
+	return nil
 }
 
 // readGitHubRunJobs takes a run's id, or its link: a link names its own
@@ -475,6 +589,17 @@ func readOnGitHub(ctx context.Context, c Caller, read githubRead) (json.RawMessa
 		}
 		out = w.pullRequest(pr, read.Files)
 	case "github_check_log":
+		if read.Match != "" {
+			log, err := gh.SearchCheckLog(ctx, read.Slug, read.CheckID, read.Search, checkLogBudget)
+			if err != nil {
+				return nil, githubRefusal(read, err)
+			}
+			out = w.checkLog(log)
+			if log.Search == nil {
+				out["found"] = githubText("check-log-not-searched", nil)
+			}
+			break
+		}
 		log, err := gh.CheckLog(ctx, read.Slug, read.CheckID, (16<<10)-len("…\n"))
 		if err != nil {
 			return nil, githubRefusal(read, err)
@@ -637,6 +762,9 @@ func readPayload(read githubRead) map[string]any {
 	}
 	if len(read.Files) > 0 {
 		payload["files"] = read.Files
+	}
+	if read.Match != "" {
+		payload["match"], payload["context"] = read.Match, read.Search.Context
 	}
 	return payload
 }
@@ -949,11 +1077,29 @@ func (w wrapper) branchRuns(read githubRead, runs []forge.BranchRun) map[string]
 	return res
 }
 
+// checkLogBudget is the bytes of a job's log one github_check_log read
+// shows. JSON can expand each log byte sixfold: 10 KiB plus the fixed
+// envelope stays below resultCap.
+const checkLogBudget = 10 << 10
+
 func (w wrapper) checkLog(log forge.CheckLogRead) map[string]any {
-	// JSON can expand each log byte sixfold. Select failure evidence before
-	// wrapping so 10 KiB plus the fixed envelope stays below resultCap.
-	const logBudget = 10 << 10
-	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(forge.FailureExcerpt(log.Text, logBudget), logBudget), "external": w.note()}
+	if s := log.Search; s != nil {
+		// The matched lines as found: within checkLogBudget already.
+		out := map[string]any{"source": log.Source, "actions": log.Actions, "matches": s.Total, "shown": s.Shown,
+			"linesRead": s.Lines, "external": w.note()}
+		if s.Total == 0 {
+			out["found"] = githubText("check-log-no-match", s)
+		} else {
+			out["found"] = githubText("check-log-found", s)
+			out["log"] = w.text(s.Text, checkLogBudget)
+		}
+		if s.Capped {
+			out["capped"] = githubText("check-log-capped", nil)
+		}
+		return out
+	}
+	// Select failure evidence before wrapping.
+	out := map[string]any{"source": log.Source, "actions": log.Actions, "log": w.text(forge.FailureExcerpt(log.Text, checkLogBudget), checkLogBudget), "external": w.note()}
 	// Why an Actions job's log was not read, in dude's words (forge.UnreadReason).
 	if log.Unread != "" {
 		out["unread"] = log.Unread
@@ -1032,7 +1178,8 @@ func fitRank(key string) int {
 		return 0
 	case "issue", "pullRequest", "number", "title", "url", "state", "draft", "head", "base":
 		return 1
-	case "cut", "more", "moreComments", "moreReviews", "moreChecks", "moreFiles", "threadsUnknown", "notListed", "notChanged":
+	case "cut", "more", "moreComments", "moreReviews", "moreChecks", "moreFiles", "threadsUnknown", "notListed", "notChanged",
+		"found", "capped":
 		return 2
 	}
 	return 3

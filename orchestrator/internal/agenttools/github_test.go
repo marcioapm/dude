@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
+	"regexp/syntax"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -537,5 +539,90 @@ func TestABranchRunWithUnreadJobsSaysSo(t *testing.T) {
 	if len(runs) != 2 || len(runs[0].Jobs) != 0 || !strings.Contains(runs[0].More, "github_run_jobs") ||
 		!strings.Contains(runs[1].More, "the first 1 of 3 jobs") {
 		t.Fatalf("runs %+v", runs)
+	}
+}
+
+// A search's result is its lines as found, quoted as external text, and
+// says how many matched of how many lines read, how many are shown, and
+// whether the read stopped at its cap; no match says so, with no log.
+func TestGitHubCheckLogSearchResult(t *testing.T) {
+	w := wrapper{id: "search"}
+	found := &forge.LogMatches{Text: "1127: test_goal_description_replaces_nul_in_event_metadata PASSED", Total: 1, Shown: 1, Lines: 2396}
+	out := w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: found.Text, Search: found})
+	if out["log"] != delivery.ExternalText(w.id, found.Text) || out["matches"] != 1 || out["shown"] != 1 || out["linesRead"] != 2396 ||
+		out["found"] != "1 line of 2396 matched; all are shown. Each shown line starts with its line number; \"… [lines omitted]\" marks lines between groups that are left out" {
+		t.Fatalf("found: %v", out)
+	}
+	if _, ok := out["capped"]; ok {
+		t.Fatalf("an uncapped read said it was capped: %v", out)
+	}
+	many := &forge.LogMatches{Text: "1: a PASSED", Total: 900, Shown: 40, Lines: 5000, Capped: true}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: many.Text, Search: many})
+	if found, _ := out["found"].(string); !strings.HasPrefix(found, "900 lines of 5000 matched; the first 40 are shown") ||
+		out["capped"] != "the read stopped at 16 MiB of the log: lines past it were not searched" {
+		t.Fatalf("shown of total: %v", out)
+	}
+	// Matches none of which fit are found, not "no match": the found text
+	// keys on Total, never on Shown.
+	unshown := &forge.LogMatches{Total: 3, Shown: 0, Lines: 10}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Search: unshown})
+	if out["found"] != "3 lines of 10 matched; the first 0 are shown, with their context, within the read's 10 KiB: narrow match to see the rest. "+
+		"Each shown line starts with its line number; \"… [lines omitted]\" marks lines between groups that are left out" || out["matches"] != 3 || out["shown"] != 0 {
+		t.Fatalf("none shown: %v", out)
+	}
+	none := &forge.LogMatches{Lines: 2396}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Search: none})
+	if _, ok := out["log"]; ok || out["found"] != "no line of the 2396 read matched" || out["matches"] != 0 {
+		t.Fatalf("no match: %v", out)
+	}
+	raw, err := w.fit(out)
+	if err != nil || firstKey(t, raw) != "external" {
+		t.Fatalf("fit: %s %v", raw, err)
+	}
+}
+
+// A match is an RE2 regular expression, case-insensitive; one that does
+// not compile is refused naming what is wrong, never Go's whole message.
+func TestGitHubCheckLogPattern(t *testing.T) {
+	re, err := checkLogPattern(`test_goal.*PASSED`)
+	if err != nil || !re.MatchString("TEST_GOAL_x passed") {
+		t.Fatalf("%v %v", re, err)
+	}
+	if _, err := checkLogPattern(`test_goal(`); err == nil || err.Error() != "missing closing ): \"test_goal(\"" {
+		t.Fatalf("invalid: %v", err)
+	}
+}
+
+// A match that compiles but would outlast the read on a 16 MiB log of
+// long lines is refused saying why, not sent to time out as "unreachable";
+// the matches a proof is looked for with are accepted.
+func TestGitHubCheckLogPatternCost(t *testing.T) {
+	for _, ok := range []string{`PASSED`, `\d+ passed`, `test_goal_with_nul.*PASSED`, `passed|failed`, `.*PASSED.*`,
+		`test_goal.*nul.*PASSED|\d+ passed, \d+ skipped`, `x{50}`, `(?:.{10}){10}q`, strings.Repeat("x", 200), strings.Repeat("[a-z]{50}", 19)} {
+		if _, err := checkLogPattern(ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, tc := range []struct{ match, cause string }{
+		{`(?:.{100}){10}q`, "it repeats a part 100 times"},
+		{`[a-z]{200}q`, "it repeats a part 200 times"},
+		{`x{51}`, "it repeats a part 51 times"},
+		{`x{51,}`, "it repeats a part 51 times"},
+		{strings.Repeat("[a-z]{50}", 21), "it is 1052 steps to try on each line, more than 1000"},
+	} {
+		_, err := checkLogPattern(tc.match)
+		var costly *costlyPattern
+		if !errors.As(err, &costly) || costly.Cause != tc.cause {
+			t.Errorf("%s: %v, want %q", tc.match, err, tc.cause)
+		}
+	}
+}
+
+// Both compiles' errors are named the same way: code and part, never Go's
+// whole message.
+func TestGitHubCheckLogPatternErrorIsNamed(t *testing.T) {
+	err := patternError(fmt.Errorf("compiling: %w", &syntax.Error{Code: syntax.ErrMissingParen, Expr: "(?i)test_goal("}))
+	if err == nil || err.Error() != "missing closing ): \"(?i)test_goal(\"" {
+		t.Fatalf("%v", err)
 	}
 }

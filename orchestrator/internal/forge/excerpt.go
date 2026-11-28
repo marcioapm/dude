@@ -184,6 +184,18 @@ func collectFailure(r io.Reader, limit int) (string, error) {
 		limit = logReadMax
 	}
 	c := failureCollector{window: max(1024, min(limit, logReadMax))}
+	capped, err := scanLogLines(r, c.add)
+	if err != nil {
+		return "", err
+	}
+	c.capped = c.capped || capped
+	return c.render(limit), nil
+}
+
+// scanLogLines gives add each line of r through EOF or logReadMax bytes,
+// as cleanLogLine leaves it and cut at logLineMax with lineCapMarker;
+// capped says the read stopped at logReadMax.
+func scanLogLines(r io.Reader, add func(string)) (capped bool, err error) {
 	in := bufio.NewReaderSize(io.LimitReader(r, logReadMax), logLineMax+1)
 	read := 0
 	for {
@@ -201,17 +213,15 @@ func collectFailure(r io.Reader, limit int) (string, error) {
 			if long || len(text) > logLineMax {
 				text = utf8Prefix(text, logLineMax-len(lineCapMarker)) + lineCapMarker
 			}
-			c.add(text)
+			add(text)
 		}
 		if err == io.EOF {
-			c.capped = c.capped || read >= logReadMax
-			break
+			return read >= logReadMax, nil
 		}
 		if err != nil {
-			return "", err
+			return false, err
 		}
 	}
-	return c.render(limit), nil
 }
 
 func utf8Prefix(s string, n int) string {

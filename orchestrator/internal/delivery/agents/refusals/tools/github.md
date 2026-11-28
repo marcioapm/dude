@@ -22,6 +22,14 @@
 
 {{- define "refusals/tools/github/check-id-check-run-from-1"}}checkId is the check run's id, from 1{{end}}
 
+{{- define "refusals/tools/github/check-log-match"}}match: a regular expression (RE2, case-insensitive) of 1 to %d characters to find in the log{{end}}
+
+{{- define "refusals/tools/github/check-log-match-invalid"}}match is not a valid regular expression (RE2): %s. Escape characters like ( [ . * + ? with \ to match them as written{{end}}
+
+{{- define "refusals/tools/github/check-log-match-costly"}}match would take too long to search a whole log: %s. Repeat a part at most %d times ({n} or {n,m}), or put .* between the parts you look for{{end}}
+
+{{- define "refusals/tools/github/check-log-context"}}context: %d to %d lines around each match, given only with match{{end}}
+
 {{- define "refusals/tools/github/run-id-run-from-1-or-its-link"}}runId is the run's id, from 1, or its link (https://github.com/owner/name/actions/runs/<id>){{end}}
 
 {{- define "refusals/tools/github/run-link-is-another-repository"}}%s is a run of another repository than %s: leave repo out, or name the link's{{end}}
