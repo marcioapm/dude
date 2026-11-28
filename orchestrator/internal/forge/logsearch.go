@@ -39,14 +39,14 @@ type logSearcher struct {
 	full        bool
 }
 
-// piece is what writing line adds to Text: its separator, a gap marker
-// when it does not follow the last line written, and itself.
-func (s *logSearcher) piece(line excerptLine) string {
+// piece is what writing line after line last adds to Text: its separator,
+// a gap marker when it does not follow last, and itself.
+func piece(line excerptLine, last int) string {
 	text := fmt.Sprintf("%d: %s", line.n, line.text)
-	if s.last == 0 {
+	if last == 0 {
 		return text
 	}
-	if line.n > s.last+1 {
+	if line.n > last+1 {
 		return "\n" + omissionMarker + "\n" + text
 	}
 	return "\n" + text
@@ -57,17 +57,16 @@ func (s *logSearcher) write(lines ...excerptLine) bool {
 	var pieces []string
 	n, last := s.b.Len(), s.last
 	for _, line := range lines {
-		p := s.piece(line)
-		pieces, n, s.last = append(pieces, p), n+len(p), line.n
+		p := piece(line, last)
+		pieces, n, last = append(pieces, p), n+len(p), line.n
 	}
-	s.last = last
 	if n > s.limit {
 		return false
 	}
-	for i, p := range pieces {
+	for _, p := range pieces {
 		s.b.WriteString(p)
-		s.last = lines[i].n
 	}
+	s.last = last
 	return true
 }
 
