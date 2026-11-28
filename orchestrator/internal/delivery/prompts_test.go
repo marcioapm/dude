@@ -164,7 +164,12 @@ func TestTheConductorIsToldWhenToEditAndWhenToDelegate(t *testing.T) {
 		for _, want := range []string{"a rename, a one-line fix, a review nit", "Anything larger, or anything that needs the tests run, you delegate",
 			"`git merge --ff-only lux/<branch>`", "`git merge lux/<branch>` when your work was kept",
 			"Commit in your checkout, then publish (`dude publish --message M`)", "never build, install or run tests",
-			"the pull-request gate refuses an unreviewed commit of yours"} {
+			"the pull-request gate refuses an unreviewed commit of yours",
+			"Evidence from CI or a workflow run is yours to read (`github_run_jobs` and `github_check_log` with `match`)",
+			"never brief a tester, reviewer or writer to read GitHub, Actions or CI logs: they have no access.",
+			"On test_blocked, read why. Retry only with something changed: a new input, an environment the blocked Run lacked, or a corrected instruction.",
+			"A retry that asks the same Run kind for the same unreachable thing is refused by you, not tried.",
+			"say exactly what you read (run id, job id, head, the matched lines), then put the decision to the owner in one question with that evidence."} {
 			if strings.Count(got, want) != 1 {
 				t.Errorf("the conductor's instructions (%s) should say %q once", mode, want)
 			}
@@ -439,7 +444,12 @@ func TestTheTestersContractSurvivesAnyInstructions(t *testing.T) {
 	}
 	// The contract's anchors, so a rewrite of it cannot drop one unnoticed.
 	for _, want := range []string{"`acceptance.md`", "`pass`, `fail`, `blocked`", "`not-applicable`",
-		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty"} {
+		"never `pass`", "commit nothing", "Test environment:", "head commit", "video was written and is not empty",
+		"deriving only checks you can exercise here.",
+		"A behaviour that needs an environment this Run is not given (named credentials absent, a hosted warehouse) is not a derived criterion",
+		"name it under a short \"not checked here\" line with the reason, and it does not make the report `blocked`.",
+		"The task's own criteria keep the rule above: one you did not check is `blocked`.",
+		"CI's results reach dude without you", "Whether CI's jobs pass is for CI to show, not you: do not run them to see."} {
 		if !strings.Contains(testerContract, want) {
 			t.Errorf("the tester's contract lacks %q", want)
 		}
