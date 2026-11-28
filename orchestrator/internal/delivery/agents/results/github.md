@@ -50,3 +50,11 @@
 {{- define "results/github/branch-runs-next"}}compare the jobs' conclusions across the runs: a job that fails on some commits and passes on others is flaky, one failing on every recent run was already failing before your change; read a failed job's log with github_check_log, its id as checkId{{end}}
 
 {{- define "results/github/branch-runs-jobs-unread"}}GitHub did not answer for this run's jobs: read them with github_run_jobs, its id as runId{{end}}
+
+{{- define "results/github/check-log-found"}}{{.Total}} line{{if ne .Total 1}}s{{end}} of {{.Lines}} matched; {{if eq .Shown .Total}}all are shown{{else}}the first {{.Shown}} are shown, with their context, within the read's 10 KiB: narrow match to see the rest{{end}}. Each shown line starts with its line number; "… [lines omitted]" marks lines between groups that are left out{{end}}
+
+{{- define "results/github/check-log-no-match"}}no line of the {{.Lines}} read matched{{end}}
+
+{{- define "results/github/check-log-capped"}}the read stopped at 16 MiB of the log: lines past it were not searched{{end}}
+
+{{- define "results/github/check-log-not-searched"}}not searched: this check is not a GitHub Actions job, or GitHub gave no log; what its check run reported is shown instead{{end}}

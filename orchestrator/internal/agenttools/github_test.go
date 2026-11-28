@@ -539,3 +539,46 @@ func TestABranchRunWithUnreadJobsSaysSo(t *testing.T) {
 		t.Fatalf("runs %+v", runs)
 	}
 }
+
+// A search's result is its lines as found, quoted as external text, and
+// says how many matched of how many lines read, how many are shown, and
+// whether the read stopped at its cap; no match says so, with no log.
+func TestGitHubCheckLogSearchResult(t *testing.T) {
+	w := wrapper{id: "search"}
+	found := &forge.LogMatches{Text: "1127: test_goal_description_replaces_nul_in_event_metadata PASSED", Total: 1, Shown: 1, Lines: 2396}
+	out := w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: found.Text, Search: found})
+	if out["log"] != delivery.ExternalText(w.id, found.Text) || out["matches"] != 1 || out["shown"] != 1 || out["linesRead"] != 2396 ||
+		out["found"] != "1 line of 2396 matched; all are shown. Each shown line starts with its line number; \"… [lines omitted]\" marks lines between groups that are left out" {
+		t.Fatalf("found: %v", out)
+	}
+	if _, ok := out["capped"]; ok {
+		t.Fatalf("an uncapped read said it was capped: %v", out)
+	}
+	many := &forge.LogMatches{Text: "1: a PASSED", Total: 900, Shown: 40, Lines: 5000, Capped: true}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Text: many.Text, Search: many})
+	if found, _ := out["found"].(string); !strings.HasPrefix(found, "900 lines of 5000 matched; the first 40 are shown") ||
+		out["capped"] != "the read stopped at 16 MiB of the log: lines past it were not searched" {
+		t.Fatalf("shown of total: %v", out)
+	}
+	none := &forge.LogMatches{Lines: 2396}
+	out = w.checkLog(forge.CheckLogRead{Source: "log", Actions: true, Search: none})
+	if _, ok := out["log"]; ok || out["found"] != "no line of the 2396 read matched" || out["matches"] != 0 {
+		t.Fatalf("no match: %v", out)
+	}
+	raw, err := w.fit(out)
+	if err != nil || firstKey(t, raw) != "external" {
+		t.Fatalf("fit: %s %v", raw, err)
+	}
+}
+
+// A match is an RE2 regular expression, case-insensitive; one that does
+// not compile is refused naming what is wrong, never Go's whole message.
+func TestGitHubCheckLogPattern(t *testing.T) {
+	re, err := checkLogPattern(`test_goal.*PASSED`)
+	if err != nil || !re.MatchString("TEST_GOAL_x passed") {
+		t.Fatalf("%v %v", re, err)
+	}
+	if _, err := checkLogPattern(`test_goal(`); err == nil || err.Error() != "missing closing ): \"test_goal(\"" {
+		t.Fatalf("invalid: %v", err)
+	}
+}

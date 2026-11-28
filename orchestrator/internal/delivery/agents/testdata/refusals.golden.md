@@ -746,6 +746,18 @@ event is a GitHub Actions event name in lowercase letters and _ (like schedule, 
 
 workflow is a workflow's file name ending .yml or .yaml (like nightly.yml, no folders), at most %d characters, or its numeric id
 
+## refusals/tools/github/check-log-context
+
+context: %d to %d lines around each match, given only with match
+
+## refusals/tools/github/check-log-match
+
+match: a regular expression (RE2, case-insensitive) of 1 to %d characters to find in the log
+
+## refusals/tools/github/check-log-match-invalid
+
+match is not a valid regular expression (RE2): %s. Escape characters like ( [ . * + ? with \ to match them as written
+
 ## refusals/delivery/conduct/this-task-you-are-read-only
 
 this task is %s: you are read-only now and start nothing. Offer to record the change as a follow-up task (create_task), linked to this one, and create it once the person agrees
