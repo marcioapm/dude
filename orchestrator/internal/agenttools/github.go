@@ -421,16 +421,26 @@ func readGitHubCheckLog(ctx context.Context, tx pgx.Tx, c Caller, in githubCheck
 // RE2 regular expression, case-insensitive, cheap enough to try on each
 // line of a whole log (checkLogCost). A *costlyPattern says why not.
 func checkLogPattern(match string) (*regexp.Regexp, error) {
-	// Checked alone, so a refusal names the agent's own expression.
-	if _, err := regexp.Compile(match); err != nil {
-		return nil, patternError(err)
+	// Checked alone, so a refusal names the agent's own expression; both
+	// compiles' errors are named the same way (compilePattern).
+	if _, err := compilePattern(match); err != nil {
+		return nil, err
 	}
-	re, err := regexp.Compile("(?i)" + match)
+	re, err := compilePattern("(?i)" + match)
 	if err != nil {
-		return nil, patternError(err)
+		return nil, err
 	}
 	if err := checkLogCost("(?i)" + match); err != nil {
 		return nil, err
+	}
+	return re, nil
+}
+
+// compilePattern compiles expr, its error as patternError names it.
+func compilePattern(expr string) (*regexp.Regexp, error) {
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil, patternError(err)
 	}
 	return re, nil
 }
