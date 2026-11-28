@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -153,6 +154,45 @@ func TestASearchOfACheckWithoutALogIsItsCheckRun(t *testing.T) {
 	fake.Set(func(s *fakegithub.Server) { s.LogStatus = http.StatusGone })
 	read, err := gh.SearchCheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, search(t, "PASSED", 0), 10<<10)
 	if err != nil || read.Search != nil || read.Source != "check_run" || read.Unread != "the log has expired" {
+		t.Fatalf("%+v %v", read, err)
+	}
+}
+
+// A search is an agent's read: once delivery's share of the rate limit is
+// all that is left, it is refused before any request, as every agent read.
+func TestASearchLeavesDeliveryItsShareOfTheRateLimit(t *testing.T) {
+	fake, gh := logWorld(t, redshiftLog())
+	ctx := context.Background()
+	fake.Set(func(s *fakegithub.Server) { s.RateRemaining = map[string]int{"core": 999} })
+	// The read that learns 999 are left is made; its next request is not.
+	if _, err := gh.CheckLog(ctx, "acme/target", fakegithub.DefaultCheckRunID, 10<<10); err != nil && !RateLimited(err) {
+		t.Fatalf("the read that learns 999 are left: %v", err)
+	}
+	if len(fake.Requests()) == 0 {
+		t.Fatal("no read learnt the rate")
+	}
+	before, downloads := len(fake.Requests()), len(fake.DownloadAuthorization())
+	_, err := gh.SearchCheckLog(ctx, "acme/target", fakegithub.DefaultCheckRunID, search(t, "PASSED", 0), 10<<10)
+	// readBudget's refusal, which names the reading, not a request's own
+	// (reserveAgentRequest's "GitHub's rate limit is kept for delivery").
+	if !RateLimited(err) || RetryAfter(err) <= 0 || !strings.Contains(err.Error(), "GitHub's core rate limit has ") ||
+		!strings.Contains(err.Error(), "requests left until") {
+		t.Fatalf("with 999 left: %v", err)
+	}
+	if after := len(fake.Requests()); after != before || len(fake.DownloadAuthorization()) != downloads {
+		t.Errorf("a refused search reached GitHub: %v", fake.Requests()[before:])
+	}
+}
+
+// An Actions job whose log is empty has nothing to search: it is read as
+// its check run, saying the log is empty, not as a search matching nothing.
+func TestASearchOfAnEmptyLogIsItsCheckRun(t *testing.T) {
+	fake, gh := logWorld(t, "unused")
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(empty.Close)
+	fake.SetJobLog(fakegithub.DefaultCheckRunID, "unused", empty.URL)
+	read, err := gh.SearchCheckLog(context.Background(), "acme/target", fakegithub.DefaultCheckRunID, search(t, "PASSED", 0), 10<<10)
+	if err != nil || read.Search != nil || read.Unread != "the log is empty" || read.Source != "check_run" || !read.Actions {
 		t.Fatalf("%+v %v", read, err)
 	}
 }
