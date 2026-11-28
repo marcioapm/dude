@@ -103,6 +103,19 @@ func TestASearchShowsContextAroundEachMatch(t *testing.T) {
 	}
 }
 
+// A match whose context does not fit is shown alone, and the lines it
+// skipped are still marked before the next match that does fit.
+func TestASearchWhoseContextDoesNotFitStillMarksTheGap(t *testing.T) {
+	log := "M one\n" + strings.Repeat("y", 80) + "\nM two\n"
+	got, err := searchLog(strings.NewReader(log), search(t, "M", 1), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "1: M one\n" + omissionMarker + "\n3: M two"; got.Text != want {
+		t.Fatalf("got %q, want %q", got.Text, want)
+	}
+}
+
 // More matches than the budget holds: as many as fit are shown, whole, in
 // log order, and the result says how many there were in all.
 func TestASearchPastItsBudgetSaysShownOfTotal(t *testing.T) {

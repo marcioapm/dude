@@ -71,6 +71,11 @@ func TestGitHubCheckLogSearchReadsProofAndSpendsOneRead(t *testing.T) {
 			if strings.Contains(text, proof) || out["matches"] != nil || !strings.Contains(text, "cleanup") {
 				t.Fatalf("no-match behaviour changed: %v", out)
 			}
+			// A context given reaches the search: none, just the matches.
+			out = read("github_check_log", `{"repo":"acme/target","checkId":50000000077,"match":"test_goal.*nul.*PASSED","context":0}`)
+			if text, ok := quoted(field(out, "log").(string)); !ok || text != "1101: "+proof+"\n1102: "+proof2 {
+				t.Fatalf("context 0: %v", out)
+			}
 			out = read("github_check_log", `{"repo":"acme/target","checkId":50000000077,"match":"test_never_ran","context":0}`)
 			if out["matches"] != float64(0) || out["log"] != nil || out["found"] != "no line of the 2303 read matched" {
 				t.Fatalf("no match: %v", out)
