@@ -45,6 +45,15 @@ func TestGitHubCheckLogSearchReadsProofAndSpendsOneRead(t *testing.T) {
 				out["matches"] != float64(2) || out["shown"] != float64(2) || out["source"] != "log" {
 				t.Fatalf("proof: %v", out)
 			}
+			// The result is withheld: the proof the search found is in no
+			// event of the scope, of any type, though its call is recorded.
+			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1 AND event_type = 'agent.tool.dude' AND payload->>'tool' = 'github_check_log'`, scope); n != 1 {
+				t.Fatalf("search recorded %d calls, want one", n)
+			}
+			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1 AND (payload::text LIKE '%' || $2 || '%' OR payload::text LIKE '%' || $3 || '%')`,
+				scope, "replaces_nul_in_event_metadata", "forwarded_without_creating_a_goal"); n != 0 {
+				t.Fatalf("the search's result reached %d events of the scope", n)
+			}
 			if n := w.count(`SELECT count(*) FROM events WHERE `+column+` = $1 AND event_type = 'agent.tool.attempted' AND payload->>'tool' = 'github_check_log'`, scope); n != 1 {
 				t.Fatalf("search counted %d attempts, want one", n)
 			}
@@ -87,5 +96,67 @@ func TestGitHubCheckLogSearchParametersAreChecked(t *testing.T) {
 	}
 	if w.requests() != before {
 		t.Fatal("invalid search reached GitHub")
+	}
+}
+
+// A search with more matches than one read shows is cut by the tool's
+// budget: as many as fit in 10 KiB of log text, saying how many of all.
+func TestGitHubCheckLogSearchStaysWithinItsBudget(t *testing.T) {
+	w, task := conductingWithAnotherProject(t)
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{50000000077: {App: "github-actions"}}
+	})
+	var b strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&b, "tests/test_x.py::test_%04d PASSED\n", i)
+	}
+	w.gh.SetJobLog(50000000077, b.String(), downloads.URL)
+	out := w.must(task, "github_check_log", `{"repo":"acme/target","checkId":50000000077,"match":"PASSED","context":0}`)
+	log, _ := out["log"].(string)
+	text, ok := quoted(log)
+	shown, _ := out["shown"].(float64)
+	if !ok || out["matches"] != float64(5000) || shown == 0 || shown >= 5000 || len(text) > 10<<10 ||
+		!strings.HasSuffix(log, "⟧") || strings.Count(text, "PASSED") != int(shown) {
+		t.Fatalf("shown %v of %v, %d bytes of log: %.300v", out["shown"], out["matches"], len(text), out)
+	}
+	if found, _ := out["found"].(string); !strings.HasPrefix(found, fmt.Sprintf("5000 lines of 5000 matched; the first %d are shown", int(shown))) {
+		t.Fatalf("found: %q", found)
+	}
+}
+
+// A check with no log to search is not searched, and says so: what its
+// check run reported is the log, and there are no counts, as nothing was
+// counted. Both a check that is not an Actions job and an Actions job
+// whose log GitHub no longer gives.
+func TestGitHubCheckLogSearchOfACheckWithoutALogSaysNotSearched(t *testing.T) {
+	w, task := conductingWithAnotherProject(t)
+	downloads := httptest.NewServer(w.gh.LogDownloads())
+	t.Cleanup(downloads.Close)
+	const notSearched = "not searched: this check is not a GitHub Actions job, or GitHub gave no log; what its check run reported is shown instead"
+	w.gh.Set(func(s *fakegithub.Server) {
+		s.CheckRuns = map[int64]fakegithub.CheckRun{
+			50000000077: {App: "circleci", Title: "3 tests failed", Summary: "test_goal_x FAILED"},
+			50000000078: {App: "github-actions", Title: "Job summary", Summary: "the job's own summary"},
+		}
+	})
+	w.gh.SetJobLog(50000000077, "test_goal_x PASSED\n", downloads.URL)
+	w.gh.SetJobLog(50000000078, "", downloads.URL) // expired: 410
+	for _, tc := range []struct {
+		id         int64
+		log, extra string
+	}{
+		{50000000077, "3 tests failed\ntest_goal_x FAILED", ""},
+		{50000000078, "Job summary\nthe job's own summary", "the log has expired"},
+	} {
+		out := w.must(task, "github_check_log", fmt.Sprintf(`{"repo":"acme/target","checkId":%d,"match":"test_goal"}`, tc.id))
+		text, ok := quoted(field(out, "log").(string))
+		_, matches := out["matches"]
+		_, shown := out["shown"]
+		if out["found"] != notSearched || !ok || text != tc.log || matches || shown || out["source"] != "check_run" ||
+			(tc.extra != "" && out["unread"] != tc.extra) {
+			t.Fatalf("%d: %v", tc.id, out)
+		}
 	}
 }
